@@ -20,9 +20,14 @@ class InputManager(window: Long):
   private var lastMouseY: Double = 0.0
   private var firstMouse: Boolean = true
 
-  // Register all GLFW callbacks
-  glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED)
+  // Mouse absolute position and buttons
+  private var _mouseX: Float = 0f
+  private var _mouseY: Float = 0f
+  private val buttonsDown = java.util.HashSet[Int]()
+  private val buttonsPressed = java.util.HashSet[Int]()
+  private val buttonsPressedStaging = java.util.HashSet[Int]()
 
+  // Register all GLFW callbacks
   glfwSetKeyCallback(window, (_, key, _, action, _) =>
     if key != GLFW_KEY_UNKNOWN then
       action match
@@ -44,6 +49,18 @@ class InputManager(window: Long):
     mouseStagingDY += (lastMouseY - yPos).toFloat
     lastMouseX = xPos
     lastMouseY = yPos
+    _mouseX = xPos.toFloat
+    _mouseY = yPos.toFloat
+  )
+
+  glfwSetMouseButtonCallback(window, (_, button, action, _) =>
+    action match
+      case GLFW_PRESS =>
+        buttonsDown.add(button)
+        buttonsPressedStaging.add(button)
+      case GLFW_RELEASE =>
+        buttonsDown.remove(button)
+      case _ => ()
   )
 
   /** Call once per frame before reading input. Promotes staged callback data into current-frame state. */
@@ -61,7 +78,13 @@ class InputManager(window: Long):
     mouseStagingDX = 0f
     mouseStagingDY = 0f
 
+    buttonsPressed.clear()
+    buttonsPressed.addAll(buttonsPressedStaging)
+    buttonsPressedStaging.clear()
+
   def isKeyHeld(key: Int): Boolean = keysDown.contains(key)
   def isKeyPressed(key: Int): Boolean = keysPressed.contains(key)
   def isKeyReleased(key: Int): Boolean = keysReleased.contains(key)
+  def isMousePressed(button: Int): Boolean = buttonsPressed.contains(button)
+  def mousePos: (Float, Float) = (_mouseX, _mouseY)
   def mouseDelta: (Float, Float) = (mouseDX, mouseDY)

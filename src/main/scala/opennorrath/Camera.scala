@@ -39,7 +39,7 @@ class Camera(
       pitch = (pitch + dy * sensitivity).max(-89f).min(89f)
       updateVectors()
 
-  private def updateVectors(): Unit =
+  def updateVectors(): Unit =
     val yawRad = Math.toRadians(yaw).toFloat
     val pitchRad = Math.toRadians(pitch).toFloat
     front.set(
