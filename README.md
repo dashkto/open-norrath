@@ -52,6 +52,11 @@ Opens a 1280x720 window. Press Escape to quit.
 - **Website:** https://lanterneq.com/
 - Excellent reference for S3D/WLD parsing and accurate EQ lighting/rendering
 
+### Project Quarm / EQMacEmu (C++, GPL v2) — Mac-Era EQEmu Fork
+- **Repo:** https://github.com/SecretsOTheP/EQMacEmu
+- EQEmu fork targeting the Mac/Intel client era
+- Project Quarm runs on this codebase
+
 ### EQEmu Maps
 - **Repo:** https://github.com/EQEmu/maps
 

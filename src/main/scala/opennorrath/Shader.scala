@@ -48,3 +48,12 @@ class Shader(vertexSource: String, fragmentSource: String):
       val typeName = if shaderType == GL_VERTEX_SHADER then "vertex" else "fragment"
       throw RuntimeException(s"$typeName shader compile error:\n$log")
     id
+
+object Shader:
+  def loadResource(path: String): String =
+    val stream = getClass.getResourceAsStream(path)
+    if stream == null then throw RuntimeException(s"Shader resource not found: $path")
+    try String(stream.readAllBytes()) finally stream.close()
+
+  def fromResources(vertPath: String, fragPath: String): Shader =
+    Shader(loadResource(vertPath), loadResource(fragPath))

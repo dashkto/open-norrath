@@ -14,35 +14,6 @@ object Main:
   private val WindowHeight = 720
   private val WindowTitle = "OpenNorrath"
 
-  private val VertexShaderSource = """
-    |#version 330 core
-    |layout (location = 0) in vec3 aPos;
-    |layout (location = 1) in vec2 aTexCoord;
-    |layout (location = 2) in vec3 aColor;
-    |out vec2 TexCoord;
-    |out vec3 VertColor;
-    |uniform mat4 projection;
-    |uniform mat4 view;
-    |uniform mat4 model;
-    |void main() {
-    |    gl_Position = projection * view * model * vec4(aPos, 1.0);
-    |    TexCoord = aTexCoord;
-    |    VertColor = aColor;
-    |}
-    |""".stripMargin
-
-  private val FragmentShaderSource = """
-    |#version 330 core
-    |in vec2 TexCoord;
-    |in vec3 VertColor;
-    |out vec4 FragColor;
-    |uniform sampler2D tex0;
-    |void main() {
-    |    FragColor = texture(tex0, TexCoord) * vec4(VertColor, 1.0);
-    |    if (FragColor.a < 0.1) discard;
-    |}
-    |""".stripMargin
-
   def main(args: Array[String]): Unit =
     Logging.init()
     val settings = Settings.load()
@@ -86,7 +57,7 @@ object Main:
     println(s"Loading zone: $zonePath")
 
     // Init resources
-    val shader = Shader(VertexShaderSource, FragmentShaderSource)
+    val shader = Shader.fromResources("/shaders/default.vert", "/shaders/default.frag")
     val zone = ZoneRenderDebug(zonePath, settings, settings.debug.animationModel)
     // Start at arena edge, slightly above floor level, looking toward center
     // Coordinates are swapped from EQ: GL(X, Y, Z) = EQ(X, Z, -Y)
@@ -105,31 +76,7 @@ object Main:
     )
 
     val model = Matrix4f() // identity — zone is in world space
-
-    // Mouse state
-    var lastMouseX = WindowWidth / 2.0
-    var lastMouseY = WindowHeight / 2.0
-    var firstMouse = true
-
-    glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED)
-
-    glfwSetCursorPosCallback(window, (_, xPos, yPos) =>
-      if firstMouse then
-        lastMouseX = xPos
-        lastMouseY = yPos
-        firstMouse = false
-
-      val xOffset = (xPos - lastMouseX).toFloat
-      val yOffset = (lastMouseY - yPos).toFloat
-      lastMouseX = xPos
-      lastMouseY = yPos
-      camera.processMouse(xOffset, yOffset)
-    )
-
-    glfwSetKeyCallback(window, (win, key, _, action, _) =>
-      if key == GLFW_KEY_ESCAPE && action == GLFW_RELEASE then
-        glfwSetWindowShouldClose(win, true)
-    )
+    val input = InputManager(window)
 
     var lastTime = glfwGetTime()
 
@@ -138,7 +85,12 @@ object Main:
       val deltaTime = (now - lastTime).toFloat
       lastTime = now
 
-      camera.processKeyboard(window, deltaTime)
+      input.update()
+
+      if input.isKeyReleased(GLFW_KEY_ESCAPE) then
+        glfwSetWindowShouldClose(window, true)
+
+      camera.processInput(input, deltaTime)
 
       glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
 

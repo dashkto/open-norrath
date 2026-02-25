@@ -20,30 +20,24 @@ class Camera(
     val target = Vector3f(position).add(front)
     Matrix4f().lookAt(position, target, up)
 
-  def processKeyboard(window: Long, deltaTime: Float): Unit =
+  def processInput(input: InputManager, deltaTime: Float): Unit =
     val velocity = speed * deltaTime
     val movement = Vector3f()
 
-    if glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS then
-      movement.add(Vector3f(front).mul(velocity))
-    if glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS then
-      movement.sub(Vector3f(front).mul(velocity))
-    if glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS then
-      movement.sub(Vector3f(right).mul(velocity))
-    if glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS then
-      movement.add(Vector3f(right).mul(velocity))
-    if glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS then
-      movement.add(Vector3f(up).mul(velocity))
-    if glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS then
-      movement.sub(Vector3f(up).mul(velocity))
+    if input.isKeyHeld(GLFW_KEY_W) then movement.add(Vector3f(front).mul(velocity))
+    if input.isKeyHeld(GLFW_KEY_S) then movement.sub(Vector3f(front).mul(velocity))
+    if input.isKeyHeld(GLFW_KEY_A) then movement.sub(Vector3f(right).mul(velocity))
+    if input.isKeyHeld(GLFW_KEY_D) then movement.add(Vector3f(right).mul(velocity))
+    if input.isKeyHeld(GLFW_KEY_SPACE) then movement.add(Vector3f(up).mul(velocity))
+    if input.isKeyHeld(GLFW_KEY_LEFT_SHIFT) then movement.sub(Vector3f(up).mul(velocity))
 
     position.add(movement)
 
-  def processMouse(xOffset: Float, yOffset: Float): Unit =
-    yaw += xOffset * sensitivity
-    pitch += yOffset * sensitivity
-    pitch = pitch.max(-89f).min(89f)
-    updateVectors()
+    val (dx, dy) = input.mouseDelta
+    if dx != 0f || dy != 0f then
+      yaw += dx * sensitivity
+      pitch = (pitch + dy * sensitivity).max(-89f).min(89f)
+      updateVectors()
 
   private def updateVectors(): Unit =
     val yawRad = Math.toRadians(yaw).toFloat
