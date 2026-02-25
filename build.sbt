@@ -26,6 +26,7 @@ lazy val root = project
     version := "0.1.0-SNAPSHOT",
     scalaVersion := scala3Version,
     fork := true,
+    Compile / mainClass := Some("opennorrath.Main"),
     javaOptions += "-XstartOnFirstThread",
     libraryDependencies ++= Seq(
       // LWJGL core

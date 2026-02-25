@@ -38,50 +38,9 @@ object Main:
     |}
     |""".stripMargin
 
-  // 24 vertices (4 per face) — position (3) + uv (2) = 5 floats each
-  private val CubeVertices = Array[Float](
-    // front
-    -0.5f, -0.5f,  0.5f,  0f, 0f,
-     0.5f, -0.5f,  0.5f,  1f, 0f,
-     0.5f,  0.5f,  0.5f,  1f, 1f,
-    -0.5f,  0.5f,  0.5f,  0f, 1f,
-    // back
-     0.5f, -0.5f, -0.5f,  0f, 0f,
-    -0.5f, -0.5f, -0.5f,  1f, 0f,
-    -0.5f,  0.5f, -0.5f,  1f, 1f,
-     0.5f,  0.5f, -0.5f,  0f, 1f,
-    // left
-    -0.5f, -0.5f, -0.5f,  0f, 0f,
-    -0.5f, -0.5f,  0.5f,  1f, 0f,
-    -0.5f,  0.5f,  0.5f,  1f, 1f,
-    -0.5f,  0.5f, -0.5f,  0f, 1f,
-    // right
-     0.5f, -0.5f,  0.5f,  0f, 0f,
-     0.5f, -0.5f, -0.5f,  1f, 0f,
-     0.5f,  0.5f, -0.5f,  1f, 1f,
-     0.5f,  0.5f,  0.5f,  0f, 1f,
-    // top
-    -0.5f,  0.5f,  0.5f,  0f, 0f,
-     0.5f,  0.5f,  0.5f,  1f, 0f,
-     0.5f,  0.5f, -0.5f,  1f, 1f,
-    -0.5f,  0.5f, -0.5f,  0f, 1f,
-    // bottom
-    -0.5f, -0.5f, -0.5f,  0f, 0f,
-     0.5f, -0.5f, -0.5f,  1f, 0f,
-     0.5f, -0.5f,  0.5f,  1f, 1f,
-    -0.5f, -0.5f,  0.5f,  0f, 1f,
-  )
-
-  private val CubeIndices = Array[Int](
-     0,  1,  2,   2,  3,  0,  // front
-     4,  5,  6,   6,  7,  4,  // back
-     8,  9, 10,  10, 11,  8,  // left
-    12, 13, 14,  14, 15, 12,  // right
-    16, 17, 18,  18, 19, 16,  // top
-    20, 21, 22,  22, 23, 20,  // bottom
-  )
-
   def main(args: Array[String]): Unit =
+    val zonePath = if args.nonEmpty then args(0) else "assets/arena.s3d"
+
     GLFWErrorCallback.createPrint(System.err).set()
 
     if !glfwInit() then
@@ -114,22 +73,31 @@ object Main:
 
     GL.createCapabilities()
     glEnable(GL_DEPTH_TEST)
-    glClearColor(0.1f, 0.1f, 0.15f, 1.0f)
+    glClearColor(0.3f, 0.5f, 0.7f, 1.0f) // sky blue
 
     println(s"OpenNorrath running — OpenGL ${glGetString(GL_VERSION)}")
+    println(s"Loading zone: $zonePath")
 
     // Init resources
     val shader = Shader(VertexShaderSource, FragmentShaderSource)
-    val textureId = Texture.createCheckerboard()
-    val cube = Mesh(CubeVertices, CubeIndices)
-    val camera = Camera()
+    val zone = ZoneRenderer(zonePath)
+    // Start at arena edge, slightly above floor level, looking toward center
+    // Coordinates are swapped from EQ: GL(X, Y, Z) = EQ(X, Z, -Y)
+    val camera = Camera(
+      position = org.joml.Vector3f(-400f, 50f, -200f),
+      yaw = 20f,
+      pitch = -10f,
+      speed = 100f,
+    )
 
     val projection = Matrix4f().perspective(
       Math.toRadians(60.0).toFloat,
       WindowWidth.toFloat / WindowHeight.toFloat,
       0.1f,
-      100f,
+      10000f, // far plane for large zones
     )
+
+    val model = Matrix4f() // identity — zone is in world space
 
     // Mouse state
     var lastMouseX = WindowWidth / 2.0
@@ -145,7 +113,7 @@ object Main:
         firstMouse = false
 
       val xOffset = (xPos - lastMouseX).toFloat
-      val yOffset = (lastMouseY - yPos).toFloat // reversed: y goes bottom-to-top
+      val yOffset = (lastMouseY - yPos).toFloat
       lastMouseX = xPos
       lastMouseY = yPos
       camera.processMouse(xOffset, yOffset)
@@ -157,7 +125,6 @@ object Main:
     )
 
     var lastTime = glfwGetTime()
-    val model = Matrix4f()
 
     while !glfwWindowShouldClose(window) do
       val now = glfwGetTime()
@@ -171,22 +138,16 @@ object Main:
       shader.use()
       shader.setMatrix4f("projection", projection)
       shader.setMatrix4f("view", camera.viewMatrix)
-
-      // Slowly rotate the cube
-      model.identity().rotateY((now * 0.5).toFloat).rotateX((now * 0.3).toFloat)
       shader.setMatrix4f("model", model)
-      shader.setInt("tex0", 0)
 
-      glBindTexture(GL_TEXTURE_2D, textureId)
-      cube.draw()
+      zone.draw(shader)
 
       glfwSwapBuffers(window)
       glfwPollEvents()
 
     // Cleanup
-    cube.cleanup()
+    zone.cleanup()
     shader.cleanup()
-    glDeleteTextures(textureId)
     glfwFreeCallbacks(window)
     glfwDestroyWindow(window)
     glfwTerminate()

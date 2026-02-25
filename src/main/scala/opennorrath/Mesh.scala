@@ -39,6 +39,11 @@ class Mesh(vertices: Array[Float], indices: Array[Int]):
     glDrawElements(GL_TRIANGLES, indexCount, GL_UNSIGNED_INT, 0)
     glBindVertexArray(0)
 
+  def drawRange(startIndex: Int, count: Int): Unit =
+    glBindVertexArray(vao)
+    glDrawElements(GL_TRIANGLES, count, GL_UNSIGNED_INT, startIndex.toLong * 4)
+    glBindVertexArray(0)
+
   def cleanup(): Unit =
     glDeleteBuffers(vbo)
     glDeleteBuffers(ebo)
