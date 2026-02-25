@@ -14,3 +14,9 @@ assets/
 target/
 project/target/
 project/project/
+
+# Plans
+plan.md
+
+# ImGui
+imgui.ini

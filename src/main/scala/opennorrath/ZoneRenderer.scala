@@ -51,19 +51,15 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings()):
   // Load character models
   private val characterInstances: List[AnimatedCharacter] = loadCharacters()
 
-  // Create particle emitters — from EQG file or S3D brazier positions
+  // Create particle emitters from EQG file only (S3D has no emitter data)
   private val particleSystem: Option[ParticleSystem] =
-    val emitters = if settings.useEqg then
-      val emitterPath = s3dPath.replaceAll("\\.s3d$", "_EnvironmentEmitters.txt.backup")
-      val eqgEmitters = ParticleSystem.parseEmitters(emitterPath)
-      if eqgEmitters.nonEmpty then
-        println(s"  Flame emitters: ${eqgEmitters.size} from EQG file")
-      eqgEmitters
+    if !settings.useEqg then None
     else
-      if brazierEmitters.nonEmpty then
-        println(s"  Flame emitters: ${brazierEmitters.size} from S3D brazier objects")
-      brazierEmitters
-    if emitters.nonEmpty then Some(ParticleSystem(emitters)) else None
+      val emitterPath = s3dPath.replaceAll("\\.s3d$", "_EnvironmentEmitters.txt.backup")
+      val emitters = ParticleSystem.parseEmitters(emitterPath)
+      if emitters.nonEmpty then
+        println(s"  Flame emitters: ${emitters.size} from EQG file")
+      if emitters.nonEmpty then Some(ParticleSystem(emitters)) else None
 
   def resolveTexture(name: String): Int =
     if name.nonEmpty then textureMap.getOrElse(name.toLowerCase, fallbackTexture)

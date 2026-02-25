@@ -8,9 +8,15 @@ case class DebugSettings(
   animationModel: String = "",
 )
 
+case class LoginSettings(
+  host: String = "127.0.0.1",
+  port: Int = 6000,
+)
+
 case class Settings(
   useEqg: Boolean = false,
   debug: DebugSettings = DebugSettings(),
+  login: LoginSettings = LoginSettings(),
 )
 
 /** Typed wrapper around SnakeYAML's raw Map[String, Any] output. */
@@ -22,6 +28,9 @@ private class YamlMap(data: java.util.Map[String, Any]):
 
   def boolean(key: String, default: Boolean = false): Boolean =
     map.get(key).map(_.toString.toBoolean).getOrElse(default)
+
+  def int(key: String, default: Int = 0): Int =
+    map.get(key).map(_.toString.toInt).getOrElse(default)
 
   def nested(key: String): Option[YamlMap] =
     map.get(key).collect { case m: java.util.Map[?, ?] =>
@@ -45,7 +54,15 @@ object Settings:
       DebugSettings(animationModel = d.string("animation_model"))
     }.getOrElse(DebugSettings())
 
+    val login = root.nested("login").map { l =>
+      LoginSettings(
+        host = l.string("host", "127.0.0.1"),
+        port = l.int("port", 6000),
+      )
+    }.getOrElse(LoginSettings())
+
     Settings(
       useEqg = root.boolean("use_eqg"),
       debug = debug,
+      login = login,
     )

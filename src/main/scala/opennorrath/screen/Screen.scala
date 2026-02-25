@@ -1,5 +1,8 @@
 package opennorrath.screen
 
+import imgui.gl3.ImGuiImplGl3
+import imgui.glfw.ImGuiImplGlfw
+
 import opennorrath.{InputManager, Settings}
 
 /** Shared resources available to all screens. */
@@ -9,6 +12,8 @@ case class GameContext(
     settings: Settings,
     windowWidth: Int,
     windowHeight: Int,
+    imGuiGlfw: ImGuiImplGlfw,
+    imGuiGl3: ImGuiImplGl3,
 )
 
 /** Lifecycle interface for a game screen. */

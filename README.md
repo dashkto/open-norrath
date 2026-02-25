@@ -60,6 +60,54 @@ Opens a 1280x720 window. Press Escape to quit.
 ### EQEmu Maps
 - **Repo:** https://github.com/EQEmu/maps
 
+## Local EQEmu Server
+
+To develop and test client networking, run a local EQEmu/Quarm server via Docker.
+
+### Prerequisites
+- [Docker](https://docs.docker.com/engine/install/) + Docker Compose
+
+### Setup
+
+```bash
+# Clone the Docker environment (includes server, quests, and maps as submodules)
+git clone --recurse-submodules https://github.com/nickgal/EQMacDocker
+cd EQMacDocker
+
+# Create .env from the example
+cp .env.example .env
+```
+
+Edit `.env` and set:
+```
+DATABASE_USER=quarm
+DATABASE_PASSWORD=quarmpassword
+DATABASE_NAME=quarm
+SERVER_ADDRESS=127.0.0.1
+SERVER_SHORT_NAME=Quarm Docker
+SERVER_LONG_NAME=Quarm Docker
+```
+
+```bash
+# Build and start (first build compiles the C++ server, takes ~10 minutes)
+docker compose up
+```
+
+### Server Ports
+
+| Service | Port | Description |
+|---------|------|-------------|
+| Login   | 6000 | Login server — authentication and server list |
+| World   | 9000 | World server — character select, zone routing |
+| Zones   | 7000-7400 | Zone servers — actual gameplay |
+| UCS     | 7778 | Universal chat service |
+
+### Notes
+- The Quarm README references unmerged PRs #2 and #3 on the EQMacDocker repo. PR #2 updates env var naming to Quarm conventions (applied above). PR #3 updates the DB dump reference (the repo already has the latest dump).
+- Database is MariaDB, auto-initialized from the Quarm SQL dump on first `docker compose up`.
+- Server source is the EQMacEmu fork (SecretsOTheP/EQMacEmu) at `Server/` submodule.
+- **Rancher Desktop users:** The default SSH port forwarder only forwards TCP. The login server uses UDP, so you must disable it: `rdctl set --experimental.virtual-machine.ssh-port-forwarder=false`. This switches to Lima's native port forwarding which supports UDP. Docker Desktop for Mac may have similar UDP limitations.
+
 ## Settings
 
 `settings.yml` in the project root controls runtime configuration:
@@ -68,12 +116,17 @@ Opens a 1280x720 window. Press Escape to quit.
 use_eqg: false
 debug:
   animation_model: gor
+login:
+  host: 127.0.0.1
+  port: 6000
 ```
 
 | Key | Description |
 |-----|-------------|
 | `use_eqg` | Use EQG companion files for emitters instead of deriving from S3D |
 | `debug.animation_model` | Character model to showcase all animations (e.g. `gor`, `dra`, `btm`, `efr`, `lim`, `tig`). Empty to disable. |
+| `login.host` | Login server hostname (default `127.0.0.1`) |
+| `login.port` | Login server UDP port (default `6000`) |
 
 Zone path is passed as a CLI argument: `sbt "run assets/arena.s3d"` (defaults to `assets/arena.s3d`).
 

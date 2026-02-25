@@ -23,9 +23,9 @@ class ZoneScreen(ctx: GameContext, zonePath: String) extends Screen:
     shader = Shader.fromResources("/shaders/default.vert", "/shaders/default.frag")
     zone = ZoneRenderDebug(zonePath, ctx.settings, ctx.settings.debug.animationModel)
     camera = Camera(
-      position = Vector3f(-400f, 50f, -200f),
-      yaw = 20f,
-      pitch = -10f,
+      position = Vector3f(-150f, 50f, -460f),
+      yaw = 30f,
+      pitch = -5f,
       speed = 100f,
     )
     projection = Matrix4f().perspective(

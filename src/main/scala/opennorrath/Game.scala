@@ -1,7 +1,8 @@
 package opennorrath
 
+import imgui.ImGui
+
 import org.lwjgl.glfw.GLFW.*
-import org.lwjgl.opengl.GL11.*
 
 import opennorrath.screen.{GameContext, Screen}
 
@@ -21,13 +22,19 @@ object Game:
 
       ctx.input.update()
 
-      if ctx.input.isKeyReleased(GLFW_KEY_ESCAPE) then
-        glfwSetWindowShouldClose(ctx.window, true)
+      // Start ImGui frame
+      ctx.imGuiGlfw.newFrame()
+      ctx.imGuiGl3.newFrame()
+      ImGui.newFrame()
 
       currentScreen.foreach { screen =>
         screen.update(dt)
         screen.render(dt)
       }
+
+      // End ImGui frame and render
+      ImGui.render()
+      ctx.imGuiGl3.renderDrawData(ImGui.getDrawData())
 
       glfwSwapBuffers(ctx.window)
       glfwPollEvents()

@@ -50,6 +50,10 @@ lazy val root = project
       "org.lwjgl" % "lwjgl-stb"     % lwjglVersion classifier lwjglNatives,
       // Math
       "org.joml" % "joml" % jomlVersion,
+      // ImGui
+      "io.github.spair" % "imgui-java-binding"      % imguiVersion,
+      "io.github.spair" % "imgui-java-lwjgl3"        % imguiVersion,
+      "io.github.spair" % "imgui-java-natives-macos"  % imguiVersion,
       // YAML settings
       "org.yaml" % "snakeyaml" % "2.3",
     ),

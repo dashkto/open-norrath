@@ -8,3 +8,8 @@ debug:
   # Show all animations for a single character model (e.g. "gor", "dra", "btm", "efr", "lim", "tig")
   # Leave empty to disable animation showcase
   animation_model: gor
+
+# Login server connection
+login:
+  host: 127.0.0.1
+  port: 6000

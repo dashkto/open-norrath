@@ -1,5 +1,9 @@
 package opennorrath
 
+import imgui.ImGui
+import imgui.gl3.ImGuiImplGl3
+import imgui.glfw.ImGuiImplGlfw
+
 import org.lwjgl.glfw.Callbacks.glfwFreeCallbacks
 import org.lwjgl.glfw.GLFW.*
 import org.lwjgl.glfw.GLFWErrorCallback
@@ -8,6 +12,7 @@ import org.lwjgl.opengl.GL11.*
 import org.lwjgl.system.MemoryUtil.NULL
 
 import opennorrath.screen.{GameContext, SplashScreen}
+import opennorrath.ui.{Fonts, ImGuiTheme}
 
 object Main:
 
@@ -55,9 +60,23 @@ object Main:
     println(s"OpenNorrath ${BuildInfo.version} (${BuildInfo.gitCommit}) — OpenGL ${glGetString(GL_VERSION)}")
 
     val input = InputManager(window)
-    val ctx = GameContext(window, input, settings, WindowWidth, WindowHeight)
+
+    // Initialize ImGui (after InputManager so callbacks chain)
+    ImGui.createContext()
+    val imGuiGlfw = ImGuiImplGlfw()
+    val imGuiGl3 = ImGuiImplGl3()
+    imGuiGlfw.init(window, true)
+    Fonts.init()
+    imGuiGl3.init("#version 330 core")
+    ImGuiTheme.apply()
+
+    val ctx = GameContext(window, input, settings, WindowWidth, WindowHeight, imGuiGlfw, imGuiGl3)
 
     Game.run(ctx, SplashScreen(ctx, zonePath))
+
+    imGuiGl3.shutdown()
+    imGuiGlfw.shutdown()
+    ImGui.destroyContext()
 
     glfwFreeCallbacks(window)
     glfwDestroyWindow(window)
