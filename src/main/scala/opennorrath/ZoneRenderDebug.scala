@@ -1,0 +1,89 @@
+package opennorrath
+
+import opennorrath.animation.AnimatedCharacter
+import opennorrath.wld.*
+import org.joml.Matrix4f
+import org.lwjgl.opengl.GL11.*
+import org.lwjgl.opengl.GL20.glVertexAttrib3f
+
+/** Debug renderer that wraps ZoneRenderer and adds an animation showcase grid.
+  * All animations for `animationModel` are displayed simultaneously in a grid above the arena.
+  * Other character models are still shown in their normal positions via ZoneRenderer.
+  */
+class ZoneRenderDebug(s3dPath: String, settings: Settings, animationModel: String):
+
+  private val zone = ZoneRenderer(s3dPath, settings)
+
+  private val showcaseChars: List[AnimatedCharacter] =
+    if animationModel.nonEmpty then loadShowcase() else Nil
+
+  def draw(shader: Shader, deltaTime: Float, viewMatrix: Matrix4f): Unit =
+    zone.draw(shader, deltaTime, viewMatrix)
+
+    if showcaseChars.nonEmpty then
+      glVertexAttrib3f(2, 1f, 1f, 1f)
+      for char <- showcaseChars do
+        char.update(deltaTime)
+        shader.setMatrix4f("model", char.modelMatrix)
+        for group <- char.zoneMesh.groups do
+          if group.materialType != MaterialType.Invisible && group.materialType != MaterialType.Boundary then
+            glBindTexture(GL_TEXTURE_2D, zone.resolveTexture(group.textureName))
+            char.glMesh.drawRange(group.startIndex, group.indexCount)
+
+  def cleanup(): Unit =
+    zone.cleanup()
+    showcaseChars.foreach(_.glMesh.cleanup())
+
+  private def loadShowcase(): List[AnimatedCharacter] =
+    val chrS3dPath = s3dPath.replace(".s3d", "_chr.s3d")
+    if !java.nio.file.Files.exists(java.nio.file.Path.of(chrS3dPath)) then return Nil
+
+    val chrEntries = opennorrath.archive.PfsArchive.load(java.nio.file.Path.of(chrS3dPath))
+    val chrWldEntry = chrEntries.find(_.extension == "wld")
+    if chrWldEntry.isEmpty then return Nil
+
+    val chrWld = WldFile(chrWldEntry.get.data)
+    val actors = chrWld.fragmentsOfType[Fragment14_Actor]
+    val builds = ZoneRenderer.buildCharacters(chrWld, actors)
+
+    val target = animationModel.toLowerCase
+    val buildOpt = builds.find(_.key == target)
+    if buildOpt.isEmpty then
+      println(s"  Animation model '$target' not found, available: ${builds.map(_.key).mkString(", ")}")
+      return Nil
+
+    val build = buildOpt.get
+    val sortedClips = build.clips.toList.sortBy(_._1)
+    val count = sortedClips.size
+    val cols = math.ceil(math.sqrt(count.toDouble)).toInt
+    val targetHeight = 60f
+    val scale = if build.glHeight > 0 then targetHeight / build.glHeight else 10f
+    val spacing = math.max(build.glWidth, build.glDepth) * scale + 20f
+
+    // Center grid above the arena plinth: GL(-38.6, 19.1, -393.9)
+    val centerX = -38.6f
+    val centerY = 80f
+    val centerZ = -393.9f
+    val rows = math.ceil(count.toDouble / cols).toInt
+
+    val results = sortedClips.zipWithIndex.map { case ((code, _), i) =>
+      val col = i % cols
+      val row = i / cols
+      val x = centerX + (col - (cols - 1) / 2f) * spacing
+      val z = centerZ + (row - (rows - 1) / 2f) * -spacing
+
+      val interleaved = ZoneRenderer.buildInterleaved(build.zm)
+      val glMesh = Mesh(interleaved, build.zm.indices, dynamic = true)
+      val modelMatrix = Matrix4f()
+      modelMatrix.translate(x, centerY, z)
+      modelMatrix.scale(scale)
+      modelMatrix.translate(-build.glCenterX, -build.glMinY, -build.glCenterZ)
+
+      val char = AnimatedCharacter(build.skeleton, build.meshFragments, build.zm, glMesh, modelMatrix, build.clips, interleaved.clone())
+      char.play(code)
+      println(s"    $code at grid($col, $row)")
+      char
+    }
+
+    println(s"  Animation showcase: ${results.size} clips for '$target' at y=300")
+    results

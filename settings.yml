@@ -1,0 +1,10 @@
+# OpenNorrath Settings
+
+# Use EQG companion files (emitters, etc.) instead of deriving from S3D data
+use_eqg: false
+
+# Debug rendering options
+debug:
+  # Show all animations for a single character model (e.g. "gor", "dra", "btm", "efr", "lim", "tig")
+  # Leave empty to disable animation showcase
+  animation_model: gor

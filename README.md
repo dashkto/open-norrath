@@ -55,6 +55,41 @@ Opens a 1280x720 window. Press Escape to quit.
 ### EQEmu Maps
 - **Repo:** https://github.com/EQEmu/maps
 
+## Settings
+
+`settings.yml` in the project root controls runtime configuration:
+
+```yaml
+use_eqg: false
+debug:
+  animation_model: gor
+```
+
+| Key | Description |
+|-----|-------------|
+| `use_eqg` | Use EQG companion files for emitters instead of deriving from S3D |
+| `debug.animation_model` | Character model to showcase all animations (e.g. `gor`, `dra`, `btm`, `efr`, `lim`, `tig`). Empty to disable. |
+
+Zone path is passed as a CLI argument: `sbt "run assets/arena.s3d"` (defaults to `assets/arena.s3d`).
+
+## Debug Tools
+
+Standalone debug tools for inspecting EQ file formats. Run via sbt:
+
+```bash
+sbt "runMain opennorrath.tools.ZoneDebug [path.s3d]"
+```
+
+All tools default to `assets/arena*` if no argument is given.
+
+| Tool | Target File | What It Dumps |
+|------|-------------|---------------|
+| `ZoneDebug` | zone `.s3d` | S3D entries, WLD fragment stats, object placements |
+| `ObjectDebug` | `_obj.s3d` | Actors, meshes with bounding boxes, materials, textures |
+| `CharDebug` | `_chr.s3d` | Actors, skeleton bones, meshes, animation clips |
+| `LightDebug` | `.txt` | Line lights with coordinates/RGB, portals |
+| `EmitterDebug` | `_EnvironmentEmitters.txt` | Particle emitter names, IDs, positions |
+
 ## Key Technical Challenges
 - **S3D/WLD format:** Custom archive + world format with BSP trees, region-based visibility, baked lighting. WLD is notoriously underdocumented. LanternExtractor (C#) and zone-utilities (C++) are the best existing parsers.
 - **EQ protocol:** Partially documented via EQEmu. Will need Wireshark for gaps. P1999 uses Titanium-era opcodes.

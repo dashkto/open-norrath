@@ -39,10 +39,12 @@ object Main:
     |uniform sampler2D tex0;
     |void main() {
     |    FragColor = texture(tex0, TexCoord) * vec4(VertColor, 1.0);
+    |    if (FragColor.a < 0.1) discard;
     |}
     |""".stripMargin
 
   def main(args: Array[String]): Unit =
+    val settings = Settings.load()
     val zonePath = if args.nonEmpty then args(0) else "assets/arena.s3d"
 
     GLFWErrorCallback.createPrint(System.err).set()
@@ -84,7 +86,7 @@ object Main:
 
     // Init resources
     val shader = Shader(VertexShaderSource, FragmentShaderSource)
-    val zone = ZoneRenderer(zonePath)
+    val zone = ZoneRenderDebug(zonePath, settings, settings.debug.animationModel)
     // Start at arena edge, slightly above floor level, looking toward center
     // Coordinates are swapped from EQ: GL(X, Y, Z) = EQ(X, Z, -Y)
     val camera = Camera(
@@ -141,10 +143,11 @@ object Main:
 
       shader.use()
       shader.setMatrix4f("projection", projection)
-      shader.setMatrix4f("view", camera.viewMatrix)
+      val viewMatrix = camera.viewMatrix
+      shader.setMatrix4f("view", viewMatrix)
       shader.setMatrix4f("model", model)
 
-      zone.draw(shader, deltaTime)
+      zone.draw(shader, deltaTime, viewMatrix)
 
       glfwSwapBuffers(window)
       glfwPollEvents()

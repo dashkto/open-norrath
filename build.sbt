@@ -43,5 +43,7 @@ lazy val root = project
       "org.lwjgl" % "lwjgl-stb"     % lwjglVersion classifier lwjglNatives,
       // Math
       "org.joml" % "joml" % jomlVersion,
+      // YAML settings
+      "org.yaml" % "snakeyaml" % "2.3",
     ),
   )

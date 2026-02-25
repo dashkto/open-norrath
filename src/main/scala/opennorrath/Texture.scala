@@ -1,6 +1,7 @@
 package opennorrath
 
 import org.lwjgl.opengl.GL11.*
+import org.lwjgl.opengl.GL12.GL_CLAMP_TO_EDGE
 import org.lwjgl.opengl.GL30.glGenerateMipmap
 import org.lwjgl.stb.STBImage.*
 import org.lwjgl.system.MemoryStack
@@ -32,6 +33,30 @@ object Texture:
 
     textureId
 
+  def createSoftCircle(size: Int = 64): Int =
+    val buffer = BufferUtils.createByteBuffer(size * size * 4)
+    val center = size / 2.0f
+    for
+      y <- 0 until size
+      x <- 0 until size
+    do
+      val dx = (x - center) / center
+      val dy = (y - center) / center
+      val dSq = dx * dx + dy * dy
+      val alpha = (1f - dSq).max(0f)
+      val a = (alpha * alpha * 255).toInt.min(255).toByte
+      buffer.put(255.toByte).put(255.toByte).put(255.toByte).put(a)
+    buffer.flip()
+
+    val textureId = glGenTextures()
+    glBindTexture(GL_TEXTURE_2D, textureId)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, size, size, 0, GL_RGBA, GL_UNSIGNED_BYTE, buffer)
+    textureId
+
   def loadFromBytes(data: Array[Byte]): Int =
     val stack = MemoryStack.stackPush()
     try
@@ -46,6 +71,41 @@ object Texture:
       val pixels = stbi_load_from_memory(inputBuf, w, h, channels, 4) // force RGBA
       if pixels == null then
         throw RuntimeException(s"Failed to load texture: ${stbi_failure_reason()}")
+
+      // BMP files have no alpha channel — STB fills alpha=255 for all pixels.
+      // EQ uses black (0,0,0) as the color key for masked/transparent textures.
+      // Set alpha=0 for near-black pixels so the fragment shader can discard them.
+      val width = w.get(0)
+      val height = h.get(0)
+      val pixelCount = width * height
+      for i <- 0 until pixelCount do
+        val offset = i * 4
+        val r = pixels.get(offset) & 0xFF
+        val g = pixels.get(offset + 1) & 0xFF
+        val b = pixels.get(offset + 2) & 0xFF
+        if r + g + b < 10 then
+          pixels.put(offset + 3, 0.toByte)
+
+      // Bleed opaque edge colors into transparent pixels to prevent dark halos
+      // from bilinear filtering at color-key boundaries.
+      for i <- 0 until pixelCount do
+        val offset = i * 4
+        if (pixels.get(offset + 3) & 0xFF) == 0 then
+          val x = i % width; val y = i / width
+          var sr = 0; var sg = 0; var sb = 0; var count = 0
+          for (dx, dy) <- Array((-1, 0), (1, 0), (0, -1), (0, 1)) do
+            val nx = x + dx; val ny = y + dy
+            if nx >= 0 && nx < width && ny >= 0 && ny < height then
+              val nOff = (ny * width + nx) * 4
+              if (pixels.get(nOff + 3) & 0xFF) > 0 then
+                sr += pixels.get(nOff) & 0xFF
+                sg += pixels.get(nOff + 1) & 0xFF
+                sb += pixels.get(nOff + 2) & 0xFF
+                count += 1
+          if count > 0 then
+            pixels.put(offset, (sr / count).toByte)
+            pixels.put(offset + 1, (sg / count).toByte)
+            pixels.put(offset + 2, (sb / count).toByte)
 
       val textureId = glGenTextures()
       glBindTexture(GL_TEXTURE_2D, textureId)

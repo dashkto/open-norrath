@@ -8,7 +8,7 @@ import org.lwjgl.opengl.GL11.*
 import org.lwjgl.opengl.GL20.glVertexAttrib3f
 import java.nio.file.{Path, Files}
 
-class ZoneRenderer(s3dPath: String):
+class ZoneRenderer(s3dPath: String, settings: Settings = Settings()):
 
   private val entries = PfsArchive.load(Path.of(s3dPath))
   private val zoneWld = entries.find(e => e.extension == "wld" && !e.name.contains("objects") && !e.name.contains("lights"))
@@ -31,27 +31,45 @@ class ZoneRenderer(s3dPath: String):
   private val vertexCount = zoneMesh.vertices.length / 3
   private val zoneStride = if lights.nonEmpty then 8 else 5
   private val interleavedVertices: Array[Float] =
-    val base = buildInterleaved(zoneMesh)
+    val base = ZoneRenderer.buildInterleaved(zoneMesh)
     if lights.nonEmpty then LightBaker.bakeVertexColors(base, lights) else base
 
   // Load textures from S3D entries, keyed by lowercase filename
-  private val textureMap: scala.collection.mutable.Map[String, Int] = scala.collection.mutable.Map.empty
+  private[opennorrath] val textureMap: scala.collection.mutable.Map[String, Int] = scala.collection.mutable.Map.empty
 
   loadTextures(entries)
 
-  private val fallbackTexture = Texture.createCheckerboard(64, 8)
+  private[opennorrath] val fallbackTexture = Texture.createCheckerboard(64, 8)
 
   val mesh = Mesh(interleavedVertices, zoneMesh.indices, stride = zoneStride)
 
   println(s"Zone loaded: $vertexCount vertices, ${zoneMesh.indices.length / 3} triangles, ${textureMap.size} textures")
 
-  // Load objects
-  private val objectInstances: List[ObjectRenderData] = loadObjects()
+  // Load objects and collect brazier emitters for flame particles
+  private val (objectInstances, brazierEmitters) = loadObjects()
 
   // Load character models
   private val characterInstances: List[AnimatedCharacter] = loadCharacters()
 
-  def draw(shader: Shader, deltaTime: Float): Unit =
+  // Create particle emitters — from EQG file or S3D brazier positions
+  private val particleSystem: Option[ParticleSystem] =
+    val emitters = if settings.useEqg then
+      val emitterPath = s3dPath.replaceAll("\\.s3d$", "_EnvironmentEmitters.txt.backup")
+      val eqgEmitters = ParticleSystem.parseEmitters(emitterPath)
+      if eqgEmitters.nonEmpty then
+        println(s"  Flame emitters: ${eqgEmitters.size} from EQG file")
+      eqgEmitters
+    else
+      if brazierEmitters.nonEmpty then
+        println(s"  Flame emitters: ${brazierEmitters.size} from S3D brazier objects")
+      brazierEmitters
+    if emitters.nonEmpty then Some(ParticleSystem(emitters)) else None
+
+  def resolveTexture(name: String): Int =
+    if name.nonEmpty then textureMap.getOrElse(name.toLowerCase, fallbackTexture)
+    else fallbackTexture
+
+  def draw(shader: Shader, deltaTime: Float, viewMatrix: Matrix4f): Unit =
     shader.setInt("tex0", 0)
 
     // Draw zone geometry
@@ -59,11 +77,7 @@ class ZoneRenderer(s3dPath: String):
     shader.setMatrix4f("model", identity)
     for group <- zoneMesh.groups do
       if group.materialType != MaterialType.Invisible && group.materialType != MaterialType.Boundary then
-        val texId = if group.textureName.nonEmpty then
-          textureMap.getOrElse(group.textureName.toLowerCase, fallbackTexture)
-        else
-          fallbackTexture
-        glBindTexture(GL_TEXTURE_2D, texId)
+        glBindTexture(GL_TEXTURE_2D, resolveTexture(group.textureName))
         mesh.drawRange(group.startIndex, group.indexCount)
 
     // Set default vertex color to white for unlit meshes (objects/characters use stride-5, no color attribute)
@@ -74,11 +88,7 @@ class ZoneRenderer(s3dPath: String):
       shader.setMatrix4f("model", obj.modelMatrix)
       for group <- obj.zoneMesh.groups do
         if group.materialType != MaterialType.Invisible && group.materialType != MaterialType.Boundary then
-          val texId = if group.textureName.nonEmpty then
-            textureMap.getOrElse(group.textureName.toLowerCase, fallbackTexture)
-          else
-            fallbackTexture
-          glBindTexture(GL_TEXTURE_2D, texId)
+          glBindTexture(GL_TEXTURE_2D, resolveTexture(group.textureName))
           obj.glMesh.drawRange(group.startIndex, group.indexCount)
 
     // Update and draw animated characters
@@ -87,36 +97,24 @@ class ZoneRenderer(s3dPath: String):
       shader.setMatrix4f("model", char.modelMatrix)
       for group <- char.zoneMesh.groups do
         if group.materialType != MaterialType.Invisible && group.materialType != MaterialType.Boundary then
-          val texId = if group.textureName.nonEmpty then
-            textureMap.getOrElse(group.textureName.toLowerCase, fallbackTexture)
-          else
-            fallbackTexture
-          glBindTexture(GL_TEXTURE_2D, texId)
+          glBindTexture(GL_TEXTURE_2D, resolveTexture(group.textureName))
           char.glMesh.drawRange(group.startIndex, group.indexCount)
+
+    // Update and draw particles (last, for correct additive blending)
+    particleSystem.foreach { ps =>
+      ps.update(deltaTime, viewMatrix)
+      ps.draw(shader)
+    }
 
   def cleanup(): Unit =
     mesh.cleanup()
     objectInstances.foreach(_.glMesh.cleanup())
     characterInstances.foreach(_.glMesh.cleanup())
+    particleSystem.foreach(_.cleanup())
     textureMap.values.foreach(glDeleteTextures(_))
     glDeleteTextures(fallbackTexture)
 
-  private def buildInterleaved(zm: ZoneMesh): Array[Float] =
-    val vc = zm.vertices.length / 3
-    val arr = new Array[Float](vc * 5)
-    for i <- 0 until vc do
-      val eqX = zm.vertices(i * 3 + 0)
-      val eqY = zm.vertices(i * 3 + 1)
-      val eqZ = zm.vertices(i * 3 + 2)
-      arr(i * 5 + 0) = eqX
-      arr(i * 5 + 1) = eqZ
-      arr(i * 5 + 2) = -eqY
-      if i * 2 + 1 < zm.uvs.length then
-        arr(i * 5 + 3) = zm.uvs(i * 2 + 0)
-        arr(i * 5 + 4) = zm.uvs(i * 2 + 1)
-    arr
-
-  private def loadTextures(s3dEntries: List[PfsEntry]): Unit =
+  private[opennorrath] def loadTextures(s3dEntries: List[PfsEntry]): Unit =
     val bmpEntries = s3dEntries.filter(_.extension == "bmp")
     for entry <- bmpEntries do
       val key = entry.name.toLowerCase
@@ -126,27 +124,27 @@ class ZoneRenderer(s3dPath: String):
           textureMap(key) = texId
         catch case _: Exception => ()
 
-  private def loadObjects(): List[ObjectRenderData] =
+  private def loadObjects(): (List[ObjectRenderData], List[Emitter]) =
     // Find objects.wld in the zone S3D
     val objectsWldOpt = entries.find(e => e.name == "objects.wld")
-    if objectsWldOpt.isEmpty then return Nil
+    if objectsWldOpt.isEmpty then return (Nil, Nil)
 
     val objectsWld = WldFile(objectsWldOpt.get.data)
     val placements = objectsWld.fragmentsOfType[Fragment15_ObjectInstance]
 
-    if placements.isEmpty then return Nil
+    if placements.isEmpty then return (Nil, Nil)
 
     // Load the _obj.s3d for object meshes
     val objS3dPath = s3dPath.replace(".s3d", "_obj.s3d")
     if !Files.exists(Path.of(objS3dPath)) then
       println(s"  Object S3D not found: $objS3dPath")
-      return Nil
+      return (Nil, Nil)
 
     val objEntries = PfsArchive.load(Path.of(objS3dPath))
     loadTextures(objEntries)
 
     val objWldEntry = objEntries.find(_.extension == "wld")
-    if objWldEntry.isEmpty then return Nil
+    if objWldEntry.isEmpty then return (Nil, Nil)
 
     val objWld = WldFile(objWldEntry.get.data)
 
@@ -167,19 +165,42 @@ class ZoneRenderer(s3dPath: String):
         catch case _: Exception => None
       }
       if meshFragments.nonEmpty then
-        // Create a temporary WLD-like context for ZoneGeometry extraction
-        // We need the material chain from objWld
-        val zm = extractMeshGeometry(objWld, meshFragments)
+        val zm = ZoneRenderer.extractMeshGeometry(objWld, meshFragments)
         Some((actorKey, zm))
       else None
     }.toMap
 
     println(s"  Object models: ${actorMeshes.size} (${actorMeshes.keys.mkString(", ")})")
 
-    // Create render data for each placement
+    // Compute brazier mesh dimensions (EQ space) for flame placement and sizing
+    case class BrazierInfo(height: Float, width: Float)
+    val brazierInfo: Map[String, BrazierInfo] = actorMeshes.collect {
+      case (name, zm) if name.contains("brazier") =>
+        val vc = zm.vertices.length / 3
+        var maxZ = Float.MinValue; var minX = Float.MaxValue; var maxX = Float.MinValue
+        for i <- 0 until vc do
+          val x = zm.vertices(i * 3); val z = zm.vertices(i * 3 + 2)
+          if z > maxZ then maxZ = z
+          if x < minX then minX = x; if x > maxX then maxX = x
+        name -> BrazierInfo(maxZ, maxX - minX)
+    }
+
+    // Create render data for each placement, collect brazier emitters
+    val emitterBuilder = List.newBuilder[Emitter]
     val results = placements.flatMap { placement =>
+      // If this is a brazier, create a flame emitter at the top of the mesh
+      if placement.actorName.contains("brazier") then
+        val pos = placement.position
+        val scl = if placement.scale.y != 0 then placement.scale.y else 1f
+        val info = brazierInfo.getOrElse(placement.actorName, BrazierInfo(27f, 20f))
+        // GL position: (eqX, eqZ + meshHeight*scale, -eqY)
+        val flamePos = Vector3f(pos.x, pos.z + info.height * scl, -pos.y)
+        // Scale particles relative to brazier width (normalize to ~20 unit reference width)
+        val sizeScale = (info.width * scl / 20f).max(0.3f).min(2f)
+        emitterBuilder += Emitter(flamePos, sizeScale)
+
       actorMeshes.get(placement.actorName).map { zm =>
-        val interleaved = buildInterleaved(zm)
+        val interleaved = ZoneRenderer.buildInterleaved(zm)
         val glMesh = Mesh(interleaved, zm.indices)
         val modelMatrix = buildModelMatrix(placement)
         ObjectRenderData(zm, glMesh, modelMatrix)
@@ -187,7 +208,7 @@ class ZoneRenderer(s3dPath: String):
     }
 
     println(s"  Placed objects: ${results.size}")
-    results
+    (results, emitterBuilder.result())
 
   // Character models live in {zone}_chr.s3d. Unlike zone objects which have pre-placed instances,
   // characters are spawned dynamically by the server. The fragment chain is:
@@ -210,62 +231,13 @@ class ZoneRenderer(s3dPath: String):
 
     println(s"  Character actors: ${actors.size} (${actors.map(_.name.replace("_ACTORDEF", "").toLowerCase).mkString(", ")})")
 
-    case class CharBuild(key: String, skeleton: Fragment10_SkeletonHierarchy, meshFragments: List[Fragment36_Mesh],
-                         zm: ZoneMesh, glWidth: Float, glDepth: Float, glHeight: Float,
-                         glCenterX: Float, glCenterZ: Float, glMinY: Float, clips: Map[String, opennorrath.animation.AnimationClip])
+    val builds = ZoneRenderer.buildCharacters(chrWld, actors)
 
-    val builds = actors.flatMap { actor =>
-      val actorKey = actor.name.replace("_ACTORDEF", "").toLowerCase
-      val (skeletonOpt, meshFragments) = resolveActorMeshes(chrWld, actor)
-
-      if meshFragments.isEmpty || skeletonOpt.isEmpty then
-        println(s"    $actorKey: no meshes or skeleton found")
-        None
-      else
-        val sk = skeletonOpt.get
-
-        // Discover animations
-        val clips = AnimatedCharacter.discoverAnimations(chrWld, sk)
-
-        // Use the default animation's frame 0 for initial pose and bounding box,
-        // so placement matches what the player actually sees during animation.
-        // Fall back to rest pose (base tracks) if no animations found.
-        val defaultClip = clips.get("L01").orElse(clips.get("P01")).orElse(clips.headOption.map(_._2))
-        val boneTransforms = defaultClip match
-          case Some(clip) => AnimatedCharacter.computeBoneTransforms(sk, clip, 0)
-          case None => sk.boneWorldTransforms(chrWld)
-        val transformedMeshes = meshFragments.map(mesh => applyBoneTransforms(mesh, boneTransforms))
-        val zm = extractMeshGeometry(chrWld, transformedMeshes)
-
-        // Compute bounding box in EQ space then convert to GL
-        val vc = zm.vertices.length / 3
-        var eqMinX = Float.MaxValue; var eqMaxX = Float.MinValue
-        var eqMinY = Float.MaxValue; var eqMaxY = Float.MinValue
-        var eqMinZ = Float.MaxValue; var eqMaxZ = Float.MinValue
-        for i <- 0 until vc do
-          val x = zm.vertices(i * 3); val y = zm.vertices(i * 3 + 1); val z = zm.vertices(i * 3 + 2)
-          if x < eqMinX then eqMinX = x; if x > eqMaxX then eqMaxX = x
-          if y < eqMinY then eqMinY = y; if y > eqMaxY then eqMaxY = y
-          if z < eqMinZ then eqMinZ = z; if z > eqMaxZ then eqMaxZ = z
-        val glWidth = eqMaxX - eqMinX
-        val glHeight = eqMaxZ - eqMinZ
-        val glDepth = eqMaxY - eqMinY
-        val glCenterX = (eqMinX + eqMaxX) / 2f
-        val glCenterZ = -(eqMinY + eqMaxY) / 2f
-        val glMinY = eqMinZ
-
-        val animInfo = if clips.nonEmpty then
-          clips.map((code, clip) => s"$code(${clip.frameCount}f)").mkString(", ")
-        else "none"
-        println(s"    $actorKey: ${meshFragments.size} meshes, ${zm.vertices.length / 3} verts, anims: $animInfo")
-        Some(CharBuild(actorKey, sk, meshFragments, zm, glWidth, glDepth, glHeight, glCenterX, glCenterZ, glMinY, clips))
-    }
-
-    // Place characters in a line, normalized to similar display height
+    // Place one instance per model in a line
     val targetHeight = 50f
     var xCursor = -370f
     val results = builds.map { build =>
-      val interleaved = buildInterleaved(build.zm)
+      val interleaved = ZoneRenderer.buildInterleaved(build.zm)
       val glMesh = Mesh(interleaved, build.zm.indices, dynamic = build.clips.nonEmpty)
 
       val scale = if build.glHeight > 0 then targetHeight / build.glHeight else 10f
@@ -284,34 +256,48 @@ class ZoneRenderer(s3dPath: String):
     println(s"  Characters placed: ${results.size}")
     results
 
-  private def resolveActorMeshes(wld: WldFile, actor: Fragment14_Actor): (Option[Fragment10_SkeletonHierarchy], List[Fragment36_Mesh]) =
-    var skeleton: Option[Fragment10_SkeletonHierarchy] = None
-    val meshFragments = actor.componentRefs.flatMap { ref =>
-      try
-        wld.fragment(ref) match
-          case sr: Fragment11_SkeletonHierarchyRef =>
-            wld.fragment(sr.skeletonRef) match
-              case sk: Fragment10_SkeletonHierarchy =>
-                skeleton = Some(sk)
-                sk.meshRefs.flatMap { mr =>
-                  wld.fragment(mr) match
-                    case m: Fragment2D_MeshReference =>
-                      wld.fragment(m.meshRef) match
-                        case mesh: Fragment36_Mesh => Some(mesh)
-                        case _ => None
-                    case _ => None
-                }
-              case _ => Nil
-          case mr: Fragment2D_MeshReference =>
-            wld.fragment(mr.meshRef) match
-              case mesh: Fragment36_Mesh => Some(mesh)
-              case _ => None
-          case _ => Nil
-      catch case _: Exception => Nil
-    }
-    (skeleton, meshFragments)
+  private def buildModelMatrix(placement: Fragment15_ObjectInstance): Matrix4f =
+    val pos = placement.position
+    val rot = placement.rotation
+    val scl = placement.scale
 
-  private def extractMeshGeometry(objWld: WldFile, meshFragments: List[Fragment36_Mesh]): ZoneMesh =
+    // EQ coordinates → GL coordinates: (X, Z, -Y)
+    val mat = Matrix4f()
+    mat.translate(pos.x, pos.z, -pos.y)
+    // Apply rotations (EQ rotation order)
+    mat.rotateY(Math.toRadians(-rot.z).toFloat)  // heading (Z rot in EQ → Y rot in GL)
+    mat.rotateX(Math.toRadians(rot.y).toFloat)    // pitch
+    mat.rotateZ(Math.toRadians(rot.x).toFloat)    // roll
+    // Scale - use Y as uniform scale if others are 0
+    val s = if scl.y != 0 then scl.y else 1f
+    mat.scale(s)
+    mat
+
+object ZoneRenderer:
+
+  case class CharBuild(
+    key: String, skeleton: Fragment10_SkeletonHierarchy, meshFragments: List[Fragment36_Mesh],
+    zm: ZoneMesh, glWidth: Float, glDepth: Float, glHeight: Float,
+    glCenterX: Float, glCenterZ: Float, glMinY: Float,
+    clips: Map[String, opennorrath.animation.AnimationClip],
+  )
+
+  def buildInterleaved(zm: ZoneMesh): Array[Float] =
+    val vc = zm.vertices.length / 3
+    val arr = new Array[Float](vc * 5)
+    for i <- 0 until vc do
+      val eqX = zm.vertices(i * 3 + 0)
+      val eqY = zm.vertices(i * 3 + 1)
+      val eqZ = zm.vertices(i * 3 + 2)
+      arr(i * 5 + 0) = eqX
+      arr(i * 5 + 1) = eqZ
+      arr(i * 5 + 2) = -eqY
+      if i * 2 + 1 < zm.uvs.length then
+        arr(i * 5 + 3) = zm.uvs(i * 2 + 0)
+        arr(i * 5 + 4) = zm.uvs(i * 2 + 1)
+    arr
+
+  def extractMeshGeometry(objWld: WldFile, meshFragments: List[Fragment36_Mesh]): ZoneMesh =
     var allVertices = Array.empty[Float]
     var allUvs = Array.empty[Float]
     var allIndices = Array.empty[Int]
@@ -348,8 +334,7 @@ class ZoneRenderer(s3dPath: String):
 
     ZoneMesh(allVertices, allUvs, allIndices, allGroups)
 
-  /** Transform mesh vertices from bone-local space to model space using skeleton rest pose */
-  private def applyBoneTransforms(mesh: Fragment36_Mesh, boneTransforms: Array[Matrix4f]): Fragment36_Mesh =
+  def applyBoneTransforms(mesh: Fragment36_Mesh, boneTransforms: Array[Matrix4f]): Fragment36_Mesh =
     if mesh.vertexPieces.isEmpty then return mesh
 
     val newVertices = mesh.vertices.clone()
@@ -369,21 +354,73 @@ class ZoneRenderer(s3dPath: String):
 
     mesh.copy(vertices = newVertices)
 
-  private def buildModelMatrix(placement: Fragment15_ObjectInstance): Matrix4f =
-    val pos = placement.position
-    val rot = placement.rotation
-    val scl = placement.scale
+  def resolveActorMeshes(wld: WldFile, actor: Fragment14_Actor): (Option[Fragment10_SkeletonHierarchy], List[Fragment36_Mesh]) =
+    var skeleton: Option[Fragment10_SkeletonHierarchy] = None
+    val meshFragments = actor.componentRefs.flatMap { ref =>
+      try
+        wld.fragment(ref) match
+          case sr: Fragment11_SkeletonHierarchyRef =>
+            wld.fragment(sr.skeletonRef) match
+              case sk: Fragment10_SkeletonHierarchy =>
+                skeleton = Some(sk)
+                sk.meshRefs.flatMap { mr =>
+                  wld.fragment(mr) match
+                    case m: Fragment2D_MeshReference =>
+                      wld.fragment(m.meshRef) match
+                        case mesh: Fragment36_Mesh => Some(mesh)
+                        case _ => None
+                    case _ => None
+                }
+              case _ => Nil
+          case mr: Fragment2D_MeshReference =>
+            wld.fragment(mr.meshRef) match
+              case mesh: Fragment36_Mesh => Some(mesh)
+              case _ => None
+          case _ => Nil
+      catch case _: Exception => Nil
+    }
+    (skeleton, meshFragments)
 
-    // EQ coordinates → GL coordinates: (X, Z, -Y)
-    val mat = Matrix4f()
-    mat.translate(pos.x, pos.z, -pos.y)
-    // Apply rotations (EQ rotation order)
-    mat.rotateY(Math.toRadians(-rot.z).toFloat)  // heading (Z rot in EQ → Y rot in GL)
-    mat.rotateX(Math.toRadians(rot.y).toFloat)    // pitch
-    mat.rotateZ(Math.toRadians(rot.x).toFloat)    // roll
-    // Scale - use Y as uniform scale if others are 0
-    val s = if scl.y != 0 then scl.y else 1f
-    mat.scale(s)
-    mat
+  /** Build character data from actors: resolve meshes, discover animations, compute bounding boxes. */
+  def buildCharacters(chrWld: WldFile, actors: List[Fragment14_Actor]): List[CharBuild] =
+    actors.flatMap { actor =>
+      val actorKey = actor.name.replace("_ACTORDEF", "").toLowerCase
+      val (skeletonOpt, meshFragments) = resolveActorMeshes(chrWld, actor)
+
+      if meshFragments.isEmpty || skeletonOpt.isEmpty then
+        println(s"    $actorKey: no meshes or skeleton found")
+        None
+      else
+        val sk = skeletonOpt.get
+        val clips = AnimatedCharacter.discoverAnimations(chrWld, sk)
+
+        // Use the default animation's frame 0 for initial pose and bounding box
+        val defaultClip = clips.get("L01").orElse(clips.get("P01")).orElse(clips.headOption.map(_._2))
+        val boneTransforms = defaultClip match
+          case Some(clip) => AnimatedCharacter.computeBoneTransforms(sk, clip, 0)
+          case None => sk.boneWorldTransforms(chrWld)
+        val transformedMeshes = meshFragments.map(mesh => applyBoneTransforms(mesh, boneTransforms))
+        val zm = extractMeshGeometry(chrWld, transformedMeshes)
+
+        // Compute bounding box in EQ space
+        val vc = zm.vertices.length / 3
+        var eqMinX = Float.MaxValue; var eqMaxX = Float.MinValue
+        var eqMinY = Float.MaxValue; var eqMaxY = Float.MinValue
+        var eqMinZ = Float.MaxValue; var eqMaxZ = Float.MinValue
+        for i <- 0 until vc do
+          val x = zm.vertices(i * 3); val y = zm.vertices(i * 3 + 1); val z = zm.vertices(i * 3 + 2)
+          if x < eqMinX then eqMinX = x; if x > eqMaxX then eqMaxX = x
+          if y < eqMinY then eqMinY = y; if y > eqMaxY then eqMaxY = y
+          if z < eqMinZ then eqMinZ = z; if z > eqMaxZ then eqMaxZ = z
+
+        val animInfo = if clips.nonEmpty then
+          clips.map((code, clip) => s"$code(${clip.frameCount}f)").mkString(", ")
+        else "none"
+        println(s"    $actorKey: ${meshFragments.size} meshes, ${zm.vertices.length / 3} verts, anims: $animInfo")
+        Some(CharBuild(actorKey, sk, meshFragments, zm,
+          glWidth = eqMaxX - eqMinX, glDepth = eqMaxY - eqMinY, glHeight = eqMaxZ - eqMinZ,
+          glCenterX = (eqMinX + eqMaxX) / 2f, glCenterZ = -(eqMinY + eqMaxY) / 2f, glMinY = eqMinZ,
+          clips))
+    }
 
 case class ObjectRenderData(zoneMesh: ZoneMesh, glMesh: Mesh, modelMatrix: Matrix4f)
