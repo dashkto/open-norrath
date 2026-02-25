@@ -1,9 +1,11 @@
 package opennorrath
 
+import opennorrath.animation.AnimatedCharacter
 import opennorrath.archive.{PfsArchive, PfsEntry}
 import opennorrath.wld.*
 import org.joml.{Matrix4f, Vector3f}
 import org.lwjgl.opengl.GL11.*
+import org.lwjgl.opengl.GL20.glVertexAttrib3f
 import java.nio.file.{Path, Files}
 
 class ZoneRenderer(s3dPath: String):
@@ -15,10 +17,22 @@ class ZoneRenderer(s3dPath: String):
   private val wld = WldFile(zoneWld.data)
   private val zoneMesh = ZoneGeometry.extract(wld)
 
-  // Build interleaved vertex buffer: position (3) + uv (2)
+  // Load line lights from companion .txt file
+  private val lights: List[LightBaker.LineLight] =
+    val txtPath = s3dPath.replaceAll("\\.s3d$", ".txt")
+    if Files.exists(Path.of(txtPath)) then
+      val ls = LightBaker.parseLights(txtPath)
+      println(s"  Loaded ${ls.size} line lights from $txtPath")
+      ls
+    else Nil
+
+  // Build interleaved vertex buffer: position (3) + uv (2) [+ color (3) if lit]
   // EQ uses Z-up; OpenGL/our camera uses Y-up. Swap: EQ(X,Y,Z) → GL(X,Z,-Y)
   private val vertexCount = zoneMesh.vertices.length / 3
-  private val interleavedVertices: Array[Float] = buildInterleaved(zoneMesh)
+  private val zoneStride = if lights.nonEmpty then 8 else 5
+  private val interleavedVertices: Array[Float] =
+    val base = buildInterleaved(zoneMesh)
+    if lights.nonEmpty then LightBaker.bakeVertexColors(base, lights) else base
 
   // Load textures from S3D entries, keyed by lowercase filename
   private val textureMap: scala.collection.mutable.Map[String, Int] = scala.collection.mutable.Map.empty
@@ -27,7 +41,7 @@ class ZoneRenderer(s3dPath: String):
 
   private val fallbackTexture = Texture.createCheckerboard(64, 8)
 
-  val mesh = Mesh(interleavedVertices, zoneMesh.indices)
+  val mesh = Mesh(interleavedVertices, zoneMesh.indices, stride = zoneStride)
 
   println(s"Zone loaded: $vertexCount vertices, ${zoneMesh.indices.length / 3} triangles, ${textureMap.size} textures")
 
@@ -35,9 +49,9 @@ class ZoneRenderer(s3dPath: String):
   private val objectInstances: List[ObjectRenderData] = loadObjects()
 
   // Load character models
-  private val characterInstances: List[ObjectRenderData] = loadCharacters()
+  private val characterInstances: List[AnimatedCharacter] = loadCharacters()
 
-  def draw(shader: Shader): Unit =
+  def draw(shader: Shader, deltaTime: Float): Unit =
     shader.setInt("tex0", 0)
 
     // Draw zone geometry
@@ -52,8 +66,11 @@ class ZoneRenderer(s3dPath: String):
         glBindTexture(GL_TEXTURE_2D, texId)
         mesh.drawRange(group.startIndex, group.indexCount)
 
-    // Draw placed objects and characters
-    for obj <- objectInstances ++ characterInstances do
+    // Set default vertex color to white for unlit meshes (objects/characters use stride-5, no color attribute)
+    glVertexAttrib3f(2, 1f, 1f, 1f)
+
+    // Draw placed objects
+    for obj <- objectInstances do
       shader.setMatrix4f("model", obj.modelMatrix)
       for group <- obj.zoneMesh.groups do
         if group.materialType != MaterialType.Invisible && group.materialType != MaterialType.Boundary then
@@ -63,6 +80,19 @@ class ZoneRenderer(s3dPath: String):
             fallbackTexture
           glBindTexture(GL_TEXTURE_2D, texId)
           obj.glMesh.drawRange(group.startIndex, group.indexCount)
+
+    // Update and draw animated characters
+    for char <- characterInstances do
+      char.update(deltaTime)
+      shader.setMatrix4f("model", char.modelMatrix)
+      for group <- char.zoneMesh.groups do
+        if group.materialType != MaterialType.Invisible && group.materialType != MaterialType.Boundary then
+          val texId = if group.textureName.nonEmpty then
+            textureMap.getOrElse(group.textureName.toLowerCase, fallbackTexture)
+          else
+            fallbackTexture
+          glBindTexture(GL_TEXTURE_2D, texId)
+          char.glMesh.drawRange(group.startIndex, group.indexCount)
 
   def cleanup(): Unit =
     mesh.cleanup()
@@ -165,7 +195,7 @@ class ZoneRenderer(s3dPath: String):
   // Each bone references a TrackRef(0x13) → TrackDef(0x12) containing transform keyframes.
   // Frame 0 is the rest pose. We compute bone world transforms by walking the parent chain
   // and apply them to vertices (which are stored in bone-local space) to assemble the model.
-  private def loadCharacters(): List[ObjectRenderData] =
+  private def loadCharacters(): List[AnimatedCharacter] =
     val chrS3dPath = s3dPath.replace(".s3d", "_chr.s3d")
     if !Files.exists(Path.of(chrS3dPath)) then return Nil
 
@@ -180,24 +210,31 @@ class ZoneRenderer(s3dPath: String):
 
     println(s"  Character actors: ${actors.size} (${actors.map(_.name.replace("_ACTORDEF", "").toLowerCase).mkString(", ")})")
 
-    // Build all character models with their bounding info
-    // Bounding box in GL space: GL X = EQ X, GL Y = EQ Z, GL Z = -EQ Y
-    case class CharModel(key: String, zm: ZoneMesh, glWidth: Float, glDepth: Float, glHeight: Float, glCenterX: Float, glCenterZ: Float, glMinY: Float)
+    case class CharBuild(key: String, skeleton: Fragment10_SkeletonHierarchy, meshFragments: List[Fragment36_Mesh],
+                         zm: ZoneMesh, glWidth: Float, glDepth: Float, glHeight: Float,
+                         glCenterX: Float, glCenterZ: Float, glMinY: Float, clips: Map[String, opennorrath.animation.AnimationClip])
 
-    val models = actors.flatMap { actor =>
+    val builds = actors.flatMap { actor =>
       val actorKey = actor.name.replace("_ACTORDEF", "").toLowerCase
-      val (skeleton, meshFragments) = resolveActorMeshes(chrWld, actor)
+      val (skeletonOpt, meshFragments) = resolveActorMeshes(chrWld, actor)
 
-      if meshFragments.isEmpty then
-        println(s"    $actorKey: no meshes found")
+      if meshFragments.isEmpty || skeletonOpt.isEmpty then
+        println(s"    $actorKey: no meshes or skeleton found")
         None
       else
-        val transformedMeshes = skeleton match
-          case Some(sk) =>
-            val boneTransforms = sk.boneWorldTransforms(chrWld)
-            meshFragments.map(mesh => applyBoneTransforms(mesh, boneTransforms))
-          case None => meshFragments
+        val sk = skeletonOpt.get
 
+        // Discover animations
+        val clips = AnimatedCharacter.discoverAnimations(chrWld, sk)
+
+        // Use the default animation's frame 0 for initial pose and bounding box,
+        // so placement matches what the player actually sees during animation.
+        // Fall back to rest pose (base tracks) if no animations found.
+        val defaultClip = clips.get("L01").orElse(clips.get("P01")).orElse(clips.headOption.map(_._2))
+        val boneTransforms = defaultClip match
+          case Some(clip) => AnimatedCharacter.computeBoneTransforms(sk, clip, 0)
+          case None => sk.boneWorldTransforms(chrWld)
+        val transformedMeshes = meshFragments.map(mesh => applyBoneTransforms(mesh, boneTransforms))
         val zm = extractMeshGeometry(chrWld, transformedMeshes)
 
         // Compute bounding box in EQ space then convert to GL
@@ -210,7 +247,6 @@ class ZoneRenderer(s3dPath: String):
           if x < eqMinX then eqMinX = x; if x > eqMaxX then eqMaxX = x
           if y < eqMinY then eqMinY = y; if y > eqMaxY then eqMaxY = y
           if z < eqMinZ then eqMinZ = z; if z > eqMaxZ then eqMaxZ = z
-        // GL: X=eqX, Y=eqZ, Z=-eqY
         val glWidth = eqMaxX - eqMinX
         val glHeight = eqMaxZ - eqMinZ
         val glDepth = eqMaxY - eqMinY
@@ -218,28 +254,31 @@ class ZoneRenderer(s3dPath: String):
         val glCenterZ = -(eqMinY + eqMaxY) / 2f
         val glMinY = eqMinZ
 
-        println(s"    $actorKey: ${meshFragments.size} meshes, ${zm.vertices.length / 3} verts, ${zm.indices.length / 3} tris, w=${glWidth.formatted("%.1f")} d=${glDepth.formatted("%.1f")} h=${glHeight.formatted("%.1f")}")
-        Some(CharModel(actorKey, zm, glWidth, glDepth, glHeight, glCenterX, glCenterZ, glMinY))
+        val animInfo = if clips.nonEmpty then
+          clips.map((code, clip) => s"$code(${clip.frameCount}f)").mkString(", ")
+        else "none"
+        println(s"    $actorKey: ${meshFragments.size} meshes, ${zm.vertices.length / 3} verts, anims: $animInfo")
+        Some(CharBuild(actorKey, sk, meshFragments, zm, glWidth, glDepth, glHeight, glCenterX, glCenterZ, glMinY, clips))
     }
 
     // Place characters in a line, normalized to similar display height
     val targetHeight = 50f
     var xCursor = -370f
-    val results = models.map { model =>
-      val interleaved = buildInterleaved(model.zm)
-      val glMesh = Mesh(interleaved, model.zm.indices)
+    val results = builds.map { build =>
+      val interleaved = buildInterleaved(build.zm)
+      val glMesh = Mesh(interleaved, build.zm.indices, dynamic = build.clips.nonEmpty)
 
-      val scale = if model.glHeight > 0 then targetHeight / model.glHeight else 10f
-      val halfExtent = math.max(model.glWidth, model.glDepth) * scale / 2f
+      val scale = if build.glHeight > 0 then targetHeight / build.glHeight else 10f
+      val halfExtent = math.max(build.glWidth, build.glDepth) * scale / 2f
 
-      xCursor += halfExtent // advance to center of this model
+      xCursor += halfExtent
       val modelMatrix = Matrix4f()
       modelMatrix.translate(xCursor, 0f, -270f)
       modelMatrix.scale(scale)
-      modelMatrix.translate(-model.glCenterX, -model.glMinY, -model.glCenterZ)
+      modelMatrix.translate(-build.glCenterX, -build.glMinY, -build.glCenterZ)
+      xCursor += halfExtent + 15f
 
-      xCursor += halfExtent + 15f // advance past this model + gap
-      ObjectRenderData(model.zm, glMesh, modelMatrix)
+      AnimatedCharacter(build.skeleton, build.meshFragments, build.zm, glMesh, modelMatrix, build.clips, interleaved.clone())
     }
 
     println(s"  Characters placed: ${results.size}")

@@ -44,26 +44,22 @@ object ObjDebug:
     val chrEntries = PfsArchive.load(Path.of("assets/arena_chr.s3d"))
     val chrWld = WldFile(chrEntries.find(_.extension == "wld").get.data)
 
-    // Gorilla mesh bounds
-    println("\n=== Gorilla mesh analysis ===")
-    val gorMeshes = chrWld.fragmentsOfType[Fragment36_Mesh].filter(_.name.startsWith("GOR"))
-    for m <- gorMeshes do
-      val xs = m.vertices.map(_.x)
-      val ys = m.vertices.map(_.y)
-      val zs = m.vertices.map(_.z)
-      println(s"  '${m.name}' center=${m.center}")
-      println(f"    X: ${xs.min}%.2f to ${xs.max}%.2f")
-      println(f"    Y: ${ys.min}%.2f to ${ys.max}%.2f")
-      println(f"    Z: ${zs.min}%.2f to ${zs.max}%.2f")
-      println(s"    matListRef=${m.materialListRef} renderGroups=${m.renderGroups.length}")
-    // Compare with a zone object (brazier)
-    println("\n=== Brazier mesh for scale comparison ===")
-    val brazMeshes = objWld.fragmentsOfType[Fragment36_Mesh].filter(_.name.startsWith("BRAZIER"))
-    for m <- brazMeshes do
-      val xs = m.vertices.map(_.x)
-      val ys = m.vertices.map(_.y)
-      val zs = m.vertices.map(_.z)
-      println(s"  '${m.name}' center=${m.center}")
-      println(f"    X: ${xs.min}%.2f to ${xs.max}%.2f")
-      println(f"    Y: ${ys.min}%.2f to ${ys.max}%.2f")
-      println(f"    Z: ${zs.min}%.2f to ${zs.max}%.2f")
+    // Animation track names
+    println("\n=== TrackDef names (Fragment12) in arena_chr.wld ===")
+    val trackDefs = chrWld.fragmentsOfType[Fragment12_TrackDef]
+    for td <- trackDefs do
+      println(s"  '${td.name}' frames=${td.frames.length}")
+
+    println(s"\n  Total TrackDefs: ${trackDefs.size}")
+
+    // Group by prefix to see patterns
+    println("\n=== TrackDef names grouped by model prefix ===")
+    val grouped = trackDefs.groupBy { td =>
+      val name = td.name.toUpperCase
+      name.takeWhile(c => c.isLetter)
+    }
+    for (prefix, tds) <- grouped.toList.sortBy(_._1) do
+      println(s"  $prefix: ${tds.size} tracks")
+      // Show unique frame counts
+      val frameCounts = tds.map(_.frames.length).distinct.sorted
+      println(s"    frame counts: ${frameCounts.mkString(", ")}")
