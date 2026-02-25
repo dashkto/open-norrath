@@ -25,9 +25,10 @@ enum LoginEvent:
   * - Network thread calls: handlePacket(), tick(), pollOutgoing()
   * - Cross-thread communication via ConcurrentLinkedQueue (lock-free)
   */
-class LoginClient:
+class LoginClient extends PacketHandler:
   @volatile var state: LoginState = LoginState.Disconnected
   val events = ConcurrentLinkedQueue[LoginEvent]()
+  val errors = ConcurrentLinkedQueue[String]()
 
   // Outgoing packet queue (network thread drains this)
   private val outQueue = ConcurrentLinkedQueue[Array[Byte]]()
@@ -60,9 +61,11 @@ class LoginClient:
 
   /** Request to play on a specific server. Called from game thread. */
   def selectServer(ip: String): Unit =
+    println(s"[Login] selectServer($ip) — queuing PlayEverquestRequest")
     state = LoginState.PlayRequested
     emit(LoginEvent.StateChanged(state))
     queueAppPacket(LoginOpcodes.PlayEverquestRequest, LoginCodec.encodePlayRequest(ip))
+    println(s"[Login] PlayEverquestRequest queued, outQueue size=${outQueue.size()}")
 
   /** Called from network thread when a decoded packet arrives. */
   def handlePacket(packet: InboundPacket): Unit =
@@ -150,6 +153,11 @@ class LoginClient:
 
   /** Poll next event. Called from game thread. */
   def pollEvent(): Option[LoginEvent] =
+    // Drain network errors into events
+    var err = errors.poll()
+    while err != null do
+      events.add(LoginEvent.Error(err))
+      err = errors.poll()
     Option(events.poll())
 
   private def queueAppPacket(opcode: Short, payload: Array[Byte]): Unit =

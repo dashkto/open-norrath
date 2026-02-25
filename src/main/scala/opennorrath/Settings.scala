@@ -11,6 +11,7 @@ case class DebugSettings(
 case class LoginSettings(
   host: String = "127.0.0.1",
   port: Int = 6000,
+  worldPort: Int = 9000,
 )
 
 case class Settings(
@@ -58,6 +59,7 @@ object Settings:
       LoginSettings(
         host = l.string("host", "127.0.0.1"),
         port = l.int("port", 6000),
+        worldPort = l.int("world_port", 9000),
       )
     }.getOrElse(LoginSettings())
 

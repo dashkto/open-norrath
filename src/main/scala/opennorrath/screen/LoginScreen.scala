@@ -22,6 +22,7 @@ class LoginScreen(ctx: GameContext) extends Screen:
   private var statusColor = Colors.textDim
   private var connecting = false
   private var focusUsername = true
+  private var handedOff = false
 
   override def show(): Unit =
     glfwSetInputMode(ctx.window, GLFW_CURSOR, GLFW_CURSOR_NORMAL)
@@ -49,6 +50,7 @@ class LoginScreen(ctx: GameContext) extends Screen:
           statusText = s"Logged in: $sid"
           statusColor = Colors.success
         case LoginEvent.ServerListUpdated(servers) =>
+          handedOff = true
           Game.setScreen(ServerSelectScreen(ctx, loginClient, networkThread, servers))
           return
         case LoginEvent.StateChanged(s) =>
@@ -127,7 +129,7 @@ class LoginScreen(ctx: GameContext) extends Screen:
     ImGui.end()
 
   override def dispose(): Unit =
-    networkThread.stop()
+    if !handedOff then networkThread.stop()
 
   private def tryConnect(): Unit =
     val user = username.get().trim

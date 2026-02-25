@@ -11,13 +11,13 @@ enum NetCommand:
   case SendRaw(data: Array[Byte])
   case Disconnect
 
-/** Background UDP I/O thread for the login protocol.
+/** Background UDP I/O thread for the EQ old protocol.
   *
   * Communicates with the game thread via:
   * - NetCommand queue (game thread → network thread)
-  * - LoginClient.events queue (network thread → game thread)
+  * - PacketHandler.errors queue (network thread → game thread)
   */
-class NetworkThread(loginClient: LoginClient):
+class NetworkThread(handler: PacketHandler):
   private val running = AtomicBoolean(false)
   private val commands = ConcurrentLinkedQueue[NetCommand]()
   private var socket: DatagramSocket = uninitialized
@@ -78,24 +78,25 @@ class NetworkThread(loginClient: LoginClient):
             println(s"[Network] Recv ${data.length}B: ${OldPacket.hexDump(data, Math.min(data.length, 32))}...")
 
             OldPacket.decode(data, data.length) match
-              case Some(decoded) => loginClient.handlePacket(decoded)
+              case Some(decoded) => handler.handlePacket(decoded)
               case None => println(s"[Network] Failed to decode packet (${data.length}B)")
           catch
             case _: SocketTimeoutException => () // normal
 
-        // Let LoginClient produce outgoing packets (ACKs etc)
-        loginClient.tick()
-        var outgoing = loginClient.pollOutgoing()
+        // Let handler produce outgoing packets (ACKs etc)
+        handler.tick()
+        var outgoing = handler.pollOutgoing()
         while outgoing.isDefined do
           send(NetCommand.SendRaw(outgoing.get))
-          outgoing = loginClient.pollOutgoing()
+          outgoing = handler.pollOutgoing()
 
       catch
         case e: Exception =>
           if running.get() then
-            println(s"[Network] Error: ${e.getMessage}")
-            loginClient.events.add(LoginEvent.Error(s"Network error: ${e.getMessage}"))
+            println(s"[Network] Error: ${e.getClass.getSimpleName}: ${e.getMessage}")
+            handler.errors.add(s"Network error: ${e.getMessage}")
 
     // Cleanup
+    println("[Network] Thread exiting")
     if socket != null && !socket.isClosed then
       try socket.close() catch case _: Exception => ()

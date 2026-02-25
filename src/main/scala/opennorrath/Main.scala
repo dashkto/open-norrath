@@ -74,6 +74,7 @@ object Main:
 
     Game.run(ctx, SplashScreen(ctx, zonePath))
 
+    println("Shutting down")
     imGuiGl3.shutdown()
     imGuiGlfw.shutdown()
     ImGui.destroyContext()
