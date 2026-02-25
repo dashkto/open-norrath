@@ -44,6 +44,7 @@ object Main:
     |""".stripMargin
 
   def main(args: Array[String]): Unit =
+    Logging.init()
     val settings = Settings.load()
     val zonePath = if args.nonEmpty then args(0) else "assets/arena.s3d"
 
@@ -81,7 +82,7 @@ object Main:
     glEnable(GL_DEPTH_TEST)
     glClearColor(0.3f, 0.5f, 0.7f, 1.0f) // sky blue
 
-    println(s"OpenNorrath running — OpenGL ${glGetString(GL_VERSION)}")
+    println(s"OpenNorrath ${BuildInfo.version} (${BuildInfo.gitCommit}) — OpenGL ${glGetString(GL_VERSION)}")
     println(s"Loading zone: $zonePath")
 
     // Init resources

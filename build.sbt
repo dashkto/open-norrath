@@ -21,6 +21,7 @@ val lwjglNatives = {
 
 lazy val root = project
   .in(file("."))
+  .enablePlugins(BuildInfoPlugin)
   .settings(
     name := "open-norrath",
     version := "0.1.0-SNAPSHOT",
@@ -28,6 +29,12 @@ lazy val root = project
     fork := true,
     Compile / mainClass := Some("opennorrath.Main"),
     javaOptions += "-XstartOnFirstThread",
+    buildInfoKeys := Seq[BuildInfoKey](
+      version,
+      BuildInfoKey.action("gitCommit") { scala.sys.process.Process("git rev-parse --short HEAD").!!.trim },
+      BuildInfoKey.action("buildTime") { java.time.Instant.now().toString },
+    ),
+    buildInfoPackage := "opennorrath",
     libraryDependencies ++= Seq(
       // LWJGL core
       "org.lwjgl" % "lwjgl"         % lwjglVersion,
