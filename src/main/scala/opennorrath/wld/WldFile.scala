@@ -1,6 +1,6 @@
 package opennorrath.wld
 
-import org.joml.Vector3f
+import org.joml.{Quaternionf, Vector3f}
 import java.nio.{ByteBuffer, ByteOrder}
 
 class WldFile(data: Array[Byte]):
@@ -55,6 +55,10 @@ class WldFile(data: Array[Byte]):
       case 0x03 => parseFragment03(name)
       case 0x04 => parseFragment04(name)
       case 0x05 => parseFragment05(name)
+      case 0x10 => parseFragment10(name)
+      case 0x11 => parseFragment11(name)
+      case 0x12 => parseFragment12(name)
+      case 0x13 => parseFragment13(name)
       case 0x14 => parseFragment14(name)
       case 0x15 => parseFragment15(name, hash)
       case 0x2D => parseFragment2D(name)
@@ -91,6 +95,103 @@ class WldFile(data: Array[Byte]):
     val ref = buf.getInt()
     val _flags = buf.getInt()
     Fragment05_BitmapInfoRef(name, ref)
+
+  private def parseFragment10(name: String): Fragment10_SkeletonHierarchy =
+    val flags = buf.getInt()
+    val hasBit0 = (flags & 0x01) != 0
+    val hasBoundingRadius = (flags & 0x02) != 0
+    val hasMeshReferences = (flags & 0x200) != 0
+
+    val boneCount = buf.getInt()
+    val _fragment18Ref = buf.getInt()
+
+    if hasBit0 then buf.position(buf.position() + 12)
+    if hasBoundingRadius then buf.position(buf.position() + 4)
+
+    // Read bones with hierarchy info
+    val boneData = new Array[(Int, Int, List[Int])](boneCount) // (trackRef, meshRef, children)
+    for i <- 0 until boneCount do
+      val _boneNameRef = buf.getInt()
+      val _boneFlags = buf.getInt()
+      val trackRef = buf.getInt()
+      val meshRef = buf.getInt()
+      val childCount = buf.getInt()
+      val children = (0 until childCount).map(_ => buf.getInt()).toList
+      boneData(i) = (trackRef, meshRef, children)
+
+    // Build parent index lookup from children
+    val parentIndex = new Array[Int](boneCount)
+    java.util.Arrays.fill(parentIndex, -1)
+    for i <- 0 until boneCount do
+      for child <- boneData(i)._3 do
+        if child >= 0 && child < boneCount then
+          parentIndex(child) = i
+
+    val bones = (0 until boneCount).map { i =>
+      val (trackRef, meshRef, children) = boneData(i)
+      SkeletonBone(trackRef, meshRef, parentIndex(i), children)
+    }.toArray
+
+    val boneMeshRefs = bones.filter(_.meshRef > 0).map(_.meshRef).toList
+
+    // Trailing mesh reference list
+    val trailingMeshRefs = if hasMeshReferences then
+      val meshCount = buf.getInt()
+      val refs = (0 until meshCount).map(_ => buf.getInt()).toList
+      buf.position(buf.position() + meshCount * 4)
+      refs
+    else Nil
+
+    Fragment10_SkeletonHierarchy(name, (boneMeshRefs ++ trailingMeshRefs).distinct, bones)
+
+  private def parseFragment11(name: String): Fragment11_SkeletonHierarchyRef =
+    val skeletonRef = buf.getInt()
+    Fragment11_SkeletonHierarchyRef(name, skeletonRef)
+
+  private def parseFragment12(name: String): Fragment12_TrackDef =
+    val flags = buf.getInt()
+    val isCompressed = (flags & 0x08) != 0
+    val frameCount = buf.getInt()
+
+    // Compressed: 8 × int16 per frame (rotation as raw quaternion, translation/scale as fixed-point / 256)
+    // Uncompressed: 8 × float32 per frame (scale, translation xyz, rotation wxyz)
+    val frames = if isCompressed then
+      (0 until frameCount).map { _ =>
+        val rotW = buf.getShort()
+        val rotX = buf.getShort()
+        val rotY = buf.getShort()
+        val rotZ = buf.getShort()
+        val shiftX = buf.getShort()
+        val shiftY = buf.getShort()
+        val shiftZ = buf.getShort()
+        val shiftDenom = buf.getShort()
+        val scale = if shiftDenom != 0 then shiftDenom.toFloat / 256f else 1f
+        val translation = if shiftDenom != 0 then
+          Vector3f(shiftX.toFloat / 256f, shiftY.toFloat / 256f, shiftZ.toFloat / 256f)
+        else Vector3f(0f, 0f, 0f)
+        val rotation = Quaternionf(rotX.toFloat, rotY.toFloat, rotZ.toFloat, rotW.toFloat).normalize()
+        BoneTransform(translation, rotation, scale)
+      }.toArray
+    else
+      (0 until frameCount).map { _ =>
+        val shiftDenom = buf.getFloat()
+        val shiftX = buf.getFloat()
+        val shiftY = buf.getFloat()
+        val shiftZ = buf.getFloat()
+        val rotW = buf.getFloat()
+        val rotX = buf.getFloat()
+        val rotY = buf.getFloat()
+        val rotZ = buf.getFloat()
+        val rotation = Quaternionf(rotX, rotY, rotZ, rotW).normalize()
+        BoneTransform(Vector3f(shiftX, shiftY, shiftZ), rotation, shiftDenom)
+      }.toArray
+
+    Fragment12_TrackDef(name, frames)
+
+  private def parseFragment13(name: String): Fragment13_TrackRef =
+    val trackDefRef = buf.getInt()
+    val _flags = buf.getInt()
+    Fragment13_TrackRef(name, trackDefRef)
 
   private def parseFragment14(name: String): Fragment14_Actor =
     val flags = buf.getInt()
@@ -237,8 +338,15 @@ class WldFile(data: Array[Byte]):
       MeshPolygon(solid, v1, v2, v3)
     }.toArray
 
-    // Vertex pieces (skip)
-    buf.position(buf.position() + vertexPieceCount * 4)
+    // Vertex pieces: maps consecutive vertex ranges to skeleton bones.
+    // Each piece says "the next N vertices belong to bone B".
+    // Character mesh vertices are in bone-local space and must be transformed
+    // by their bone's world matrix to assemble the model.
+    val vertexPieces = (0 until vertexPieceCount).map { _ =>
+      val count = java.lang.Short.toUnsignedInt(buf.getShort())
+      val boneIndex = java.lang.Short.toUnsignedInt(buf.getShort())
+      VertexPiece(count, boneIndex)
+    }.toArray
 
     // Render groups (polygon texture mapping)
     val renderGroups = (0 until polyTexCount).map { _ =>
@@ -247,4 +355,4 @@ class WldFile(data: Array[Byte]):
       RenderGroup(count, matIdx)
     }.toArray
 
-    Fragment36_Mesh(name, materialListRef, center, vertices, uvs, normals, polygons, renderGroups)
+    Fragment36_Mesh(name, materialListRef, center, vertices, uvs, normals, polygons, renderGroups, vertexPieces)

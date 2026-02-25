@@ -40,9 +40,30 @@ object ObjDebug:
         case m: Fragment36_Mesh => println(s"  [${i+1}] '${m.name}' verts=${m.vertices.length} polys=${m.polygons.length}")
         case _ =>
 
-    // Unknown fragment types
-    println("\n=== Unknown types in objects.wld ===")
-    val unknowns = objectsWld.fragments.collect { case u: UnknownFragment => u }
-    val typeCounts = unknowns.groupBy(_.fragmentType).view.mapValues(_.length).toList.sortBy(_._1)
-    for (t, c) <- typeCounts do
-      printf("  0x%02X: %d%n", t, c)
+    // Character models
+    val chrEntries = PfsArchive.load(Path.of("assets/arena_chr.s3d"))
+    val chrWld = WldFile(chrEntries.find(_.extension == "wld").get.data)
+
+    // Gorilla mesh bounds
+    println("\n=== Gorilla mesh analysis ===")
+    val gorMeshes = chrWld.fragmentsOfType[Fragment36_Mesh].filter(_.name.startsWith("GOR"))
+    for m <- gorMeshes do
+      val xs = m.vertices.map(_.x)
+      val ys = m.vertices.map(_.y)
+      val zs = m.vertices.map(_.z)
+      println(s"  '${m.name}' center=${m.center}")
+      println(f"    X: ${xs.min}%.2f to ${xs.max}%.2f")
+      println(f"    Y: ${ys.min}%.2f to ${ys.max}%.2f")
+      println(f"    Z: ${zs.min}%.2f to ${zs.max}%.2f")
+      println(s"    matListRef=${m.materialListRef} renderGroups=${m.renderGroups.length}")
+    // Compare with a zone object (brazier)
+    println("\n=== Brazier mesh for scale comparison ===")
+    val brazMeshes = objWld.fragmentsOfType[Fragment36_Mesh].filter(_.name.startsWith("BRAZIER"))
+    for m <- brazMeshes do
+      val xs = m.vertices.map(_.x)
+      val ys = m.vertices.map(_.y)
+      val zs = m.vertices.map(_.z)
+      println(s"  '${m.name}' center=${m.center}")
+      println(f"    X: ${xs.min}%.2f to ${xs.max}%.2f")
+      println(f"    Y: ${ys.min}%.2f to ${ys.max}%.2f")
+      println(f"    Z: ${zs.min}%.2f to ${zs.max}%.2f")

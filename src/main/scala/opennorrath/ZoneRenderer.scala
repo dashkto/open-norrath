@@ -34,6 +34,9 @@ class ZoneRenderer(s3dPath: String):
   // Load objects
   private val objectInstances: List[ObjectRenderData] = loadObjects()
 
+  // Load character models
+  private val characterInstances: List[ObjectRenderData] = loadCharacters()
+
   def draw(shader: Shader): Unit =
     shader.setInt("tex0", 0)
 
@@ -49,8 +52,8 @@ class ZoneRenderer(s3dPath: String):
         glBindTexture(GL_TEXTURE_2D, texId)
         mesh.drawRange(group.startIndex, group.indexCount)
 
-    // Draw placed objects
-    for obj <- objectInstances do
+    // Draw placed objects and characters
+    for obj <- objectInstances ++ characterInstances do
       shader.setMatrix4f("model", obj.modelMatrix)
       for group <- obj.zoneMesh.groups do
         if group.materialType != MaterialType.Invisible && group.materialType != MaterialType.Boundary then
@@ -64,6 +67,7 @@ class ZoneRenderer(s3dPath: String):
   def cleanup(): Unit =
     mesh.cleanup()
     objectInstances.foreach(_.glMesh.cleanup())
+    characterInstances.foreach(_.glMesh.cleanup())
     textureMap.values.foreach(glDeleteTextures(_))
     glDeleteTextures(fallbackTexture)
 
@@ -155,6 +159,119 @@ class ZoneRenderer(s3dPath: String):
     println(s"  Placed objects: ${results.size}")
     results
 
+  // Character models live in {zone}_chr.s3d. Unlike zone objects which have pre-placed instances,
+  // characters are spawned dynamically by the server. The fragment chain is:
+  // Actor(0x14) → SkeletonHierarchyRef(0x11) → SkeletonHierarchy(0x10) → MeshReference(0x2D) → Mesh(0x36)
+  // Each bone references a TrackRef(0x13) → TrackDef(0x12) containing transform keyframes.
+  // Frame 0 is the rest pose. We compute bone world transforms by walking the parent chain
+  // and apply them to vertices (which are stored in bone-local space) to assemble the model.
+  private def loadCharacters(): List[ObjectRenderData] =
+    val chrS3dPath = s3dPath.replace(".s3d", "_chr.s3d")
+    if !Files.exists(Path.of(chrS3dPath)) then return Nil
+
+    val chrEntries = PfsArchive.load(Path.of(chrS3dPath))
+    loadTextures(chrEntries)
+
+    val chrWldEntry = chrEntries.find(_.extension == "wld")
+    if chrWldEntry.isEmpty then return Nil
+
+    val chrWld = WldFile(chrWldEntry.get.data)
+    val actors = chrWld.fragmentsOfType[Fragment14_Actor]
+
+    println(s"  Character actors: ${actors.size} (${actors.map(_.name.replace("_ACTORDEF", "").toLowerCase).mkString(", ")})")
+
+    // Build all character models with their bounding info
+    // Bounding box in GL space: GL X = EQ X, GL Y = EQ Z, GL Z = -EQ Y
+    case class CharModel(key: String, zm: ZoneMesh, glWidth: Float, glDepth: Float, glHeight: Float, glCenterX: Float, glCenterZ: Float, glMinY: Float)
+
+    val models = actors.flatMap { actor =>
+      val actorKey = actor.name.replace("_ACTORDEF", "").toLowerCase
+      val (skeleton, meshFragments) = resolveActorMeshes(chrWld, actor)
+
+      if meshFragments.isEmpty then
+        println(s"    $actorKey: no meshes found")
+        None
+      else
+        val transformedMeshes = skeleton match
+          case Some(sk) =>
+            val boneTransforms = sk.boneWorldTransforms(chrWld)
+            meshFragments.map(mesh => applyBoneTransforms(mesh, boneTransforms))
+          case None => meshFragments
+
+        val zm = extractMeshGeometry(chrWld, transformedMeshes)
+
+        // Compute bounding box in EQ space then convert to GL
+        val vc = zm.vertices.length / 3
+        var eqMinX = Float.MaxValue; var eqMaxX = Float.MinValue
+        var eqMinY = Float.MaxValue; var eqMaxY = Float.MinValue
+        var eqMinZ = Float.MaxValue; var eqMaxZ = Float.MinValue
+        for i <- 0 until vc do
+          val x = zm.vertices(i * 3); val y = zm.vertices(i * 3 + 1); val z = zm.vertices(i * 3 + 2)
+          if x < eqMinX then eqMinX = x; if x > eqMaxX then eqMaxX = x
+          if y < eqMinY then eqMinY = y; if y > eqMaxY then eqMaxY = y
+          if z < eqMinZ then eqMinZ = z; if z > eqMaxZ then eqMaxZ = z
+        // GL: X=eqX, Y=eqZ, Z=-eqY
+        val glWidth = eqMaxX - eqMinX
+        val glHeight = eqMaxZ - eqMinZ
+        val glDepth = eqMaxY - eqMinY
+        val glCenterX = (eqMinX + eqMaxX) / 2f
+        val glCenterZ = -(eqMinY + eqMaxY) / 2f
+        val glMinY = eqMinZ
+
+        println(s"    $actorKey: ${meshFragments.size} meshes, ${zm.vertices.length / 3} verts, ${zm.indices.length / 3} tris, w=${glWidth.formatted("%.1f")} d=${glDepth.formatted("%.1f")} h=${glHeight.formatted("%.1f")}")
+        Some(CharModel(actorKey, zm, glWidth, glDepth, glHeight, glCenterX, glCenterZ, glMinY))
+    }
+
+    // Place characters in a line, normalized to similar display height
+    val targetHeight = 50f
+    var xCursor = -370f
+    val results = models.map { model =>
+      val interleaved = buildInterleaved(model.zm)
+      val glMesh = Mesh(interleaved, model.zm.indices)
+
+      val scale = if model.glHeight > 0 then targetHeight / model.glHeight else 10f
+      val halfExtent = math.max(model.glWidth, model.glDepth) * scale / 2f
+
+      xCursor += halfExtent // advance to center of this model
+      val modelMatrix = Matrix4f()
+      modelMatrix.translate(xCursor, 0f, -270f)
+      modelMatrix.scale(scale)
+      modelMatrix.translate(-model.glCenterX, -model.glMinY, -model.glCenterZ)
+
+      xCursor += halfExtent + 15f // advance past this model + gap
+      ObjectRenderData(model.zm, glMesh, modelMatrix)
+    }
+
+    println(s"  Characters placed: ${results.size}")
+    results
+
+  private def resolveActorMeshes(wld: WldFile, actor: Fragment14_Actor): (Option[Fragment10_SkeletonHierarchy], List[Fragment36_Mesh]) =
+    var skeleton: Option[Fragment10_SkeletonHierarchy] = None
+    val meshFragments = actor.componentRefs.flatMap { ref =>
+      try
+        wld.fragment(ref) match
+          case sr: Fragment11_SkeletonHierarchyRef =>
+            wld.fragment(sr.skeletonRef) match
+              case sk: Fragment10_SkeletonHierarchy =>
+                skeleton = Some(sk)
+                sk.meshRefs.flatMap { mr =>
+                  wld.fragment(mr) match
+                    case m: Fragment2D_MeshReference =>
+                      wld.fragment(m.meshRef) match
+                        case mesh: Fragment36_Mesh => Some(mesh)
+                        case _ => None
+                    case _ => None
+                }
+              case _ => Nil
+          case mr: Fragment2D_MeshReference =>
+            wld.fragment(mr.meshRef) match
+              case mesh: Fragment36_Mesh => Some(mesh)
+              case _ => None
+          case _ => Nil
+      catch case _: Exception => Nil
+    }
+    (skeleton, meshFragments)
+
   private def extractMeshGeometry(objWld: WldFile, meshFragments: List[Fragment36_Mesh]): ZoneMesh =
     var allVertices = Array.empty[Float]
     var allUvs = Array.empty[Float]
@@ -191,6 +308,27 @@ class ZoneRenderer(s3dPath: String):
           allGroups = allGroups :+ ZoneMeshGroup(startIndex, indexCount, textureName, matType)
 
     ZoneMesh(allVertices, allUvs, allIndices, allGroups)
+
+  /** Transform mesh vertices from bone-local space to model space using skeleton rest pose */
+  private def applyBoneTransforms(mesh: Fragment36_Mesh, boneTransforms: Array[Matrix4f]): Fragment36_Mesh =
+    if mesh.vertexPieces.isEmpty then return mesh
+
+    val newVertices = mesh.vertices.clone()
+    var vertexIndex = 0
+    for piece <- mesh.vertexPieces do
+      if piece.boneIndex < boneTransforms.length then
+        val transform = boneTransforms(piece.boneIndex)
+        for _ <- 0 until piece.count do
+          if vertexIndex < newVertices.length then
+            val v = newVertices(vertexIndex)
+            val transformed = Vector3f(v.x, v.y, v.z)
+            transform.transformPosition(transformed)
+            newVertices(vertexIndex) = transformed
+            vertexIndex += 1
+      else
+        vertexIndex += piece.count
+
+    mesh.copy(vertices = newVertices)
 
   private def buildModelMatrix(placement: Fragment15_ObjectInstance): Matrix4f =
     val pos = placement.position

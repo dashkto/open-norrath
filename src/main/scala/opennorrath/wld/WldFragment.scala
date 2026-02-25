@@ -1,6 +1,6 @@
 package opennorrath.wld
 
-import org.joml.Vector3f
+import org.joml.{Matrix4f, Quaternionf, Vector3f}
 
 sealed trait WldFragment:
   def name: String
@@ -46,6 +46,7 @@ case class Fragment36_Mesh(
     normals: Array[Vector3f],
     polygons: Array[MeshPolygon],
     renderGroups: Array[RenderGroup],
+    vertexPieces: Array[VertexPiece], // bone assignments for character meshes
 ) extends WldFragment
 
 // 0x14 - Actor definition (object model)
@@ -63,8 +64,59 @@ case class Fragment15_ObjectInstance(
     scale: Vector3f,
 ) extends WldFragment
 
+// 0x10 - Skeleton hierarchy
+case class Fragment10_SkeletonHierarchy(
+    name: String,
+    meshRefs: List[Int],
+    bones: Array[SkeletonBone],
+) extends WldFragment:
+  /** Compute world-space transform for each bone by walking parent chain */
+  def boneWorldTransforms(wld: WldFile): Array[Matrix4f] =
+    val transforms = new Array[Matrix4f](bones.length)
+    for i <- bones.indices do
+      transforms(i) = computeBoneWorld(i, wld, transforms)
+    transforms
+
+  private def computeBoneWorld(index: Int, wld: WldFile, cache: Array[Matrix4f]): Matrix4f =
+    if cache(index) != null then return cache(index)
+    val bone = bones(index)
+    val local = bone.restTransform(wld)
+    val parent = bone.parentIndex
+    val world = if parent < 0 then local
+    else
+      val parentWorld = computeBoneWorld(parent, wld, cache)
+      Matrix4f(parentWorld).mul(local)
+    cache(index) = world
+    world
+
+// 0x11 - Skeleton hierarchy reference
+case class Fragment11_SkeletonHierarchyRef(name: String, skeletonRef: Int) extends WldFragment
+
+// 0x12 - Track definition (bone transforms per frame)
+case class Fragment12_TrackDef(name: String, frames: Array[BoneTransform]) extends WldFragment
+
+// 0x13 - Track reference
+case class Fragment13_TrackRef(name: String, trackDefRef: Int) extends WldFragment
+
 // 0x2D - Mesh reference
 case class Fragment2D_MeshReference(name: String, meshRef: Int) extends WldFragment
+
+case class BoneTransform(translation: Vector3f, rotation: Quaternionf, scale: Float)
+
+case class SkeletonBone(trackRef: Int, meshRef: Int, parentIndex: Int, children: List[Int]):
+  def restTransform(wld: WldFile): Matrix4f =
+    try
+      val trackFragment = wld.fragment(trackRef).asInstanceOf[Fragment13_TrackRef]
+      val trackDef = wld.fragment(trackFragment.trackDefRef).asInstanceOf[Fragment12_TrackDef]
+      val frame = trackDef.frames(0) // rest pose = frame 0
+      val mat = Matrix4f()
+      mat.translate(frame.translation)
+      mat.rotate(frame.rotation)
+      if frame.scale != 0f && frame.scale != 1f then mat.scale(frame.scale)
+      mat
+    catch case _: Exception => Matrix4f()
+
+case class VertexPiece(count: Int, boneIndex: Int)
 
 case class MeshPolygon(solid: Boolean, v1: Int, v2: Int, v3: Int)
 
