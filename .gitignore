@@ -2,6 +2,14 @@
 *.log
 hs_err_pid*
 
+# EQ assets (copyrighted, not checked in)
+assets/
+
+# IDE
+.idea/
+*.iml
+.bsp/
+
 # sbt
 target/
 project/target/
