@@ -108,7 +108,7 @@ class NameplateRenderer:
 
           // World position above head
           val wx = modelMatrix.m30()
-          val wy = modelMatrix.m31() + headHeight + 0.2f
+          val wy = modelMatrix.m31() + headHeight * 0.5f + 0.8f
           val wz = modelMatrix.m32()
 
           // Quad dimensions in world space

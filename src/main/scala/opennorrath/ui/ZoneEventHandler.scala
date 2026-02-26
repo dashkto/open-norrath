@@ -8,6 +8,7 @@ import opennorrath.network.{ChatMessage, ZoneEvent}
   */
 class ZoneEventHandler(chatPanel: TextPanel):
 
+  private var seenFirstExp = false
   val listener: ZoneEvent => Unit = handle
 
   /** Send a chat message from the input field. Parses /commands. */
@@ -48,7 +49,10 @@ class ZoneEventHandler(chatPanel: TextPanel):
       chatPanel.addLine(s"$tgt [${result.level}]", conLevelColor(result.level))
 
     case ZoneEvent.ExpChanged(_) =>
-      chatPanel.addLine("You gain experience!", Colors.gold)
+      if seenFirstExp then
+        chatPanel.addLine("You gain experience!", Colors.gold)
+      else
+        seenFirstExp = true
 
     case ZoneEvent.LevelChanged(lvl) =>
       chatPanel.addLine(s"You have reached level ${lvl.level}!", Colors.gold)

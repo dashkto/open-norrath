@@ -24,6 +24,7 @@ class TextPanel(
   val onSubmit: String => Unit = _ => (),
 ) extends Panel:
 
+  private var firstFrame = true
   val title = s"$id###textpanel_$id"
   val defaultX = x
   val defaultY = y
@@ -62,7 +63,7 @@ class TextPanel(
     // Input field
     ImGui.separator()
     ImGui.pushItemWidth(-1f)
-    if wantFocus then ImGui.setKeyboardFocusHere()
+    if wantFocus && !firstFrame then ImGui.setKeyboardFocusHere()
     val flags = ImGuiInputTextFlags.EnterReturnsTrue
     if ImGui.inputText("##input", inputBuf, flags) then
       val text = inputBuf.get().trim
@@ -70,3 +71,6 @@ class TextPanel(
         onSubmit(text)
       inputBuf.set("")
     ImGui.popItemWidth()
+    if firstFrame then
+      ImGui.setWindowFocus(null)
+      firstFrame = false

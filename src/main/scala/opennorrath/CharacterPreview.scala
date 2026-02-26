@@ -47,6 +47,7 @@ class CharacterPreview(assetsDir: String):
       case Some(build) =>
         val interleaved = ZoneRenderer.buildInterleaved(build.zm)
         val glMesh = Mesh(interleaved, build.zm.indices, dynamic = build.clips.nonEmpty)
+        // Recenter for preview framing only — not needed for world placement (see buildSpawnMatrix)
         val mm = Matrix4f()
         mm.translate(-build.glCenterX, -build.glMinY, -build.glCenterZ)
         val char = AnimatedCharacter(build.skeleton, build.meshFragments, build.zm, glMesh, mm, build.clips, interleaved.clone())

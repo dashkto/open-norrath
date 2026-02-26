@@ -62,6 +62,13 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings()):
   def spawnNameplateData: Iterable[(Int, Matrix4f, Float)] =
     _spawnCharacters.map { (id, inst) => (id, inst.char.modelMatrix, inst.build.glHeight * inst.size) }
 
+  /** Return (spawnId, modelMatrix, height, width, depth) for each live spawn — used for click targeting. */
+  def spawnHitData: Iterable[(Int, Matrix4f, Float, Float, Float)] =
+    _spawnCharacters.map { (id, inst) =>
+      val s = inst.size
+      (id, inst.char.modelMatrix, inst.build.glHeight * s, inst.build.glWidth * s, inst.build.glDepth * s)
+    }
+
   /** Create a spawn character from a CharBuild template. Returns false if model not found. */
   def addSpawn(spawnId: Int, modelCode: String, position: Vector3f, heading: Int, size: Float): Boolean =
     characterBuilds.get(modelCode) match
@@ -109,12 +116,13 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings()):
         inst.char.play(code)
     }
 
+  // No recenter needed here — character mesh vertices are already in local space with
+  // origin near feet. CharacterPreview uses recenter to frame the model in its viewport.
   private def buildSpawnMatrix(build: ZoneRenderer.CharBuild, position: Vector3f, heading: Int, size: Float, target: Matrix4f = Matrix4f()): Matrix4f =
     target.identity()
     target.translate(position)
     target.rotateY(EqCoords.spawnHeadingToRadians(heading))
     target.scale(size)
-    target.translate(-build.glCenterX, -build.glMinY, -build.glCenterZ)
     target
 
   // Create particle emitters from EQG file only (S3D has no emitter data)
