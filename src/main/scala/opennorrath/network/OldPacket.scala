@@ -2,6 +2,9 @@ package opennorrath.network
 
 import java.nio.{ByteBuffer, ByteOrder}
 
+/** Fragment header from a fragmented old-protocol packet. */
+case class FragmentInfo(seq: Int, current: Int, total: Int)
+
 /** Decoded inbound old-protocol packet. */
 case class InboundPacket(
   seq: Int,
@@ -9,6 +12,7 @@ case class InboundPacket(
   arq: Option[Int],
   opcode: Short,
   payload: Array[Byte],
+  fragment: Option[FragmentInfo] = None,
 )
 
 /** EQ "old protocol" packet encode/decode.
@@ -78,8 +82,15 @@ object OldPacket:
         val v = readShort(data, offset); offset += 2; Some(v)
       else None
 
-    // a3_Fragment — skip fragment info for now
-    if bit(hdr0, A3_FRAGMENT) then offset += 6
+    // a3_Fragment
+    val fragInfo =
+      if bit(hdr0, A3_FRAGMENT) then
+        if offset + 6 > length then return None
+        val fragSeq = readShort(data, offset); offset += 2
+        val fragCurr = readShort(data, offset); offset += 2
+        val fragTotal = readShort(data, offset); offset += 2
+        Some(FragmentInfo(fragSeq, fragCurr, fragTotal))
+      else None
 
     // a4_ASQ
     if bit(hdr0, A4_ASQ) then
@@ -88,8 +99,13 @@ object OldPacket:
 
     // Opcode and payload
     val dataEnd = length - 4 // exclude CRC32
-    if offset + 2 <= dataEnd && !(bit(hdr0, A2_CLOSING) && bit(hdr0, A6_CLOSING)) then
-      val opcode = readShortRaw(data, offset); offset += 2
+    if !(bit(hdr0, A2_CLOSING) && bit(hdr0, A6_CLOSING)) then
+      // Opcode only present if: not a fragment, or first fragment (current == 0)
+      val hasOpcode = fragInfo.forall(_.current == 0)
+      val opcode =
+        if hasOpcode && offset + 2 <= dataEnd then
+          val op = readShortRaw(data, offset); offset += 2; op
+        else 0.toShort
       val payloadLen = dataEnd - offset
       val payload =
         if payloadLen > 0 then
@@ -97,7 +113,7 @@ object OldPacket:
           System.arraycopy(data, offset, buf, 0, payloadLen)
           buf
         else Array.emptyByteArray
-      Some(InboundPacket(seq, arsp, arq, opcode, payload))
+      Some(InboundPacket(seq, arsp, arq, opcode, payload, fragInfo))
     else
       // Pure ACK — no opcode
       Some(InboundPacket(seq, arsp, arq, 0, Array.emptyByteArray))
@@ -164,6 +180,74 @@ object OldPacket:
     buf.put(1, hdr1.toByte)
 
     // Compute and append CRC32
+    val bytes = new Array[Byte](dataEnd)
+    buf.position(0)
+    buf.get(bytes)
+    val crc = EqCrc32.compute(bytes, 0, dataEnd)
+
+    val result = new Array[Byte](dataEnd + 4)
+    System.arraycopy(bytes, 0, result, 0, dataEnd)
+    ByteBuffer.wrap(result, dataEnd, 4).order(ByteOrder.BIG_ENDIAN).putInt(crc)
+    result
+
+  /** Encode a fragmented packet. */
+  def encodeFragment(
+    frag: FragmentData,
+    seq: Int,
+    arq: Option[Int] = None,
+    arsp: Option[Int] = None,
+    includeAsq: Boolean = false,
+    seqStart: Boolean = false,
+  ): Array[Byte] =
+    val maxSize = 2 + 2 + 2 + 2 + 6 + 2 + 2 + frag.payload.length + 4 + 4
+    val buf = ByteBuffer.allocate(maxSize).order(ByteOrder.BIG_ENDIAN)
+    var hdr0 = 0
+    var hdr1 = 0
+
+    hdr0 = setBit(hdr0, A3_FRAGMENT)
+    buf.position(2) // reserve HDR
+
+    // SEQ
+    buf.putShort((seq & 0xFFFF).toShort)
+
+    // ARSP
+    arsp.foreach { v =>
+      hdr1 = setBit(hdr1, B2_ARSP)
+      buf.putShort((v & 0xFFFF).toShort)
+    }
+
+    // ARQ
+    arq.foreach { v =>
+      hdr0 = setBit(hdr0, A1_ARQ)
+      buf.putShort((v & 0xFFFF).toShort)
+    }
+
+    if seqStart then hdr0 = setBit(hdr0, A5_SEQSTART)
+
+    // Fragment header: seq, current, total
+    buf.putShort((frag.fragSeq & 0xFFFF).toShort)
+    buf.putShort((frag.current & 0xFFFF).toShort)
+    buf.putShort((frag.total & 0xFFFF).toShort)
+
+    // ASQ
+    if includeAsq then
+      hdr0 = setBit(hdr0, A4_ASQ)
+      if arq.isDefined then buf.putShort(0.toShort)
+      else buf.put(0.toByte)
+
+    // Opcode (only first fragment)
+    if frag.current == 0 && frag.opcode != 0 then
+      buf.putShort(frag.opcode)
+
+    // Payload
+    if frag.payload.nonEmpty then buf.put(frag.payload)
+
+    // Write HDR
+    val dataEnd = buf.position()
+    buf.put(0, hdr0.toByte)
+    buf.put(1, hdr1.toByte)
+
+    // CRC32
     val bytes = new Array[Byte](dataEnd)
     buf.position(0)
     buf.get(bytes)

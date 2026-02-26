@@ -37,6 +37,9 @@ class ZoneScreen(ctx: GameContext, zonePath: String) extends Screen:
     println(s"Loading zone: $zonePath")
 
   override def update(dt: Float): Unit =
+    if ctx.input.isKeyPressed(GLFW_KEY_ESCAPE) then
+      glfwSetWindowShouldClose(ctx.window, true)
+      return
     camera.processInput(ctx.input, dt)
 
   override def render(dt: Float): Unit =

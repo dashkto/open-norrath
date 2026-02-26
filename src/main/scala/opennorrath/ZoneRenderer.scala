@@ -48,8 +48,12 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings()):
   // Load objects and collect brazier emitters for flame particles
   private val (objectInstances, brazierEmitters) = loadObjects()
 
-  // Load character models
+  // Load character models (also loads global animation tracks)
+  private var cachedGlobalTrackDefs: List[Fragment12_TrackDef] = Nil
   private val characterInstances: List[AnimatedCharacter] = loadCharacters()
+
+  /** Return cached global animation TrackDefs (loaded during character init). */
+  def loadGlobalAnimationTracks(): List[Fragment12_TrackDef] = cachedGlobalTrackDefs
 
   // Create particle emitters from EQG file only (S3D has no emitter data)
   private val particleSystem: Option[ParticleSystem] =
@@ -227,30 +231,59 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings()):
 
     println(s"  Character actors: ${actors.size} (${actors.map(_.name.replace("_ACTORDEF", "").toLowerCase).mkString(", ")})")
 
-    val builds = ZoneRenderer.buildCharacters(chrWld, actors)
+    // Load animation tracks from all global_chr.s3d files
+    cachedGlobalTrackDefs = loadGlobalAnimations()
 
-    // Place one instance per model in a line
-    val targetHeight = 50f
+    val builds = ZoneRenderer.buildCharacters(chrWld, actors, cachedGlobalTrackDefs)
+
+    // Place one instance per model in a line, scaled up for debug visibility.
+    // TODO: the server sends per-spawn size multipliers to scale them properly.
+    val debugScale = 5f
     var xCursor = -370f
     val results = builds.map { build =>
       val interleaved = ZoneRenderer.buildInterleaved(build.zm)
       val glMesh = Mesh(interleaved, build.zm.indices, dynamic = build.clips.nonEmpty)
 
-      val scale = if build.glHeight > 0 then targetHeight / build.glHeight else 10f
-      val halfExtent = math.max(build.glWidth, build.glDepth) * scale / 2f
+      val halfExtent = math.max(build.glWidth, build.glDepth) / 2f * debugScale
 
       xCursor += halfExtent
       val modelMatrix = Matrix4f()
       modelMatrix.translate(xCursor, 0f, -270f)
-      modelMatrix.scale(scale)
+      modelMatrix.scale(debugScale)
       modelMatrix.translate(-build.glCenterX, -build.glMinY, -build.glCenterZ)
-      xCursor += halfExtent + 15f
+      xCursor += halfExtent + 10f
 
       AnimatedCharacter(build.skeleton, build.meshFragments, build.zm, glMesh, modelMatrix, build.clips, interleaved.clone())
     }
 
     println(s"  Characters placed: ${results.size}")
     results
+
+  private def loadGlobalAnimations(): List[Fragment12_TrackDef] =
+    val assetsDir = Path.of(s3dPath).getParent
+    if assetsDir == null then return Nil
+    val globalFiles = Files.list(assetsDir).toArray.map(_.asInstanceOf[Path])
+      .filter { p =>
+        val name = p.getFileName.toString.toLowerCase
+        name.startsWith("global") && name.contains("_chr") && name.endsWith(".s3d")
+      }.sorted
+    if globalFiles.isEmpty then return Nil
+
+    val trackDefs = List.newBuilder[Fragment12_TrackDef]
+    for file <- globalFiles do
+      try
+        // Only decompress .wld entries — skip BMP textures for massive speedup
+        val entries = PfsArchive.load(file, extensionFilter = Some(Set("wld")))
+        entries.find(_.extension == "wld").foreach { wldEntry =>
+          val wld = WldFile(wldEntry.data)
+          val tracks = wld.fragmentsOfType[Fragment12_TrackDef]
+          trackDefs ++= tracks
+        }
+      catch case e: Exception =>
+        println(s"  Warning: failed to load ${file.getFileName}: ${e.getMessage}")
+    val result = trackDefs.result()
+    println(s"  Global animations: ${result.size} tracks from ${globalFiles.length} files")
+    result
 
   private def buildModelMatrix(placement: Fragment15_ObjectInstance): Matrix4f =
     val pos = placement.position
@@ -378,7 +411,17 @@ object ZoneRenderer:
     (skeleton, meshFragments)
 
   /** Build character data from actors: resolve meshes, discover animations, compute bounding boxes. */
-  def buildCharacters(chrWld: WldFile, actors: List[Fragment14_Actor]): List[CharBuild] =
+  def buildCharacters(chrWld: WldFile, actors: List[Fragment14_Actor], extraTrackDefs: List[Fragment12_TrackDef] = Nil): List[CharBuild] =
+    // Pre-build track name map ONCE for all characters (avoids rebuilding 335K+ map per character)
+    val allTrackDefs = chrWld.fragmentsOfType[Fragment12_TrackDef] ++ extraTrackDefs
+    val trackDefsByName: Map[String, Fragment12_TrackDef] = allTrackDefs.map { td =>
+      td.name.toUpperCase.replace("_TRACKDEF", "") -> td
+    }.toMap
+    // Pre-compute unique 3-char animation codes for fast prefix lookup
+    val animCodes: Set[String] = trackDefsByName.keysIterator
+      .filter(_.length > 3).map(_.take(3)).toSet
+    println(s"  Track name map: ${trackDefsByName.size} unique entries, ${animCodes.size} anim codes")
+
     actors.flatMap { actor =>
       val actorKey = actor.name.replace("_ACTORDEF", "").toLowerCase
       val (skeletonOpt, meshFragments) = resolveActorMeshes(chrWld, actor)
@@ -388,7 +431,7 @@ object ZoneRenderer:
         None
       else
         val sk = skeletonOpt.get
-        val clips = AnimatedCharacter.discoverAnimations(chrWld, sk)
+        val clips = AnimatedCharacter.discoverAnimations(chrWld, sk, trackDefsByName, animCodes)
 
         // Use the default animation's frame 0 for initial pose and bounding box
         val defaultClip = clips.get("L01").orElse(clips.get("P01")).orElse(clips.headOption.map(_._2))
@@ -412,7 +455,7 @@ object ZoneRenderer:
         val animInfo = if clips.nonEmpty then
           clips.map((code, clip) => s"$code(${clip.frameCount}f)").mkString(", ")
         else "none"
-        println(s"    $actorKey: ${meshFragments.size} meshes, ${zm.vertices.length / 3} verts, anims: $animInfo")
+        println(f"    $actorKey: ${meshFragments.size} meshes, ${zm.vertices.length / 3} verts, size(${eqMaxX - eqMinX}%.1f x ${eqMaxY - eqMinY}%.1f x ${eqMaxZ - eqMinZ}%.1f), anims: $animInfo")
         Some(CharBuild(actorKey, sk, meshFragments, zm,
           glWidth = eqMaxX - eqMinX, glDepth = eqMaxY - eqMinY, glHeight = eqMaxZ - eqMinZ,
           glCenterX = (eqMinX + eqMaxX) / 2f, glCenterZ = -(eqMinY + eqMaxY) / 2f, glMinY = eqMinZ,

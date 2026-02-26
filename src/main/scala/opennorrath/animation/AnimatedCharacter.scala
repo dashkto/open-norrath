@@ -2,7 +2,7 @@ package opennorrath.animation
 
 import opennorrath.Mesh
 import opennorrath.wld.*
-import org.joml.{Matrix4f, Vector3f}
+import org.joml.{Matrix4f, Quaternionf, Vector3f}
 
 case class AnimationClip(code: String, frameCount: Int, boneTrackDefs: Array[Fragment12_TrackDef])
 
@@ -20,6 +20,12 @@ class AnimatedCharacter(
   private var frameTime: Float = 0f
   private val fps: Float = 15f // EQ animation speed
 
+  // Vertex-level interpolation: pre-compute vertices at frame boundaries,
+  // then cheaply lerp positions each render frame.
+  private val frameAVertices = interleavedBuffer.clone()
+  private val frameBVertices = interleavedBuffer.clone()
+  private var needsInit = true
+
   def clipNames: Seq[String] = clips.keys.toSeq.sorted
 
   def play(code: String): Unit =
@@ -27,6 +33,7 @@ class AnimatedCharacter(
       currentClip = Some(clip)
       currentFrame = 0
       frameTime = 0f
+      needsInit = true
     }
 
   def update(deltaTime: Float): Unit =
@@ -35,15 +42,33 @@ class AnimatedCharacter(
       case Some(clip) =>
         frameTime += deltaTime
         val frameDuration = 1f / fps
-        if frameTime >= frameDuration then
+        var frameChanged = false
+        while frameTime >= frameDuration do
           frameTime -= frameDuration
-          val prevFrame = currentFrame
           currentFrame = (currentFrame + 1) % clip.frameCount
-          if currentFrame != prevFrame then
-            updateVertices(clip, currentFrame)
+          frameChanged = true
 
-  private def updateVertices(clip: AnimationClip, frame: Int): Unit =
-    val boneTransforms = computeBoneTransforms(clip, frame)
+        if frameChanged || needsInit then
+          val nextFrame = (currentFrame + 1) % clip.frameCount
+          computeFrameVertices(clip, currentFrame, frameAVertices)
+          computeFrameVertices(clip, nextFrame, frameBVertices)
+          needsInit = false
+
+        // Lerp vertex positions between frame A and frame B
+        val t = frameTime / frameDuration
+        val vertexCount = interleavedBuffer.length / 5
+        var i = 0
+        while i < vertexCount do
+          val idx = i * 5
+          interleavedBuffer(idx) = frameAVertices(idx) + (frameBVertices(idx) - frameAVertices(idx)) * t
+          interleavedBuffer(idx + 1) = frameAVertices(idx + 1) + (frameBVertices(idx + 1) - frameAVertices(idx + 1)) * t
+          interleavedBuffer(idx + 2) = frameAVertices(idx + 2) + (frameBVertices(idx + 2) - frameAVertices(idx + 2)) * t
+          i += 1
+        glMesh.updateVertices(interleavedBuffer)
+
+  /** Compute bone-transformed vertices for a single frame into the target buffer. */
+  private def computeFrameVertices(clip: AnimationClip, frame: Int, buffer: Array[Float]): Unit =
+    val boneTransforms = AnimatedCharacter.computeBoneTransforms(skeleton, clip, frame)
     var globalVertexIdx = 0
 
     for mesh <- originalMeshes do
@@ -56,22 +81,16 @@ class AnimatedCharacter(
               val v = mesh.vertices(vertexIndex)
               val transformed = Vector3f(v.x, v.y, v.z)
               transform.transformPosition(transformed)
-              // Write to interleaved buffer with EQ→GL swizzle: (X, Z, -Y)
+              // Write with EQ→GL swizzle: (X, Z, -Y)
               val bufIdx = globalVertexIdx * 5
-              interleavedBuffer(bufIdx + 0) = transformed.x
-              interleavedBuffer(bufIdx + 1) = transformed.z
-              interleavedBuffer(bufIdx + 2) = -transformed.y
-              // UV slots (bufIdx+3, bufIdx+4) unchanged
+              buffer(bufIdx + 0) = transformed.x
+              buffer(bufIdx + 1) = transformed.z
+              buffer(bufIdx + 2) = -transformed.y
               globalVertexIdx += 1
               vertexIndex += 1
         else
           globalVertexIdx += piece.count
           vertexIndex += piece.count
-
-    glMesh.updateVertices(interleavedBuffer)
-
-  private def computeBoneTransforms(clip: AnimationClip, frame: Int): Array[Matrix4f] =
-    AnimatedCharacter.computeBoneTransforms(skeleton, clip, frame)
 
   private def selectDefaultClip(): Option[AnimationClip] =
     clips.get("L01") // idle
@@ -103,14 +122,48 @@ object AnimatedCharacter:
     for i <- skeleton.bones.indices do computeWorld(i)
     cache
 
+  /** Compute world-space bone transforms with linear interpolation between two frames. */
+  def computeBoneTransformsLerp(
+      skeleton: Fragment10_SkeletonHierarchy,
+      clip: AnimationClip,
+      frameA: Int,
+      frameB: Int,
+      t: Float,
+  ): Array[Matrix4f] =
+    val cache = new Array[Matrix4f](skeleton.bones.length)
+    def computeWorld(index: Int): Matrix4f =
+      if cache(index) != null then return cache(index)
+      val bone = skeleton.bones(index)
+      val trackDef = clip.boneTrackDefs(index)
+      val fa = trackDef.frames(if frameA < trackDef.frames.length then frameA else 0)
+      val fb = trackDef.frames(if frameB < trackDef.frames.length then frameB else 0)
+      // Lerp translation and scale, slerp rotation
+      val translation = Vector3f(fa.translation).lerp(fb.translation, t)
+      val rotation = Quaternionf(fa.rotation).slerp(fb.rotation, t)
+      // EQ uses scale=0 as sentinel for "no scale" (= 1.0); normalize before lerping
+      val sa = if fa.scale == 0f then 1f else fa.scale
+      val sb = if fb.scale == 0f then 1f else fb.scale
+      val scale = sa + (sb - sa) * t
+      val local = Matrix4f()
+      local.translate(translation)
+      local.rotate(rotation)
+      if scale != 1f then local.scale(scale)
+      val world = if bone.parentIndex < 0 then local
+      else Matrix4f(computeWorld(bone.parentIndex)).mul(local)
+      cache(index) = world
+      world
+    for i <- skeleton.bones.indices do computeWorld(i)
+    cache
+
   /** Discover animations by matching track names against skeleton bone suffixes.
-    * Base tracks: {MODEL}{BONE_SUFFIX}_TRACKDEF (1 frame)
-    * Animation tracks: {ANIM_CODE}{ANIM_MODEL}{BONE_SUFFIX}_TRACKDEF (N frames)
-    * The animation model prefix may differ from the base model prefix.
+    * @param trackDefsByName Pre-built map of track name → TrackDef (built once in buildCharacters).
+    * @param animCodes Pre-computed set of unique 3-char animation codes from all tracks.
     */
   def discoverAnimations(
       wld: WldFile,
       skeleton: Fragment10_SkeletonHierarchy,
+      trackDefsByName: Map[String, Fragment12_TrackDef],
+      animCodes: Set[String],
   ): Map[String, AnimationClip] =
     // Step 1: Get base track names and TrackDefs for each bone
     val baseTrackDefs: Array[Fragment12_TrackDef] = skeleton.bones.map { bone =>
@@ -123,61 +176,76 @@ object AnimatedCharacter:
       if td != null then td.name.toUpperCase.replace("_TRACKDEF", "") else ""
     }
 
-    // Find common prefix (the model name) by finding the shortest base track name
-    // which should be the root bone (just the model prefix with no bone suffix)
     val modelPrefix = baseSuffixes.filter(_.nonEmpty).minByOption(_.length).getOrElse("")
     if modelPrefix.isEmpty then return Map.empty
 
-    // Bone suffixes are what's left after stripping the model prefix
     val boneSuffixes = baseSuffixes.map { name =>
       if name.startsWith(modelPrefix) then name.drop(modelPrefix.length) else name
     }
-
-    // Attachment point bones (suffix ends with _POINT) never have animation tracks —
-    // they inherit their parent bone's transform. Use the base track for these.
     val isAttachmentPoint = boneSuffixes.map(_.endsWith("_POINT"))
+    val nonPointSuffixes = boneSuffixes.distinct.filter(s => s.nonEmpty && !s.endsWith("_POINT"))
 
-    // Step 2: Scan all TrackDefs for animation tracks
-    val allTrackDefs = wld.fragmentsOfType[Fragment12_TrackDef]
-    val trackDefByName = allTrackDefs.map { td =>
-      td.name.toUpperCase.replace("_TRACKDEF", "") -> td
-    }.toMap
+    // Step 2: Find animation prefixes via direct map lookups (O(animCodes × suffixes))
+    // instead of scanning all 335K tracks. For each 3-char anim code, check if
+    // {code}{modelPrefix}{boneSuffix} exists in the map.
+    val validPrefixes = animCodes.filter { code =>
+      val prefix = code + modelPrefix
+      // Root bone (empty suffix) or any non-point bone must have a track
+      trackDefsByName.contains(prefix) ||
+        nonPointSuffixes.exists(s => trackDefsByName.contains(prefix + s))
+    }.map(_ + modelPrefix)
 
-    // Step 3: Find animation prefixes by matching multi-frame tracks to bone suffixes
-    val baseNames = baseSuffixes.toSet
-    val candidatePrefixes = scala.collection.mutable.Set[String]()
-    for (name, td) <- trackDefByName do
-      if !baseNames.contains(name) && td.frames.length > 1 then
-        for suffix <- boneSuffixes.distinct if suffix.nonEmpty && !suffix.endsWith("_POINT") do
-          if name.endsWith(suffix) then
-            candidatePrefixes += name.dropRight(suffix.length)
-
-    // Also check prefixes from 1-frame root candidates (root bone often has 1 frame)
-    for (name, td) <- trackDefByName do
-      if !baseNames.contains(name) && td.frames.length == 1 then
-        val firstNonRootSuffix = boneSuffixes.find(s => s.nonEmpty && !s.endsWith("_POINT"))
-        firstNonRootSuffix.foreach { suffix =>
-          if trackDefByName.contains(name + suffix) then
-            candidatePrefixes += name
+    // Step 3: Fallback for models sharing animations with a different model prefix
+    // (e.g., rivervale halfling NPCs "RIF" use halfling "HAF" animations).
+    // Only runs the slower scan when no own-prefix animations found.
+    val prefixesToUse = if validPrefixes.nonEmpty then validPrefixes
+    else
+      // Scan tracks ending with our bone suffixes to find foreign model prefixes
+      val candidatePrefixes = scala.collection.mutable.Set[String]()
+      for (name, td) <- trackDefsByName do
+        if td.frames.length > 1 then
+          for suffix <- nonPointSuffixes do
+            if name.endsWith(suffix) then
+              candidatePrefixes += name.dropRight(suffix.length)
+      // Also check 1-frame root tracks (root bone often has 1 frame)
+      for (name, td) <- trackDefsByName do
+        if td.frames.length == 1 then
+          nonPointSuffixes.headOption.foreach { suffix =>
+            if trackDefsByName.contains(name + suffix) then
+              candidatePrefixes += name
+          }
+      // Group by foreign model prefix (strip 3-char anim code), pick best bone coverage.
+      // Among models with equal coverage, prefer the one with the most animation clips
+      // (more clips = more likely a real character animation set vs incidental bone name match).
+      val byModel = candidatePrefixes.filter(_.length > 3).groupBy(_.drop(3))
+        .filterNot(_._1 == modelPrefix) // exclude our own (already tried)
+      val nonPointBones = boneSuffixes.indices.filter(i => !isAttachmentPoint(i))
+      val scored = byModel.map { (model, prefixes) =>
+        val samplePrefix = prefixes.head
+        val coverage = nonPointBones.count { i =>
+          boneSuffixes(i).isEmpty || trackDefsByName.contains(samplePrefix + boneSuffixes(i))
         }
-
-    // Step 4: For each candidate prefix, require ALL non-attachment-point bones to have
-    // a matching track. Attachment points use the base track (rest pose).
-    val clips = candidatePrefixes.flatMap { prefix =>
-      val allNonPointBonesMatch = boneSuffixes.zipWithIndex.forall { (suffix, i) =>
-        isAttachmentPoint(i) || trackDefByName.contains(prefix + suffix)
+        (model, prefixes, coverage, prefixes.size) // prefixes.size = number of animation clips
       }
-      if !allNonPointBonesMatch then None
-      else
-        val boneTracks: Array[Fragment12_TrackDef] = boneSuffixes.zipWithIndex.map { (suffix, i) =>
-          if isAttachmentPoint(i) then baseTrackDefs(i)
-          else trackDefByName(prefix + suffix)
-        }
-        val frameCount = boneTracks.filter(_ != null).map(_.frames.length).max
-        if frameCount > 1 then // 1-frame = rest pose, not an animation
-          val animCode = prefix.take(3)
-          Some(animCode -> AnimationClip(animCode, frameCount, boneTracks))
-        else None
+      scored.filter(_._3 > nonPointBones.length / 2)
+        .toList.sortBy(s => (-s._3, -s._4)).headOption match // coverage desc, then clip count desc
+        case Some((model, prefixes, coverage, clipCount)) =>
+          println(s"      [anim-fallback] '$modelPrefix' → '$model' ($coverage/${nonPointBones.length} bones, $clipCount clips)")
+          prefixes
+        case _ => Set.empty[String]
+
+    // Build clips with fallback to base track (rest pose) for missing bones.
+    val isFallback = validPrefixes.isEmpty && prefixesToUse.nonEmpty
+    val clips = prefixesToUse.flatMap { prefix =>
+      val boneTracks: Array[Fragment12_TrackDef] = boneSuffixes.zipWithIndex.map { (suffix, i) =>
+        if isAttachmentPoint(i) then baseTrackDefs(i)
+        else trackDefsByName.getOrElse(prefix + suffix, baseTrackDefs(i))
+      }
+      val frameCount = boneTracks.filter(_ != null).map(_.frames.length).max
+      if frameCount > 1 then
+        val animCode = if isFallback then prefix.take(3) else prefix.dropRight(modelPrefix.length)
+        Some(animCode -> AnimationClip(animCode, frameCount, boneTracks))
+      else None
     }.toMap
 
     clips

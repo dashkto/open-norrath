@@ -6,23 +6,21 @@ import imgui.flag.{ImGuiCol, ImGuiCond, ImGuiKey, ImGuiWindowFlags}
 import org.lwjgl.glfw.GLFW.*
 import org.lwjgl.opengl.GL11.*
 
-import opennorrath.Game
+import opennorrath.{Game, WorldSession}
 import opennorrath.network.*
 import opennorrath.ui.Colors
 
 class ServerSelectScreen(
   ctx: GameContext,
-  loginClient: LoginClient,
-  networkThread: NetworkThread,
   servers: Vector[ServerInfo],
 ) extends Screen:
+
+  private def loginSession = Game.loginSession.get
 
   private var selectedIndex = 0
   private var statusText = s"${servers.size} server(s) found"
   private var statusColor = Colors.textDim
   private var waiting = false
-  private var worldClient: Option[WorldClient] = None
-  private var worldNetThread: Option[NetworkThread] = None
 
   override def show(): Unit =
     glfwSetInputMode(ctx.window, GLFW_CURSOR, GLFW_CURSOR_NORMAL)
@@ -41,26 +39,32 @@ class ServerSelectScreen(
 
     // Escape to go back
     if ImGui.isKeyPressed(ImGuiKey.Escape) then
+      Game.loginSession.foreach(_.stop())
+      Game.loginSession = None
+      Game.worldSession.foreach(_.stop())
+      Game.worldSession = None
       Game.setScreen(LoginScreen(ctx))
 
-    // Poll events
-    var event = loginClient.pollEvent()
-    while event.isDefined do
-      event.get match
-        case LoginEvent.PlayApproved(key) =>
-          statusText = s"Play approved — connecting to world..."
-          statusColor = Colors.success
-          println(s"[ServerSelect] World key received: $key")
-        case LoginEvent.LoginComplete =>
-          statusText = "Connecting to world server..."
-          statusColor = Colors.success
-          connectToWorld()
-        case LoginEvent.Error(msg) =>
-          statusText = msg
-          statusColor = Colors.error
-          waiting = false
-        case _ => ()
-      event = loginClient.pollEvent()
+    // Poll login events (login session may be gone after connectToWorld)
+    Game.loginSession.foreach { session =>
+      var event = session.client.pollEvent()
+      while event.isDefined do
+        event.get match
+          case LoginEvent.PlayApproved(key) =>
+            statusText = s"Play approved - connecting to world..."
+            statusColor = Colors.success
+            println(s"[ServerSelect] World key received: $key")
+          case LoginEvent.LoginComplete =>
+            statusText = "Connecting to world server..."
+            statusColor = Colors.success
+            connectToWorld()
+          case LoginEvent.Error(msg) =>
+            statusText = msg
+            statusColor = Colors.error
+            waiting = false
+          case _ => ()
+        event = session.client.pollEvent()
+    }
 
     // Poll world events
     pollWorldEvents()
@@ -120,9 +124,7 @@ class ServerSelectScreen(
 
     ImGui.end()
 
-  override def dispose(): Unit =
-    worldNetThread.foreach(_.stop())
-    networkThread.stop()
+  override def dispose(): Unit = ()
 
   private def selectCurrent(): Unit =
     println(s"[ServerSelect] selectCurrent() called, servers=${servers.size}, waiting=$waiting")
@@ -132,28 +134,31 @@ class ServerSelectScreen(
       statusText = s"Connecting to ${server.name}..."
       statusColor = Colors.text
       waiting = true
-      loginClient.selectServer(server.ip)
+      loginSession.client.selectServer(server.ip)
 
   private def pollWorldEvents(): Unit =
-    if worldClient.isEmpty then return
-    val wc = worldClient.get
-    var done = false
-    var wEvent = wc.pollEvent()
-    while wEvent.isDefined && !done do
-      wEvent.get match
-        case WorldEvent.CharacterList(chars) =>
-          Game.setScreen(CharacterSelectScreen(ctx, wc, worldNetThread.get, chars))
-          done = true
-        case WorldEvent.Error(msg) =>
-          statusText = msg
-          statusColor = Colors.error
-          waiting = false
-        case WorldEvent.StateChanged(s) =>
-          println(s"[ServerSelect] World state: $s")
-        case _ => ()
-      if !done then wEvent = wc.pollEvent()
+    Game.worldSession match
+      case None => return
+      case Some(session) =>
+        val wc = session.client
+        var done = false
+        var wEvent = wc.pollEvent()
+        while wEvent.isDefined && !done do
+          wEvent.get match
+            case WorldEvent.CharacterList(chars) =>
+              Game.setScreen(CharacterSelectScreen(ctx, chars))
+              done = true
+            case WorldEvent.Error(msg) =>
+              statusText = msg
+              statusColor = Colors.error
+              waiting = false
+            case WorldEvent.StateChanged(s) =>
+              println(s"[ServerSelect] World state: $s")
+            case _ => ()
+          if !done then wEvent = wc.pollEvent()
 
   private def connectToWorld(): Unit =
+    val loginClient = loginSession.client
     // Parse account ID from session ID ("LS#123" → 123)
     val accountId = loginClient.sessionId.stripPrefix("LS#").toIntOption.getOrElse(0)
     val serverIp = servers.lift(selectedIndex).map(_.ip).getOrElse(ctx.settings.login.host)
@@ -161,13 +166,13 @@ class ServerSelectScreen(
 
     println(s"[ServerSelect] Connecting to world $serverIp:$worldPort (account=$accountId, key=${loginClient.worldKey})")
 
-    // Stop login network thread, start world network thread
-    networkThread.stop()
+    // Stop login session, start world session
+    Game.loginSession.foreach(_.stop())
+    Game.loginSession = None
 
     val wc = WorldClient()
     val wnt = NetworkThread(wc)
-    worldClient = Some(wc)
-    worldNetThread = Some(wnt)
+    Game.worldSession = Some(WorldSession(wc, wnt))
     wnt.start()
     wnt.send(NetCommand.Connect(serverIp, worldPort))
     wc.connect(accountId, loginClient.worldKey)

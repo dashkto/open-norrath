@@ -73,7 +73,11 @@ object CharDebug:
             println(s"      ${mesh.name}: ${mesh.vertices.length} verts, ${mesh.polygons.length} polys, ${mesh.vertexPieces.length} bone pieces")
 
           // Animations
-          val clips = AnimatedCharacter.discoverAnimations(wld, sk)
+          val zoneTracksByName = wld.fragmentsOfType[Fragment12_TrackDef].map { td =>
+            td.name.toUpperCase.replace("_TRACKDEF", "") -> td
+          }.toMap
+          val animCodes = zoneTracksByName.keysIterator.filter(_.length > 3).map(_.take(3)).toSet
+          val clips = AnimatedCharacter.discoverAnimations(wld, sk, zoneTracksByName, animCodes)
           if clips.nonEmpty then
             println(s"    Animations: ${clips.size}")
             for (code, clip) <- clips.toList.sortBy(_._1) do

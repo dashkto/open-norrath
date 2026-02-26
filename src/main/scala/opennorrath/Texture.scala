@@ -57,7 +57,27 @@ object Texture:
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, size, size, 0, GL_RGBA, GL_UNSIGNED_BYTE, buffer)
     textureId
 
+  /** Extract the color key (palette entry 0) from an 8-bit paletted BMP.
+    * Returns Some((r, g, b)) if the BMP is paletted, None otherwise.
+    */
+  private def extractBmpColorKey(data: Array[Byte]): Option[(Int, Int, Int)] =
+    if data.length < 30 then return None
+    if data(0) != 'B' || data(1) != 'M' then return None
+    val bitsPerPixel = (data(28) & 0xFF) | ((data(29) & 0xFF) << 8)
+    if bitsPerPixel != 8 then return None
+    val dibHeaderSize = (data(14) & 0xFF) | ((data(15) & 0xFF) << 8) |
+      ((data(16) & 0xFF) << 16) | ((data(17) & 0xFF) << 24)
+    val paletteOffset = 14 + dibHeaderSize
+    if data.length < paletteOffset + 4 then return None
+    // BMP palette is BGRA
+    val b = data(paletteOffset.toInt) & 0xFF
+    val g = data(paletteOffset.toInt + 1) & 0xFF
+    val r = data(paletteOffset.toInt + 2) & 0xFF
+    Some((r, g, b))
+
   def loadFromBytes(data: Array[Byte]): Int =
+    val colorKey = extractBmpColorKey(data)
+
     val stack = MemoryStack.stackPush()
     try
       val inputBuf = BufferUtils.createByteBuffer(data.length)
@@ -73,18 +93,30 @@ object Texture:
         throw RuntimeException(s"Failed to load texture: ${stbi_failure_reason()}")
 
       // BMP files have no alpha channel — STB fills alpha=255 for all pixels.
-      // EQ uses black (0,0,0) as the color key for masked/transparent textures.
-      // Set alpha=0 for near-black pixels so the fragment shader can discard them.
+      // EQ uses palette entry 0 as the color key for masked/transparent textures.
+      // For 8-bit BMPs we use the actual palette[0] color; fall back to near-black.
       val width = w.get(0)
       val height = h.get(0)
       val pixelCount = width * height
-      for i <- 0 until pixelCount do
-        val offset = i * 4
-        val r = pixels.get(offset) & 0xFF
-        val g = pixels.get(offset + 1) & 0xFF
-        val b = pixels.get(offset + 2) & 0xFF
-        if r + g + b < 10 then
-          pixels.put(offset + 3, 0.toByte)
+      colorKey match
+        case Some((kr, kg, kb)) =>
+          // Mask pixels matching the palette color key (with small tolerance)
+          for i <- 0 until pixelCount do
+            val offset = i * 4
+            val r = pixels.get(offset) & 0xFF
+            val g = pixels.get(offset + 1) & 0xFF
+            val b = pixels.get(offset + 2) & 0xFF
+            if math.abs(r - kr) + math.abs(g - kg) + math.abs(b - kb) < 10 then
+              pixels.put(offset + 3, 0.toByte)
+        case None =>
+          // Non-paletted: fall back to near-black masking
+          for i <- 0 until pixelCount do
+            val offset = i * 4
+            val r = pixels.get(offset) & 0xFF
+            val g = pixels.get(offset + 1) & 0xFF
+            val b = pixels.get(offset + 2) & 0xFF
+            if r + g + b < 10 then
+              pixels.put(offset + 3, 0.toByte)
 
       // Bleed opaque edge colors into transparent pixels to prevent dark halos
       // from bilinear filtering at color-key boundaries.

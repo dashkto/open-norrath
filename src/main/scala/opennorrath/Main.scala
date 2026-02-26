@@ -11,7 +11,7 @@ import org.lwjgl.opengl.GL
 import org.lwjgl.opengl.GL11.*
 import org.lwjgl.system.MemoryUtil.NULL
 
-import opennorrath.screen.{GameContext, SplashScreen}
+import opennorrath.screen.{GameContext, SplashScreen, ZoneScreen}
 import opennorrath.ui.{Fonts, ImGuiTheme}
 
 object Main:
@@ -72,7 +72,10 @@ object Main:
 
     val ctx = GameContext(window, input, settings, WindowWidth, WindowHeight, imGuiGlfw, imGuiGl3)
 
-    Game.run(ctx, SplashScreen(ctx, zonePath))
+    val initialScreen =
+      if args.nonEmpty then ZoneScreen(ctx, zonePath)
+      else SplashScreen(ctx, zonePath)
+    Game.run(ctx, initialScreen)
 
     println("Shutting down")
     imGuiGl3.shutdown()

@@ -9,6 +9,7 @@ enum WorldEvent:
   case StateChanged(state: WorldState)
   case CharacterList(characters: Vector[CharacterInfo])
   case ZoneInfo(address: ZoneAddress)
+  case NameApproved(approved: Boolean)
   case Error(message: String)
 
 /** World server protocol state machine.
@@ -24,13 +25,18 @@ class WorldClient extends PacketHandler:
   val errors = ConcurrentLinkedQueue[String]()
 
   private val outQueue = ConcurrentLinkedQueue[Array[Byte]]()
+  private val pendingApps = ConcurrentLinkedQueue[(Short, Array[Byte])]()
 
-  // Sequence tracking (network thread only)
+  // Sequence tracking (network thread only — never touch from game thread)
   private var outSeq: Int = 0
   private var outArq: Int = 0
   private var lastInArq: Int = -1
   private var needArsp = false
   private var firstPacket = true
+  private var fragSeq: Int = 0
+
+  // Fragment reassembly
+  private val assembler = FragmentAssembler()
 
   // Login data
   var characters: Vector[CharacterInfo] = Vector.empty
@@ -53,6 +59,25 @@ class WorldClient extends PacketHandler:
     emit(WorldEvent.StateChanged(state))
     queueAppPacket(WorldOpcodes.EnterWorld, WorldCodec.encodeEnterWorld(charName))
 
+  /** Check if a name is available. Called from game thread. */
+  def approveName(name: String, race: Int, classId: Int): Unit =
+    queueAppPacket(WorldOpcodes.ApproveName, WorldCodec.encodeApproveName(name, race, classId))
+
+  /** Create a character. Called from game thread. */
+  def createCharacter(
+    gender: Int, race: Int, classId: Int,
+    str: Int, sta: Int, cha: Int, dex: Int, int_ : Int, agi: Int, wis: Int,
+    startZone: Int, deity: Int,
+    hairColor: Int = 0, beardColor: Int = 0,
+    eyeColor1: Int = 0, eyeColor2: Int = 0,
+    hairStyle: Int = 0, beard: Int = 0, face: Int = 0,
+  ): Unit =
+    queueAppPacket(WorldOpcodes.CharacterCreate, WorldCodec.encodeCharCreate(
+      gender, race, classId, str, sta, cha, dex, int_, agi, wis,
+      startZone, deity, hairColor, beardColor, eyeColor1, eyeColor2,
+      hairStyle, beard, face,
+    ))
+
   /** Called from network thread when a decoded packet arrives. */
   def handlePacket(packet: InboundPacket): Unit =
     // Track ARQs for acknowledgment
@@ -61,13 +86,22 @@ class WorldClient extends PacketHandler:
       needArsp = true
     }
 
-    if packet.opcode == 0 then return // pure ACK
+    // Fragment reassembly — may buffer and return None until complete
+    val pkt = assembler.process(packet) match
+      case Some(p) => p
+      case None =>
+        println(s"[World] Fragment buffered (arq=${packet.arq})")
+        return
 
-    println(s"[World] Recv ${WorldOpcodes.name(packet.opcode)} (${packet.payload.length}B)")
+    if pkt.opcode == 0 then
+      println(s"[World] ACK (seq=${pkt.seq}, arsp=${pkt.arsp})")
+      return
 
-    packet.opcode match
+    println(s"[World] Recv ${WorldOpcodes.name(pkt.opcode)} (${pkt.payload.length}B)")
+
+    pkt.opcode match
       case WorldOpcodes.SendCharInfo =>
-        characters = WorldCodec.decodeCharacterSelect(packet.payload)
+        characters = WorldCodec.decodeCharacterSelect(pkt.payload)
         println(s"[World] ${characters.size} character(s): ${characters.map(c => s"${c.name} L${c.level}").mkString(", ")}")
         state = WorldState.CharacterSelect
         emit(WorldEvent.CharacterList(characters))
@@ -79,34 +113,45 @@ class WorldClient extends PacketHandler:
         emit(WorldEvent.StateChanged(state))
 
       case WorldOpcodes.GuildsList =>
-        println(s"[World] Guilds list received (${packet.payload.length}B)")
+        println(s"[World] Guilds list received (${pkt.payload.length}B)")
 
       case WorldOpcodes.LogServer =>
-        println(s"[World] LogServer received (${packet.payload.length}B)")
+        println(s"[World] LogServer received (${pkt.payload.length}B)")
 
       case WorldOpcodes.ExpansionInfo =>
-        println(s"[World] ExpansionInfo received (${packet.payload.length}B)")
+        println(s"[World] ExpansionInfo received (${pkt.payload.length}B)")
 
       case WorldOpcodes.MOTD =>
-        val msg = new String(packet.payload, java.nio.charset.StandardCharsets.US_ASCII).takeWhile(_ != '\u0000')
+        val msg = new String(pkt.payload, java.nio.charset.StandardCharsets.US_ASCII).takeWhile(_ != '\u0000')
         println(s"[World] MOTD: $msg")
 
       case WorldOpcodes.SetChatServer =>
-        println(s"[World] Chat server info received (${packet.payload.length}B)")
+        println(s"[World] Chat server info received (${pkt.payload.length}B)")
 
       case WorldOpcodes.ZoneServerInfo =>
-        WorldCodec.decodeZoneServerInfo(packet.payload) match
+        WorldCodec.decodeZoneServerInfo(pkt.payload) match
           case Some(addr) =>
             println(s"[World] Zone server: ${addr.ip}:${addr.port}")
             emit(WorldEvent.ZoneInfo(addr))
           case None =>
             println("[World] Failed to decode zone server info")
 
+      case WorldOpcodes.ApproveName =>
+        val approved = WorldCodec.decodeNameApproval(pkt.payload)
+        println(s"[World] Name approval: $approved")
+        emit(WorldEvent.NameApproved(approved))
+
       case other =>
         println(s"[World] Unhandled opcode: ${WorldOpcodes.name(other)}")
 
-  /** Called periodically from network thread. Produces ACK if needed. */
+  /** Called periodically from network thread. Builds queued app packets and ACKs. */
   def tick(): Unit =
+    // Build pending app packets (queued from game thread, built here on network thread)
+    var pending = pendingApps.poll()
+    while pending != null do
+      buildAppPacket(pending._1, pending._2)
+      pending = pendingApps.poll()
+
     if needArsp && outQueue.isEmpty then
       val ack = OldPacket.encodeAck(nextSeq(), lastInArq)
       outQueue.add(ack)
@@ -124,7 +169,18 @@ class WorldClient extends PacketHandler:
       err = errors.poll()
     Option(events.poll())
 
+  /** Queue an app packet for sending. Safe to call from game thread. */
   private def queueAppPacket(opcode: Short, payload: Array[Byte]): Unit =
+    println(s"[World] Queuing ${WorldOpcodes.name(opcode)} (${payload.length}B)")
+    pendingApps.add((opcode, payload))
+
+  /** Build and enqueue a raw packet. Called from network thread only. */
+  private def buildAppPacket(opcode: Short, payload: Array[Byte]): Unit =
+    println(s"[World] Building ${WorldOpcodes.name(opcode)} (${payload.length}B) seq=$outSeq arq=$outArq")
+    if payload.length > 510 then
+      buildFragmentedPacket(opcode, payload)
+      return
+
     val arsp = if needArsp then Some(lastInArq) else None
     needArsp = false
     val isFirst = firstPacket
@@ -140,6 +196,25 @@ class WorldClient extends PacketHandler:
     )
     outQueue.add(packet)
 
+  private def buildFragmentedPacket(opcode: Short, payload: Array[Byte]): Unit =
+    val fSeq = nextFragSeq()
+    val fragments = assembler.fragment(opcode, payload, fSeq)
+    println(s"[World] Fragmenting ${WorldOpcodes.name(opcode)} (${payload.length}B) into ${fragments.size} fragments")
+    for (frag, i) <- fragments.zipWithIndex do
+      val arsp = if i == 0 && needArsp then Some(lastInArq) else None
+      if i == 0 then needArsp = false
+      val isFirst = firstPacket
+      if i == 0 then firstPacket = false
+      val packet = OldPacket.encodeFragment(
+        frag = frag,
+        seq = nextSeq(),
+        arq = if i == 0 then Some(nextArq()) else None,
+        arsp = arsp,
+        includeAsq = i == 0,
+        seqStart = isFirst,
+      )
+      outQueue.add(packet)
+
   private def nextSeq(): Int =
     val s = outSeq
     outSeq = (outSeq + 1) & 0xFFFF
@@ -149,5 +224,10 @@ class WorldClient extends PacketHandler:
     val a = outArq
     outArq = (outArq + 1) & 0xFFFF
     a
+
+  private def nextFragSeq(): Int =
+    val s = fragSeq
+    fragSeq = (fragSeq + 1) & 0xFFFF
+    s
 
   private def emit(event: WorldEvent): Unit = events.add(event)

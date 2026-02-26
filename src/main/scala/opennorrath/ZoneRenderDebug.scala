@@ -44,7 +44,9 @@ class ZoneRenderDebug(s3dPath: String, settings: Settings, animationModel: Strin
 
     val chrWld = WldFile(chrWldEntry.get.data)
     val actors = chrWld.fragmentsOfType[Fragment14_Actor]
-    val builds = ZoneRenderer.buildCharacters(chrWld, actors)
+    // Load global animation tracks for the showcase too
+    val globalTrackDefs = zone.loadGlobalAnimationTracks()
+    val builds = ZoneRenderer.buildCharacters(chrWld, actors, globalTrackDefs)
 
     val target = animationModel.toLowerCase
     val buildOpt = builds.find(_.key == target)
@@ -56,9 +58,8 @@ class ZoneRenderDebug(s3dPath: String, settings: Settings, animationModel: Strin
     val sortedClips = build.clips.toList.sortBy(_._1)
     val count = sortedClips.size
     val cols = math.ceil(math.sqrt(count.toDouble)).toInt
-    val targetHeight = 60f
-    val scale = if build.glHeight > 0 then targetHeight / build.glHeight else 10f
-    val spacing = math.max(build.glWidth, build.glDepth) * scale + 20f
+    val debugScale = 5f
+    val spacing = (math.max(build.glWidth, build.glDepth) + 20f) * debugScale
 
     // Center grid above the arena plinth: GL(-38.6, 19.1, -393.9)
     val centerX = -38.6f
@@ -76,7 +77,7 @@ class ZoneRenderDebug(s3dPath: String, settings: Settings, animationModel: Strin
       val glMesh = Mesh(interleaved, build.zm.indices, dynamic = true)
       val modelMatrix = Matrix4f()
       modelMatrix.translate(x, centerY, z)
-      modelMatrix.scale(scale)
+      modelMatrix.scale(debugScale)
       modelMatrix.translate(-build.glCenterX, -build.glMinY, -build.glCenterZ)
 
       val char = AnimatedCharacter(build.skeleton, build.meshFragments, build.zm, glMesh, modelMatrix, build.clips, interleaved.clone())

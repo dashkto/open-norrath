@@ -4,7 +4,11 @@ import scala.compiletime.uninitialized
 
 import imgui.{ImFont, ImFontConfig, ImGui}
 
-/** Loads Roboto at multiple sizes for ImGui. Call `init()` before any ImGui rendering. */
+/** Loads Roboto at multiple sizes for ImGui. Call `init()` before any ImGui rendering.
+  *
+  * Note: the default glyph range is ASCII + Latin-1 only. Avoid em dashes,
+  * curly quotes, and other extended Unicode in UI strings — they render as '?'.
+  */
 object Fonts:
 
   var default: ImFont = uninitialized

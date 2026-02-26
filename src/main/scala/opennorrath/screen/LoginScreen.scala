@@ -7,8 +7,8 @@ import imgui.`type`.ImString
 import org.lwjgl.glfw.GLFW.*
 import org.lwjgl.opengl.GL11.*
 
-import opennorrath.{Game}
-import opennorrath.network.{LoginClient, LoginEvent, LoginState, NetCommand, NetworkThread}
+import opennorrath.{Game, LoginSession}
+import opennorrath.network.{LoginClient, LoginEvent, NetCommand, NetworkThread}
 import opennorrath.ui.Colors
 
 class LoginScreen(ctx: GameContext) extends Screen:
@@ -22,16 +22,18 @@ class LoginScreen(ctx: GameContext) extends Screen:
   private var statusColor = Colors.textDim
   private var connecting = false
   private var focusUsername = true
-  private var handedOff = false
 
   override def show(): Unit =
     glfwSetInputMode(ctx.window, GLFW_CURSOR, GLFW_CURSOR_NORMAL)
     glClearColor(0.08f, 0.08f, 0.12f, 1f)
+    Game.loginSession = Some(LoginSession(loginClient, networkThread))
     networkThread.start()
 
   override def update(dt: Float): Unit =
     // Escape to go back
     if ImGui.isKeyPressed(ImGuiKey.Escape) then
+      Game.loginSession.foreach(_.stop())
+      Game.loginSession = None
       Game.setScreen(SplashScreen(ctx, "assets/arena.s3d"))
       return
 
@@ -50,8 +52,7 @@ class LoginScreen(ctx: GameContext) extends Screen:
           statusText = s"Logged in: $sid"
           statusColor = Colors.success
         case LoginEvent.ServerListUpdated(servers) =>
-          handedOff = true
-          Game.setScreen(ServerSelectScreen(ctx, loginClient, networkThread, servers))
+          Game.setScreen(ServerSelectScreen(ctx, servers))
           return
         case LoginEvent.StateChanged(s) =>
           if statusColor != Colors.error && statusColor != Colors.success then
@@ -128,8 +129,7 @@ class LoginScreen(ctx: GameContext) extends Screen:
 
     ImGui.end()
 
-  override def dispose(): Unit =
-    if !handedOff then networkThread.stop()
+  override def dispose(): Unit = ()
 
   private def tryConnect(): Unit =
     val user = username.get().trim

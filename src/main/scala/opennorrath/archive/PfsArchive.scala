@@ -12,16 +12,16 @@ object PfsArchive:
   private val VersionV2 = 0x20000
   private val DirectoryCrc = 0x61580AC9
 
-  def load(path: Path): List[PfsEntry] =
+  def load(path: Path, extensionFilter: Option[Set[String]] = None): List[PfsEntry] =
     val channel = FileChannel.open(path, StandardOpenOption.READ)
     try
       val fileSize = channel.size()
       val buf = channel.map(FileChannel.MapMode.READ_ONLY, 0, fileSize)
       buf.order(ByteOrder.LITTLE_ENDIAN)
-      parse(buf)
+      parse(buf, extensionFilter)
     finally channel.close()
 
-  private def parse(buf: ByteBuffer): List[PfsEntry] =
+  private def parse(buf: ByteBuffer, extensionFilter: Option[Set[String]]): List[PfsEntry] =
     // Header
     val indexOffset = buf.getInt()
     val magic = buf.getInt()
@@ -48,13 +48,7 @@ object PfsArchive:
     else
       (Nil, entries)
 
-    // Decompress each file entry
-    val fileData = fileEntries.map { entry =>
-      val data = decompressFile(buf, entry.offset, entry.uncompressedSize)
-      (entry, data)
-    }
-
-    // Parse filenames from directory (v2)
+    // Parse filenames from directory first (needed for extension filtering)
     val filenames: Map[Int, String] = if dirEntries.nonEmpty then
       val dirEntry = dirEntries.head
       val dirData = decompressFile(buf, dirEntry.offset, dirEntry.uncompressedSize)
@@ -62,8 +56,21 @@ object PfsArchive:
     else
       Map.empty
 
-    // Match filenames to entries
-    fileData.map { (entry, data) =>
+    // Filter entries by extension if requested (skip decompressing unneeded files)
+    val entriesToLoad = extensionFilter match
+      case Some(exts) =>
+        fileEntries.filter { entry =>
+          filenames.get(entry.crc) match
+            case Some(name) =>
+              val dotIdx = name.lastIndexOf('.')
+              dotIdx >= 0 && exts.contains(name.substring(dotIdx + 1).toLowerCase)
+            case None => true // include unknown entries
+        }
+      case None => fileEntries
+
+    // Decompress selected file entries
+    entriesToLoad.map { entry =>
+      val data = decompressFile(buf, entry.offset, entry.uncompressedSize)
       val name = filenames.getOrElse(entry.crc, f"${entry.crc}%08X.bin")
       PfsEntry(name, data)
     }

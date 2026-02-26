@@ -12,8 +12,6 @@ import opennorrath.ui.Colors
 
 class CharacterSelectScreen(
   ctx: GameContext,
-  worldClient: WorldClient,
-  networkThread: NetworkThread,
   characters: Vector[CharacterInfo],
 ) extends Screen:
 
@@ -22,13 +20,15 @@ class CharacterSelectScreen(
   private var statusColor = Colors.textDim
   private var entering = false
 
+  private def worldClient: WorldClient = Game.worldSession.get.client
+
   override def show(): Unit =
     glfwSetInputMode(ctx.window, GLFW_CURSOR, GLFW_CURSOR_NORMAL)
     glClearColor(0.08f, 0.08f, 0.12f, 1f)
 
   override def update(dt: Float): Unit =
     // Keyboard navigation
-    if !entering then
+    if !entering && characters.nonEmpty then
       if ImGui.isKeyPressed(ImGuiKey.UpArrow) || ImGui.isKeyPressed(ImGuiKey.W) then
         selectedIndex = (selectedIndex - 1 + characters.size) % characters.size
       if ImGui.isKeyPressed(ImGuiKey.DownArrow) || ImGui.isKeyPressed(ImGuiKey.S) then
@@ -37,8 +37,10 @@ class CharacterSelectScreen(
       if ImGui.isKeyPressed(ImGuiKey.Enter) || ImGui.isKeyPressed(ImGuiKey.KeypadEnter) then
         enterWorld()
 
-    // Escape to go back
+    // Escape to go back — tear down world session
     if ImGui.isKeyPressed(ImGuiKey.Escape) then
+      Game.worldSession.foreach(_.stop())
+      Game.worldSession = None
       Game.setScreen(LoginScreen(ctx))
       return
 
@@ -81,9 +83,9 @@ class CharacterSelectScreen(
     ImGui.popStyleColor()
 
     if characters.isEmpty then
-      val noChars = "No characters found"
+      val noChars = "No characters - create one!"
       val noW = ImGui.calcTextSize(noChars).x
-      ImGui.setCursorPos((w - noW) / 2f, h / 2f)
+      ImGui.setCursorPos((w - noW) / 2f, h / 2f - 30f)
       pushColor(ImGuiCol.Text, Colors.textDim)
       ImGui.text(noChars)
       ImGui.popStyleColor()
@@ -100,12 +102,26 @@ class CharacterSelectScreen(
         ImGui.setCursorPos(listX, itemY)
         if selected then
           pushColor(ImGuiCol.Text, Colors.gold)
-        val label = s"${char.name}  —  Level ${char.level} ${className(char.classId)} ${raceName(char.race)}"
+        val label = s"${char.name}  -  Level ${char.level} ${className(char.classId)} ${raceName(char.race)}"
         if ImGui.selectable(label, selected, 0, listW, 0f) then
           selectedIndex = i
           enterWorld()
         if ImGui.isItemHovered() then selectedIndex = i
         if selected then ImGui.popStyleColor()
+
+    // Create Character button
+    val createW = 180f
+    ImGui.setCursorPos((w - createW) / 2f, h - 120f)
+    pushColor(ImGuiCol.Button, Colors.primary)
+    pushColor(ImGuiCol.ButtonHovered, Colors.primary2)
+    pushColor(ImGuiCol.ButtonActive, Colors.hex("C06820"))
+    pushColor(ImGuiCol.Text, Colors.hex("1A1A1A"))
+    if ImGui.button("Create Character", createW, 36f) then
+      Game.setScreen(CharacterCreateScreen(ctx))
+      ImGui.popStyleColor(4)
+      ImGui.end()
+      return
+    ImGui.popStyleColor(4)
 
     // Status
     val statusTextW = ImGui.calcTextSize(statusText).x
@@ -117,7 +133,8 @@ class CharacterSelectScreen(
     ImGui.end()
 
   override def dispose(): Unit =
-    networkThread.stop()
+    // World session is owned by Game, not by this screen
+    ()
 
   private def enterWorld(): Unit =
     if characters.nonEmpty && !entering then

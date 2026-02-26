@@ -49,51 +49,46 @@ object WorldCodec:
     System.arraycopy(bytes, 0, buf, 0, Math.min(bytes.length, 63))
     buf
 
-  /** Decode OP_SendCharInfo: CharacterSelect_Struct.
+  /** Decode OP_SendCharInfo: CharacterSelect_Struct (1620 bytes).
     *
-    * Layout (EQMac):
-    *   race[10]     (uint16 each, offset 0)
-    *   class_[10]   (uint8 each, offset 20)
-    *   level[10]    (uint8 each, offset 30)
-    *   name[10][64] (char[64] each, offset varies)
-    *   zone[10]     (uint32 each)
-    *
-    * This is a best-effort decode — the actual struct size varies by server version.
-    * We extract what we can and log failures.
+    * Layout (eq_packet_structs.h):
+    *   name[10][64]    — 640 bytes (offset 0)
+    *   level[10]       — 10 bytes (uint8)
+    *   class_[10]      — 10 bytes (uint8)
+    *   race[10]        — 20 bytes (uint16)
+    *   zone[10]        — 40 bytes (uint32)
+    *   ... remaining fields (gender, face, equip, etc.)
     */
   def decodeCharacterSelect(data: Array[Byte]): Vector[CharacterInfo] =
-    if data.length < 40 then return Vector.empty
+    if data.length < 720 then return Vector.empty // need at least names + levels + classes + races
 
     val buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
     val chars = Vector.newBuilder[CharacterInfo]
 
     try
-      // race[10] — uint16 each (20 bytes)
-      val races = Array.fill(10)(if buf.remaining() >= 2 then buf.getShort() & 0xFFFF else 0)
-      // class_[10] — uint8 each (10 bytes)
-      val classes = Array.fill(10)(if buf.remaining() >= 1 then buf.get() & 0xFF else 0)
-      // level[10] — uint8 each (10 bytes)
-      val levels = Array.fill(10)(if buf.remaining() >= 1 then buf.get() & 0xFF else 0)
-
-      // name[10][64] — 640 bytes
+      // name[10][64] — 640 bytes (offset 0)
       val names = Array.fill(10) {
-        if buf.remaining() >= 64 then
-          val nameBytes = new Array[Byte](64)
-          buf.get(nameBytes)
-          readNullString(nameBytes)
-        else ""
+        val nameBytes = new Array[Byte](64)
+        buf.get(nameBytes)
+        readNullString(nameBytes)
       }
+      // level[10] — uint8 each (10 bytes, offset 640)
+      val levels = Array.fill(10)(buf.get() & 0xFF)
+      // class_[10] — uint8 each (10 bytes, offset 650)
+      val classes = Array.fill(10)(buf.get() & 0xFF)
+      // race[10] — uint16 each (20 bytes, offset 660)
+      val races = Array.fill(10)(buf.getShort() & 0xFFFF)
+      // zone[10] — uint32 each (40 bytes, offset 680)
+      val zones = Array.fill(10)(buf.getInt())
 
-      // Skip to zones — there are more fields between names and zones
-      // For now, just use zone=0 and we'll refine with packet captures
       for i <- 0 until 10 do
-        if names(i).nonEmpty then
+        if names(i).nonEmpty && levels(i) > 0 then
           chars += CharacterInfo(
             name = names(i),
             level = levels(i),
             classId = classes(i),
             race = races(i),
-            zone = 0,
+            zone = zones(i),
           )
     catch
       case e: Exception =>
@@ -112,6 +107,69 @@ object WorldCodec:
       val ip = readNullString(data.take(128))
       val port = ((data(128) & 0xFF) | ((data(129) & 0xFF) << 8)) // little-endian uint16
       Some(ZoneAddress(ip, port))
+
+  /** Encode OP_ApproveName (76 bytes on the wire).
+    * Server's EQPacket::Size() adds +2 for the opcode, so payload must be
+    * sizeof(NameApproval_Struct) - 2 = 76 bytes for the size check to pass.
+    * Layout: name[64] + race(u16) + class(u16) + unknown(u32×2)
+    */
+  def encodeApproveName(name: String, race: Int, classId: Int): Array[Byte] =
+    val buf = ByteBuffer.allocate(76).order(ByteOrder.LITTLE_ENDIAN)
+    val nameBytes = name.getBytes(StandardCharsets.US_ASCII)
+    val nameBuf = new Array[Byte](64)
+    System.arraycopy(nameBytes, 0, nameBuf, 0, Math.min(nameBytes.length, 63))
+    buf.put(nameBuf)
+    buf.putShort((race & 0xFFFF).toShort)
+    buf.putShort((classId & 0xFFFF).toShort)
+    buf.putInt(0) // unknown
+    buf.putInt(0) // unknown
+    buf.array()
+
+  /** Decode OP_ApproveName reply (1 byte): 1=approved, 0=rejected. */
+  def decodeNameApproval(data: Array[Byte]): Boolean =
+    data.nonEmpty && data(0) != 0
+
+  /** Encode OP_CharacterCreate: CharCreate_Struct (8452 bytes).
+    *
+    * Key offsets:
+    *   136: gender(u8), 138: race(u16), 140: class(u16)
+    *   160-172: STR/STA/CHA/DEX/INT/AGI/WIS (u16 each)
+    *   3440: start_zone(u32), 4940: deity(u16)
+    *   5422-5428: haircolor/beardcolor/eyecolor1/eyecolor2/hairstyle/beard/face
+    */
+  def encodeCharCreate(
+    gender: Int,
+    race: Int,
+    classId: Int,
+    str: Int, sta: Int, cha: Int, dex: Int, int_ : Int, agi: Int, wis: Int,
+    startZone: Int,
+    deity: Int,
+    hairColor: Int = 0, beardColor: Int = 0,
+    eyeColor1: Int = 0, eyeColor2: Int = 0,
+    hairStyle: Int = 0, beard: Int = 0, face: Int = 0,
+  ): Array[Byte] =
+    val buf = ByteBuffer.allocate(8452).order(ByteOrder.LITTLE_ENDIAN)
+    // Fill with zeros (already done by allocate)
+    buf.position(136); buf.put(gender.toByte)
+    buf.position(138); buf.putShort((race & 0xFFFF).toShort)
+    buf.position(140); buf.putShort((classId & 0xFFFF).toShort)
+    buf.position(160); buf.putShort((str & 0xFFFF).toShort)
+    buf.position(162); buf.putShort((sta & 0xFFFF).toShort)
+    buf.position(164); buf.putShort((cha & 0xFFFF).toShort)
+    buf.position(166); buf.putShort((dex & 0xFFFF).toShort)
+    buf.position(168); buf.putShort((int_ & 0xFFFF).toShort)
+    buf.position(170); buf.putShort((agi & 0xFFFF).toShort)
+    buf.position(172); buf.putShort((wis & 0xFFFF).toShort)
+    buf.position(3440); buf.putInt(startZone)
+    buf.position(4940); buf.putShort((deity & 0xFFFF).toShort)
+    buf.position(5422); buf.put(hairColor.toByte)
+    buf.position(5423); buf.put(beardColor.toByte)
+    buf.position(5424); buf.put(eyeColor1.toByte)
+    buf.position(5425); buf.put(eyeColor2.toByte)
+    buf.position(5426); buf.put(hairStyle.toByte)
+    buf.position(5427); buf.put(beard.toByte)
+    buf.position(5428); buf.put(face.toByte)
+    buf.array()
 
   private def readNullString(data: Array[Byte]): String =
     val sb = StringBuilder()

@@ -18,6 +18,9 @@ object WorldOpcodes:
   val ZoneUnavail: Short     = 0x0580.toShort  // World → Client
   val WorldLogout: Short     = 0x2340.toShort  // Client → World
   val ClientError: Short     = 0x4841.toShort  // Client → World
+  val ApproveName: Short     = 0x8B40.toShort  // Client → World: name check
+  val CharacterCreate: Short = 0x4940.toShort  // Client → World: create character
+  val DeleteCharacter: Short = 0x5a40.toShort  // Client → World: delete character
 
   def name(op: Short): String = op match
     case SendLoginInfo  => "SendLoginInfo"
@@ -33,4 +36,7 @@ object WorldOpcodes:
     case ZoneUnavail    => "ZoneUnavail"
     case WorldLogout    => "WorldLogout"
     case ClientError    => "ClientError"
+    case ApproveName    => "ApproveName"
+    case CharacterCreate => "CharacterCreate"
+    case DeleteCharacter => "DeleteCharacter"
     case other          => f"Unknown(0x${other & 0xFFFF}%04x)"

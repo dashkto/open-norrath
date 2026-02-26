@@ -6,6 +6,7 @@ Open-source EverQuest client written in Scala, targeting Project 1999 (P1999) co
 ## Prerequisites
 - JDK 21+
 - [sbt](https://www.scala-sbt.org/)
+- An EverQuest installation — copy or symlink the entire EverQuest folder into `assets/EverQuest/` (e.g. `assets/EverQuest/arena.s3d`, `assets/EverQuest/gequip.s3d`, etc.)
 
 ## Running
 ```bash
