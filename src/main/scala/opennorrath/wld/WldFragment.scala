@@ -187,11 +187,13 @@ object MaterialType:
       case 0x00000002 => MaterialType.TransparentMasked
       case 0x00000004 => MaterialType.TransparentAdditive
       case 0x00000005 => MaterialType.Transparent25
+      case 0x00000007 => MaterialType.TransparentMasked   // masked passable (vegetation)
       case 0x00000009 => MaterialType.Transparent75
       case 0x0000000A => MaterialType.Diffuse
-      case 0x0000000B => MaterialType.Diffuse
-      case 0x00000013 => MaterialType.Diffuse
+      case 0x0000000B => MaterialType.TransparentAdditive  // additive unlit
+      case 0x00000013 => MaterialType.TransparentMasked    // masked (trees/vegetation)
       case 0x00000014 => MaterialType.Diffuse
       case 0x00000015 => MaterialType.Diffuse
+      case 0x00000017 => MaterialType.TransparentAdditive  // additive
       case 0x00000053 => MaterialType.Transparent50
       case _ => MaterialType.Diffuse

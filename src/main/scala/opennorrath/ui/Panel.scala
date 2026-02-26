@@ -31,6 +31,7 @@ trait Panel:
 
   var visible: Boolean = true
   var locked: Boolean = false
+  var opacity: Float = 1.0f
 
   /** Render the panel contents. Called between ImGui.begin/end. */
   protected def renderContent(): Unit
@@ -45,6 +46,13 @@ trait Panel:
       ImGui.setNextWindowSizeConstraints(minWidth, minHeight, Float.MaxValue, Float.MaxValue)
 
     val flags = extraFlags | (if locked then ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoResize else 0)
+
+    // Apply window background opacity
+    val (bgR, bgG, bgB, _) = Colors.background
+    ImGui.pushStyleColor(ImGuiCol.WindowBg, bgR, bgG, bgB, opacity)
+    ImGui.pushStyleColor(ImGuiCol.TitleBg, bgR, bgG, bgB, opacity * 0.8f)
+    ImGui.pushStyleColor(ImGuiCol.TitleBgActive, bgR, bgG, bgB, opacity * 0.9f)
+
     ImGui.begin(title, flags)
     if fontScale != 1.0f then ImGui.setWindowFontScale(fontScale)
     renderContent()
@@ -54,15 +62,20 @@ trait Panel:
         if ImGui.menuItem("Unlock") then locked = false
       else
         if ImGui.menuItem("Lock") then locked = true
+      ImGui.separator()
+      val opacityArr = Array(opacity)
+      if ImGui.sliderFloat("Opacity", opacityArr, 0.1f, 1.0f) then
+        opacity = opacityArr(0)
       ImGui.endPopup()
 
     ImGui.end()
+    ImGui.popStyleColor(3)
 
   protected def pushColor(idx: Int, c: (Float, Float, Float, Float)): Unit =
     ImGui.pushStyleColor(idx, c._1, c._2, c._3, c._4)
 
   /** Draw a horizontal bar (HP/mana style). */
-  protected def bar(fraction: Float, color: (Float, Float, Float, Float), height: Float = 18f): Unit =
+  protected def bar(fraction: Float, color: (Float, Float, Float, Float), height: Float = Spacing.barHeight): Unit =
     val drawList = ImGui.getWindowDrawList()
     val cx = ImGui.getCursorScreenPosX()
     val cy = ImGui.getCursorScreenPosY()
@@ -71,14 +84,14 @@ trait Panel:
     // Background
     val (br, bg, bb, ba) = Colors.withAlpha(Colors.background, 0.8f)
     drawList.addRectFilled(cx, cy, cx + availW, cy + height,
-      ImGui.colorConvertFloat4ToU32(br, bg, bb, ba), 3f)
+      ImGui.colorConvertFloat4ToU32(br, bg, bb, ba), Spacing.rounding)
 
     // Fill
     val fillW = availW * fraction.max(0f).min(1f)
     if fillW > 0f then
       val (fr, fg, fb, fa) = color
       drawList.addRectFilled(cx, cy, cx + fillW, cy + height,
-        ImGui.colorConvertFloat4ToU32(fr, fg, fb, fa), 3f)
+        ImGui.colorConvertFloat4ToU32(fr, fg, fb, fa), Spacing.rounding)
 
     // Percentage text centered on the bar
     val pct = s"${(fraction * 100).toInt}%"

@@ -5,11 +5,11 @@ import org.lwjgl.glfw.GLFW.*
 enum GameAction:
   case MoveForward, MoveBackward, StrafeLeft, StrafeRight, MoveUp, MoveDown
   case FreeLook, Target
-  case TargetSelf
-  case ToggleInventory, ToggleSpellBook, DumpDebug, Escape
+  case TargetSelf, TabTarget
+  case ToggleInventory, ToggleSpellBook, DumpDebug, DetachCamera, Escape
 
 sealed trait InputBinding
-case class KeyBind(key: Int) extends InputBinding
+case class KeyBind(key: Int, shift: Boolean = false) extends InputBinding
 case class MouseBind(button: Int) extends InputBinding
 
 class KeyBindings(val bindings: Map[GameAction, Seq[InputBinding]] = KeyBindings.defaults)
@@ -25,9 +25,11 @@ object KeyBindings:
     GameAction.FreeLook     -> Seq(MouseBind(GLFW_MOUSE_BUTTON_RIGHT)),
     GameAction.Target       -> Seq(MouseBind(GLFW_MOUSE_BUTTON_LEFT)),
     GameAction.TargetSelf      -> Seq(KeyBind(GLFW_KEY_F1)),
+    GameAction.TabTarget       -> Seq(KeyBind(GLFW_KEY_TAB)),
     GameAction.ToggleInventory -> Seq(KeyBind(GLFW_KEY_I)),
     GameAction.ToggleSpellBook -> Seq(KeyBind(GLFW_KEY_B)),
     GameAction.DumpDebug    -> Seq(KeyBind(GLFW_KEY_T)),
+    GameAction.DetachCamera -> Seq(KeyBind(GLFW_KEY_T, shift = true)),
     GameAction.Escape       -> Seq(KeyBind(GLFW_KEY_ESCAPE)),
   )
 
@@ -119,14 +121,17 @@ class InputManager(window: Long, val keyBindings: KeyBindings = KeyBindings()):
   def mousePos: (Float, Float) = (_mouseX, _mouseY)
   def mouseDelta: (Float, Float) = (mouseDX, mouseDY)
 
+  private def shiftHeld: Boolean =
+    keysDown.contains(GLFW_KEY_LEFT_SHIFT) || keysDown.contains(GLFW_KEY_RIGHT_SHIFT)
+
   def isActionHeld(action: GameAction): Boolean =
     keyBindings.bindings.getOrElse(action, Seq.empty).exists {
-      case KeyBind(k) => keysDown.contains(k)
+      case KeyBind(k, shift) => keysDown.contains(k) && (shift == shiftHeld)
       case MouseBind(b) => buttonsDown.contains(b)
     }
 
   def isActionPressed(action: GameAction): Boolean =
     keyBindings.bindings.getOrElse(action, Seq.empty).exists {
-      case KeyBind(k) => keysPressed.contains(k)
+      case KeyBind(k, shift) => keysPressed.contains(k) && (shift == shiftHeld)
       case MouseBind(b) => buttonsPressed.contains(b)
     }

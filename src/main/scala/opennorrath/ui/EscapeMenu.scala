@@ -37,9 +37,9 @@ class EscapeMenu(ctx: GameContext):
     val btnW = ImGui.getContentRegionAvailX()
 
     ImGuiTheme.pushPrimaryButton()
-    if ImGui.button("Resume", btnW, 28f) then
+    if ImGui.button("Resume", btnW, Spacing.buttonHeight) then
       isOpen = false
-    if ImGui.button("Settings", btnW, 28f) then
+    if ImGui.button("Settings", btnW, Spacing.buttonHeight) then
       settingsOpen.set(true)
     ImGuiTheme.popButtonStyle()
 
@@ -48,7 +48,7 @@ class EscapeMenu(ctx: GameContext):
     ImGui.spacing()
 
     ImGuiTheme.pushDangerButton()
-    if ImGui.button("Quit", btnW, 28f) then
+    if ImGui.button("Quit", btnW, Spacing.buttonHeight) then
       glfwSetWindowShouldClose(ctx.window, true)
     ImGuiTheme.popButtonStyle()
 

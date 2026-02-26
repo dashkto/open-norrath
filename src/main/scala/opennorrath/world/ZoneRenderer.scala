@@ -18,6 +18,7 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings()):
 
   private val wld = WldFile(zoneWld.data)
   private val zoneMesh = ZoneGeometry.extract(wld)
+  val collision = ZoneCollision(zoneMesh)
 
   // Load line lights from companion .txt file
   private val lights: List[LightBaker.LineLight] =

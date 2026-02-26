@@ -134,9 +134,7 @@ object ZoneCodec:
     * Mac Spawn_Struct is 224 bytes (packed).
     */
   def decodeSpawn(data: Array[Byte], offset: Int = 0): Option[SpawnData] =
-    if data.length - offset < 224 then
-      println(s"[ZoneCodec] Spawn too short: ${data.length - offset}B (need 224)")
-      return None
+    if data.length - offset < 224 then return None
 
     try
       val buf = ByteBuffer.wrap(data, offset, 224).order(ByteOrder.LITTLE_ENDIAN)
@@ -239,7 +237,6 @@ object ZoneCodec:
       ))
     catch
       case e: Exception =>
-        println(s"[ZoneCodec] Error decoding spawn: ${e.getMessage}")
         None
 
   /** Decode OP_ZoneSpawns: multiple Spawn_Struct packed back to back. */
@@ -249,9 +246,7 @@ object ZoneCodec:
     while offset + 224 <= data.length do
       decodeSpawn(data, offset).foreach(spawns += _)
       offset += 224
-    val result = spawns.result()
-    println(s"[ZoneCodec] Decoded ${result.size} zone spawns from ${data.length}B")
-    result
+    spawns.result()
 
   /** Decode a single SpawnPositionUpdate_Struct (15 bytes) from a ByteBuffer. */
   private def decodeSingleMobUpdate(buf: ByteBuffer): MobPositionUpdate =
@@ -302,9 +297,7 @@ object ZoneCodec:
 
   /** Decode OP_NewZone: Mac NewZone_Struct (572 bytes). */
   def decodeNewZone(data: Array[Byte]): Option[NewZoneInfo] =
-    if data.length < 516 then // minimum useful size
-      println(s"[ZoneCodec] NewZone too short: ${data.length}B")
-      return None
+    if data.length < 516 then return None
 
     try
       val buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
@@ -374,7 +367,7 @@ object ZoneCodec:
       ))
     catch
       case e: Exception =>
-        println(s"[ZoneCodec] Error decoding NewZone: ${e.getMessage}")
+        // decode error
         None
 
   /** Decode OP_PlayerProfile: Mac PlayerProfile_Struct (8460 bytes).
@@ -382,7 +375,7 @@ object ZoneCodec:
     */
   def decodePlayerProfile(data: Array[Byte]): Option[PlayerProfileData] =
     if data.length < 5612 then
-      println(s"[ZoneCodec] PlayerProfile too short: ${data.length}B")
+      // too short
       return None
 
     try
@@ -536,7 +529,7 @@ object ZoneCodec:
       ))
     catch
       case e: Exception =>
-        println(s"[ZoneCodec] Error decoding PlayerProfile: ${e.getMessage}")
+        // decode error
         None
 
   /** Decode ServerZoneEntry_Struct (356 bytes) — the server's response to our
@@ -548,7 +541,7 @@ object ZoneCodec:
     */
   def decodeServerZoneEntry(data: Array[Byte]): Option[SpawnData] =
     if data.length < 356 then
-      println(s"[ZoneCodec] ServerZoneEntry too short: ${data.length}B (need 356)")
+      // too short
       return None
 
     try
@@ -656,7 +649,7 @@ object ZoneCodec:
       ))
     catch
       case e: Exception =>
-        println(s"[ZoneCodec] Error decoding ServerZoneEntry: ${e.getMessage}")
+        // decode error
         None
 
   /** Decode OP_HPUpdate: SpawnHPUpdate_Struct (12 bytes). */
@@ -1032,6 +1025,10 @@ object ZoneCodec:
     buf.position(base + 254)
     val magic = buf.get() & 0xFF          // 0254
 
+    // Stackable at offset 0276 (inside common union)
+    buf.position(base + 276)
+    val stackable = buf.get()             // 0276: 1=stackable, 3=normal, 0=not stackable
+
     // Charges at offset 0278
     buf.position(base + 278)
     val charges = buf.get()               // 0278 (signed)
@@ -1067,7 +1064,32 @@ object ZoneCodec:
       damage = if common then damage else 0,
       delay = if common then delay else 0,
       charges = charges,
+      stackable = common && stackable == 1,
     )
+
+  // ===========================================================================
+  // Group
+  // ===========================================================================
+
+  /** Decode GroupUpdate_Struct: action(4) + yourname(64) + 5×membername(64) + leadername(64).
+    * Returns (memberNames, leaderName). Only emitted for action=0 (full update).
+    */
+  def decodeGroupUpdate(data: Array[Byte]): Option[(Vector[String], String)] =
+    if data.length < 452 then return None
+    val buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
+    val action = buf.getInt()
+    // Skip yourname (64 bytes)
+    buf.position(buf.position() + 64)
+    val members = Vector.newBuilder[String]
+    for _ <- 0 until 5 do
+      val nameBytes = new Array[Byte](64)
+      buf.get(nameBytes)
+      val name = readNullStr(nameBytes)
+      if name.nonEmpty then members += name
+    val leaderBytes = new Array[Byte](64)
+    buf.get(leaderBytes)
+    val leader = readNullStr(leaderBytes)
+    Some((members.result(), leader))
 
   // ===========================================================================
   // Helpers

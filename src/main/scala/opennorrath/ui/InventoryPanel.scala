@@ -18,7 +18,7 @@ class InventoryPanel extends Panel:
   val defaultY = 50f
   val defaultWidth = 800f
   val defaultHeight = 580f
-  override def fontScale: Float = 0.9f
+  override def fontScale: Float = Spacing.fontScaleMedium
 
   visible = false
   private val pOpen = new ImBoolean(true)
@@ -83,11 +83,11 @@ class InventoryPanel extends Panel:
     ),
   )
 
-  private val SlotBoxH = 32f
-  private val SlotSize = 52f
-  private val SlotGap = 4f
-  private val SlotPad = 4f
-  private val ColPad = 8f
+  private val SlotBoxH = Spacing.slotBoxHeight
+  private val SlotSize = Spacing.slotSize
+  private val SlotGap = Spacing.slotGap
+  private val SlotPad = Spacing.slotPad
+  private val ColPad = Spacing.columnGap
 
   override protected def renderContent(): Unit =
     val availW = ImGui.getContentRegionAvailX()
@@ -194,18 +194,26 @@ class InventoryPanel extends Panel:
     val bgColor = if item.isDefined then Colors.withAlpha(Colors.darkContainer, 0.6f) else Colors.withAlpha(Colors.background, 0.5f)
     val (br, bg, bb, ba) = bgColor
     drawList.addRectFilled(cx, cy, cx + size, cy + size,
-      ImGui.colorConvertFloat4ToU32(br, bg, bb, ba), 3f)
+      ImGui.colorConvertFloat4ToU32(br, bg, bb, ba), Spacing.rounding)
 
     // Border
     val (borR, borG, borB, borA) = Colors.withAlpha(Colors.darkContainer, 0.8f)
     drawList.addRect(cx, cy, cx + size, cy + size,
-      ImGui.colorConvertFloat4ToU32(borR, borG, borB, borA), 3f)
+      ImGui.colorConvertFloat4ToU32(borR, borG, borB, borA), Spacing.rounding)
 
     item match
       case Some(it) =>
         val iconSize = size - 6f
         ImGui.setCursorScreenPos(cx + 3f, cy + 3f)
         ItemIcons.render(it.icon, iconSize)
+        // Stack count overlay (bottom-right corner)
+        if it.stackCount > 0 then
+          val countStr = it.stackCount.toString
+          val countW = ImGui.calcTextSize(countStr).x
+          val countH = ImGui.calcTextSize(countStr).y
+          val (cr, cg, cb, ca) = Colors.cream
+          drawList.addText(cx + size - countW - 3f, cy + size - countH - 2f,
+            ImGui.colorConvertFloat4ToU32(cr, cg, cb, ca), countStr)
       case None =>
         val textW = ImGui.calcTextSize(label).x
         val textH = ImGui.calcTextSize(label).y
@@ -252,12 +260,12 @@ class InventoryPanel extends Panel:
     val bgColor = if item.isDefined then Colors.withAlpha(Colors.darkContainer, 0.6f) else Colors.withAlpha(Colors.background, 0.5f)
     val (br, bg, bb, ba) = bgColor
     drawList.addRectFilled(cx, cy, cx + width, cy + SlotBoxH,
-      ImGui.colorConvertFloat4ToU32(br, bg, bb, ba), 3f)
+      ImGui.colorConvertFloat4ToU32(br, bg, bb, ba), Spacing.rounding)
 
     // Border
     val (borR, borG, borB, borA) = Colors.withAlpha(Colors.darkContainer, 0.8f)
     drawList.addRect(cx, cy, cx + width, cy + SlotBoxH,
-      ImGui.colorConvertFloat4ToU32(borR, borG, borB, borA), 3f)
+      ImGui.colorConvertFloat4ToU32(borR, borG, borB, borA), Spacing.rounding)
 
     item match
       case Some(it) =>

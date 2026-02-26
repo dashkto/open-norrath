@@ -40,22 +40,29 @@ object EqCoords:
   def serverToGl(serverY: Float, serverX: Float, serverZ: Float): Vector3f =
     Vector3f(serverY, serverZ, -serverX)
 
+  /** Convert GL position back to server coordinates (inverse of serverToGl).
+    * GL(x,y,z) → server(y=x, x=-z, z=y)
+    */
+  inline def glToServer(glX: Float, glY: Float, glZ: Float): (Float, Float, Float) =
+    (glX, -glZ, glY) // (serverY, serverX, serverZ)
+
   // ---------------------------------------------------------------------------
   // Heading conversion
   // ---------------------------------------------------------------------------
 
-  /** Convert a spawn heading byte (0-255, 0=north, clockwise) to camera yaw degrees.
-    * EQ north (+Y server / -Z GL) corresponds to camera yaw -90 degrees.
+  /** Convert a spawn heading byte (0-255, 0=east, CCW) to camera yaw degrees.
+    * Camera yaw uses CW convention, so we negate.
     */
   inline def spawnHeadingToYaw(heading: Int): Float =
-    (heading * 360f / 256f) - 90f
+    -(heading * 360f / 256f)
 
-  /** Convert a profile heading float (0-512, 0=north, clockwise) to camera yaw degrees. */
+  /** Convert a profile heading float (0-512, 0=east, CCW) to camera yaw degrees. */
   inline def profileHeadingToYaw(heading: Float): Float =
-    (heading * 360f / 512f) - 90f
+    -(heading * 360f / 512f)
 
-  /** Convert a spawn heading byte (0-255, 0=north, clockwise) to model rotation radians.
-    * EQ models face south in their rest pose, so add π to flip them to face north at heading 0.
+  /** Convert a spawn heading byte (0-255, 0=east, CCW) to model rotation radians.
+    * EQ models face east (+X) in their rest pose after s3dToGl conversion,
+    * so heading 0 = no rotation. Heading increases CCW when viewed from above.
     */
   inline def spawnHeadingToRadians(heading: Int): Float =
-    Math.PI.toFloat - (heading * 2f * Math.PI.toFloat / 256f)
+    heading * 2f * Math.PI.toFloat / 256f

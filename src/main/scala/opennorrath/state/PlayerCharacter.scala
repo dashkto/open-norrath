@@ -1,5 +1,6 @@
 package opennorrath.state
 
+import org.joml.Vector3f
 import opennorrath.network.{SpellBuff, ZoneEvent}
 
 /** Runtime state for the player's character while in a zone.
@@ -27,6 +28,20 @@ class PlayerCharacter(
 ):
   def hpPercent: Float = if maxHp > 0 then currentHp.toFloat / maxHp else 0f
   def manaPercent: Float = if maxMana > 0 then currentMana.toFloat / maxMana else 0f
+
+  /** Player foot position in GL space. Updated by CameraController when attached. */
+  val position: Vector3f = Vector3f()
+
+  /** Player heading in degrees (0-360, CW from east). Updated when camera yaw changes. */
+  var headingDeg: Float = 0f
+
+  /** Player heading as EQ byte (0-255, CCW from east) for model rotation. */
+  def headingByte: Int =
+    val h = ((headingDeg * 256f / 360f).toInt % 256 + 256) % 256
+    h
+
+  /** Whether the player is currently moving. */
+  var moving: Boolean = false
 
   val inventory: Inventory = Inventory()
 

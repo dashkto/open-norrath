@@ -11,7 +11,7 @@ class CharacterInfoPanel(player: PlayerCharacter) extends Panel:
   val title = "##charinfo"
   val defaultX = 10f
   val defaultY = 10f
-  val defaultWidth = 200f
+  val defaultWidth = Spacing.panelWidthNarrow
   val defaultHeight = 90f
   override def extraFlags: Int =
     ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoScrollbar
@@ -29,8 +29,8 @@ class CharacterInfoPanel(player: PlayerCharacter) extends Panel:
     ImGui.popStyleColor()
 
     // HP bar
-    bar(player.hpPercent, Colors.danger, 14f)
+    bar(player.hpPercent, Colors.danger, Spacing.barHeightSmall)
 
     // Mana bar
     if EqData.usesMana(player.classId) then
-      bar(player.manaPercent, Colors.secondary, 14f)
+      bar(player.manaPercent, Colors.secondary, Spacing.barHeightSmall)

@@ -52,7 +52,7 @@ class TargetingSystem:
       val cx = modelMatrix.m30()
       val cy = modelMatrix.m31()
       val cz = modelMatrix.m32()
-      val hw = Math.max(width, depth) * 0.6f
+      val hw = Math.max(width, depth) * 0.4f
 
       val x0 = cx - hw; val x1 = cx + hw
       val y0 = cy - height * 0.5f; val y1 = cy + height * 0.5f

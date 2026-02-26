@@ -45,12 +45,8 @@ class ZoneCharacter(
 
   /** GL-space velocity computed from consecutive server position updates. */
   val velocity: Vector3f = Vector3f()
-
-  /** Previous server position, for computing velocity on next update. */
-  val prevServerPos: Vector3f = Vector3f(position)
-
-  /** Timestamp (nanos) of last server position update. */
-  var lastUpdateNanos: Long = System.nanoTime()
+  private val prevServerPos: Vector3f = Vector3f(position)
+  private var lastUpdateNanos: Long = System.nanoTime()
 
   def hpFraction: Float =
     if maxHp > 0 then curHp.toFloat / maxHp.toFloat else 1f
@@ -77,6 +73,17 @@ class ZoneCharacter(
     heading = newHeading
     moving = isMoving
     animation = anim
+
+  /** Heading derived from velocity direction (0-255 EQ format, 0=east, CCW).
+    * When moving, the server heading can lag behind direction changes.
+    */
+  def facingHeading: Int =
+    if moving && (velocity.x != 0f || velocity.z != 0f) then
+      // GL: model faces +X (east) at rest. Convert velocity to CCW angle from east.
+      val radians = Math.atan2(-velocity.z, velocity.x).toFloat
+      val h = (radians * 256f / (2f * Math.PI.toFloat)).toInt
+      ((h % 256) + 256) % 256
+    else heading
 
   /** Advance position along velocity. Called each frame for moving characters. */
   def interpolate(dt: Float): Unit =

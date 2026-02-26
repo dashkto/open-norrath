@@ -24,7 +24,7 @@ class NameplateRenderer:
 
   // --- Text texture cache ---
   private case class NameTexture(texId: Int, widthPx: Int, heightPx: Int)
-  private val cache = scala.collection.mutable.Map.empty[String, NameTexture]
+  private val cache = scala.collection.mutable.Map.empty[(String, Int), NameTexture]
 
   private val TextFont = Fonts.awt(Fonts.bold, 24f)
   private val WorldScale = 0.035f // pixels → world units
@@ -81,7 +81,8 @@ class NameplateRenderer:
   /** Draw all nameplates. Call after 3D scene, before ImGui panels. */
   def draw(shader: Shader, viewMatrix: Matrix4f,
            characters: scala.collection.Map[Int, opennorrath.state.ZoneCharacter],
-           nameplateData: Iterable[(Int, Matrix4f, Float)]): Unit =
+           nameplateData: Iterable[(Int, Matrix4f, Float)],
+           targetId: Option[Int] = None): Unit =
     ensureInit()
 
     // Billboard axes from view matrix (camera right and up in world space)
@@ -99,7 +100,8 @@ class NameplateRenderer:
       characters.get(spawnId).foreach { zc =>
         val name = zc.displayName
         if name.nonEmpty then
-          val tex = getTexture(name)
+          val color = if targetId.contains(spawnId) then Colors.primary else Colors.secondary
+          val tex = getTexture(name, color)
 
           // World position above head
           val wx = modelMatrix.m30()
@@ -156,10 +158,11 @@ class NameplateRenderer:
           quadCount += 1
       }
 
-  private def getTexture(name: String): NameTexture =
-    cache.getOrElseUpdate(name, createTexture(name))
+  private def getTexture(name: String, color: (Float, Float, Float, Float)): NameTexture =
+    val key = (name, color.hashCode())
+    cache.getOrElseUpdate(key, createTexture(name, color))
 
-  private def createTexture(name: String): NameTexture =
+  private def createTexture(name: String, color: (Float, Float, Float, Float)): NameTexture =
     // Measure text
     val measureImg = new BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB)
     val measureG = measureImg.createGraphics()
@@ -178,7 +181,7 @@ class NameplateRenderer:
     g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
     g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON)
     g.setFont(TextFont)
-    g.setColor(Colors.toAwt(Colors.secondary))
+    g.setColor(Colors.toAwt(color))
     g.drawString(name, padX, metrics.getAscent() + 2)
     g.dispose()
 

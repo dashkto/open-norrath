@@ -11,7 +11,7 @@ class TargetPanel extends Panel:
   val title = "##targetinfo"
   val defaultX = 220f
   val defaultY = 10f
-  val defaultWidth = 200f
+  val defaultWidth = Spacing.panelWidthNarrow
   val defaultHeight = 60f
   override def extraFlags: Int =
     ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoScrollbar
@@ -30,9 +30,5 @@ class TargetPanel extends Panel:
         ImGui.text(zc.displayName)
         ImGui.popStyleColor()
         ImGui.popFont()
-        ImGui.sameLine()
-        pushColor(ImGuiCol.Text, Colors.textDim)
-        ImGui.text(s"Lv${zc.level} ${EqData.classAbbrev(zc.classId)}")
-        ImGui.popStyleColor()
 
-        bar(zc.hpFraction, Colors.danger, 14f)
+        bar(zc.hpFraction, Colors.danger, Spacing.barHeightSmall)

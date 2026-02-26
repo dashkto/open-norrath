@@ -55,7 +55,6 @@ class ServerSelectScreen(
             if !loginError then
               statusText = s"Play approved - connecting to world..."
               statusColor = Colors.success
-            println(s"[ServerSelect] World key received: $key")
           case LoginEvent.LoginComplete =>
             if !loginError then
               statusText = "Connecting to world server..."
@@ -131,10 +130,8 @@ class ServerSelectScreen(
   override def dispose(): Unit = ()
 
   private def selectCurrent(): Unit =
-    println(s"[ServerSelect] selectCurrent() called, servers=${servers.size}, waiting=$waiting")
     if servers.nonEmpty && !waiting then
       val server = servers(selectedIndex)
-      println(s"[ServerSelect] Selecting server: ${server.name} (${server.ip})")
       statusText = s"Connecting to ${server.name}..."
       statusColor = Colors.text
       waiting = true
@@ -157,8 +154,7 @@ class ServerSelectScreen(
               statusText = msg
               statusColor = Colors.error
               waiting = false
-            case WorldEvent.StateChanged(s) =>
-              println(s"[ServerSelect] World state: $s")
+            case WorldEvent.StateChanged(_) => ()
             case _ => ()
           if !done then wEvent = wc.pollEvent()
 
@@ -168,8 +164,6 @@ class ServerSelectScreen(
     val accountId = loginClient.sessionId.stripPrefix("LS#").toIntOption.getOrElse(0)
     val serverIp = servers.lift(selectedIndex).map(_.ip).getOrElse(ctx.settings.login.host)
     val worldPort = ctx.settings.login.worldPort
-
-    println(s"[ServerSelect] Connecting to world $serverIp:$worldPort (account=$accountId, key=${loginClient.worldKey})")
 
     // Stop login session, start world session
     Game.loginSession.foreach(_.stop())

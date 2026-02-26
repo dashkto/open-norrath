@@ -576,7 +576,9 @@ case class InventoryItem(
   damage: Int,
   delay: Int,
   charges: Int,
+  stackable: Boolean,
 ):
+  def stackCount: Int = if stackable && charges > 1 then charges else 0
   /** Check if this item can be placed in the given equipment slot (0-21). */
   def canEquipIn(slotId: Int): Boolean =
     if slotId < 0 || slotId > 21 then true // general/bag slots always allowed

@@ -61,11 +61,9 @@ class LoginClient extends PacketHandler:
 
   /** Request to play on a specific server. Called from game thread. */
   def selectServer(ip: String): Unit =
-    println(s"[Login] selectServer($ip) — queuing PlayEverquestRequest")
     state = LoginState.PlayRequested
     emit(LoginEvent.StateChanged(state))
     queueAppPacket(LoginOpcodes.PlayEverquestRequest, LoginCodec.encodePlayRequest(ip))
-    println(s"[Login] PlayEverquestRequest queued, outQueue size=${outQueue.size()}")
 
   /** Called from network thread when a decoded packet arrives. */
   def handlePacket(packet: InboundPacket): Unit =
@@ -76,8 +74,6 @@ class LoginClient extends PacketHandler:
     }
 
     if packet.opcode == 0 then return // pure ACK
-
-    println(s"[Login] Recv ${LoginOpcodes.name(packet.opcode)} (${packet.payload.length}B)")
 
     packet.opcode match
       case LoginOpcodes.SessionReady =>
@@ -105,7 +101,6 @@ class LoginClient extends PacketHandler:
         // Server reuses the same opcode for the response
         val list = LoginCodec.decodeServerList(packet.payload)
         servers = list.servers
-        println(s"[Login] Parsed ${servers.size} server(s): ${servers.map(_.name).mkString(", ")}")
         state = LoginState.ServerListReceived
         emit(LoginEvent.ServerListUpdated(servers))
         emit(LoginEvent.StateChanged(state))
@@ -137,8 +132,7 @@ class LoginClient extends PacketHandler:
       case LoginOpcodes.LoginUnknown2 =>
         () // Expected response to LoginUnknown1, ignore
 
-      case other =>
-        println(s"[Login] Unhandled opcode: ${LoginOpcodes.name(other)}")
+      case _ => ()
 
   /** Called periodically from network thread. Produces ACK if needed. */
   def tick(): Unit =

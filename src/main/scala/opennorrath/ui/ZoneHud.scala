@@ -16,6 +16,7 @@ class ZoneHud(ctx: GameContext, characters: scala.collection.Map[Int, ZoneCharac
   private val escapeMenu = EscapeMenu(ctx)
   private val inventoryPanel = InventoryPanel()
   val targetPanel = TargetPanel()
+  private val groupPanel = GroupPanel(characters)
   private var chatPanel: TextPanel = null
   private var eventHandler: ZoneEventHandler = null
 
@@ -28,6 +29,12 @@ class ZoneHud(ctx: GameContext, characters: scala.collection.Map[Int, ZoneCharac
       if targetPanel.target.exists(_.spawnId == id) then targetPanel.target = None
     case _ => ()
 
+  val groupListener: ZoneEvent => Unit =
+    case ZoneEvent.GroupUpdated(members, leader) =>
+      groupPanel.members = members
+      groupPanel.leader = leader
+    case _ => ()
+
   def init(): Unit =
     chatPanel = TextPanel("Main", onSubmit = text => {
       eventHandler.submitChat(text)
@@ -36,6 +43,12 @@ class ZoneHud(ctx: GameContext, characters: scala.collection.Map[Int, ZoneCharac
     Game.zoneSession.foreach { session =>
       session.client.addListener(eventHandler.listener)
       session.client.addListener(spawnRemovedListener)
+      session.client.addListener(groupListener)
+      // Seed group from player profile (loaded before zone entry)
+      session.client.profile.foreach { p =>
+        if p.groupMembers.nonEmpty then
+          groupPanel.members = p.groupMembers.toVector
+      }
     }
 
   /** A ZoneCharacter proxy for the local player, used for self-targeting. */
@@ -88,6 +101,7 @@ class ZoneHud(ctx: GameContext, characters: scala.collection.Map[Int, ZoneCharac
     charInfoPanel.foreach(_.render())
     buffPanel.foreach(_.render())
     targetPanel.render()
+    groupPanel.render()
     inventoryPanel.render()
     spellBookPanel.foreach(_.render())
     chatPanel.render()
@@ -97,4 +111,5 @@ class ZoneHud(ctx: GameContext, characters: scala.collection.Map[Int, ZoneCharac
     Game.zoneSession.foreach { session =>
       session.client.removeListener(eventHandler.listener)
       session.client.removeListener(spawnRemovedListener)
+      session.client.removeListener(groupListener)
     }

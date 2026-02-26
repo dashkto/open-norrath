@@ -62,15 +62,13 @@ class CharacterSelectScreen(
     while event.isDefined do
       event.get match
         case WorldEvent.ZoneInfo(addr) =>
-          println(s"[CharSelect] Got zone server: ${addr.ip}:${addr.port}")
           Game.setScreen(ZoneLoadingScreen(ctx, addr, enteredCharName))
           return
         case WorldEvent.Error(msg) =>
           statusText = msg
           statusColor = Colors.error
           entering = false
-        case WorldEvent.StateChanged(s) =>
-          println(s"[CharSelect] World state: $s")
+        case WorldEvent.StateChanged(_) => ()
         case _ => ()
       event = worldClient.pollEvent()
 

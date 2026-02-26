@@ -166,6 +166,7 @@ class ZoneEventHandler(chatPanel: TextPanel, characters: scala.collection.Map[In
   private def spawnName(id: Int): String =
     characters.get(id).map(_.displayName)
       .orElse(Game.player.filter(_ => Game.zoneSession.exists(_.client.mySpawnId == id)).map(_.name))
+      .orElse(Game.zoneSession.flatMap(_.client.spawns.get(id)).map(s => ZoneCharacter.cleanName(s.name)))
       .getOrElse(s"#$id")
 
   private def conLevelColor(targetLevel: Int): (Float, Float, Float, Float) =

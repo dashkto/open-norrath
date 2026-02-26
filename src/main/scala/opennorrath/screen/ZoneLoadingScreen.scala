@@ -58,7 +58,6 @@ class ZoneLoadingScreen(
         val zc = session.client
         val shortName = zc.zoneInfo.map(_.zoneShortName).getOrElse("arena")
         val zonePath = s"assets/EverQuest/$shortName.s3d"
-        println(s"[ZoneLoading] Zone ready: $zonePath")
         transitioned = true
         Game.setScreen(ZoneScreen(ctx, zonePath, zc.selfSpawn, zc.profile))
       }

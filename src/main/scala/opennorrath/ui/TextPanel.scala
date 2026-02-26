@@ -28,7 +28,7 @@ class TextPanel(
   val defaultY = 500f
   val defaultWidth = 450f
   val defaultHeight = 200f
-  override def fontScale: Float = 0.85f
+  override def fontScale: Float = Spacing.fontScaleSmall
   override def extraFlags: Int = ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse
 
   private val maxLines = 200

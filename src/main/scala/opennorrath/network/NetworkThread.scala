@@ -53,13 +53,11 @@ class NetworkThread(handler: PacketHandler):
               address = InetSocketAddress(host, port)
               socket = DatagramSocket()
               socket.setSoTimeout(50) // 50ms for responsive polling
-              println(s"[Network] Connecting to $host:$port")
 
             case NetCommand.SendRaw(data) =>
               if socket != null && address != null && !socket.isClosed then
                 val packet = DatagramPacket(data, data.length, address)
                 socket.send(packet)
-                println(s"[Network] Sent ${data.length}B: ${OldPacket.hexDump(data, Math.min(data.length, 32))}...")
 
             case NetCommand.Disconnect =>
               if socket != null then
@@ -75,11 +73,10 @@ class NetworkThread(handler: PacketHandler):
             socket.receive(packet)
             val data = new Array[Byte](packet.getLength)
             System.arraycopy(recvBuf, 0, data, 0, packet.getLength)
-            println(s"[Network] Recv ${data.length}B: ${OldPacket.hexDump(data, Math.min(data.length, 32))}...")
 
             OldPacket.decode(data, data.length) match
               case Some(decoded) => handler.handlePacket(decoded)
-              case None => println(s"[Network] Failed to decode packet (${data.length}B)")
+              case None => ()
           catch
             case _: SocketTimeoutException => () // normal
 

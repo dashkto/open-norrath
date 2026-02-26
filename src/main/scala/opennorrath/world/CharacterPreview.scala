@@ -28,7 +28,7 @@ class CharacterPreview(assetsDir: String):
   private var currentChar: Option[AnimatedCharacter] = None
   private var currentBuild: Option[ZoneRenderer.CharBuild] = None
   private var currentCode = ""
-  private var rotation = 0f
+  private var rotation = -90f  // start facing camera (+Z)
 
   // Load global character models
   val characterBuilds: Map[String, ZoneRenderer.CharBuild] = loadGlobalCharacters()
@@ -36,7 +36,7 @@ class CharacterPreview(assetsDir: String):
   def setCharacter(modelCode: String): Unit =
     if modelCode == currentCode then return
     currentCode = modelCode
-    rotation = 0f
+    rotation = -90f
 
     // Clean up previous
     currentChar.foreach(_.glMesh.cleanup())

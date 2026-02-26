@@ -14,7 +14,7 @@ class SpellBookPanel(player: PlayerCharacter) extends Panel:
   val defaultY = 80f
   val defaultWidth = 250f
   val defaultHeight = 400f
-  override def fontScale: Float = 0.85f
+  override def fontScale: Float = Spacing.fontScaleSmall
 
   visible = false
   private val pOpen = new ImBoolean(true)

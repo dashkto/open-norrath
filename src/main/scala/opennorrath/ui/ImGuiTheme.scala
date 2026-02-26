@@ -10,12 +10,12 @@ object ImGuiTheme:
     val style = ImGui.getStyle()
 
     // Rounding & spacing
-    style.setWindowRounding(4f)
-    style.setFrameRounding(3f)
-    style.setGrabRounding(2f)
-    style.setWindowPadding(8f, 8f)
-    style.setFramePadding(4f, 1f)
-    style.setItemSpacing(8f, 6f)
+    style.setWindowRounding(Spacing.rounding)
+    style.setFrameRounding(Spacing.rounding)
+    style.setGrabRounding(Spacing.rounding)
+    style.setWindowPadding(Spacing.pad, Spacing.pad)
+    style.setFramePadding(Spacing.framePadX, Spacing.framePadY)
+    style.setItemSpacing(Spacing.itemSpacingX, Spacing.itemSpacingY)
     style.setWindowTitleAlign(0.5f, 0.5f)
 
     // Colors

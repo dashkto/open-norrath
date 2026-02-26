@@ -73,6 +73,9 @@ enum ZoneEvent:
   case GroundItemSpawned(item: GroundItemData)
   case ZonePointsLoaded(points: Vector[ZonePointData])
 
+  // Group
+  case GroupUpdated(members: Vector[String], leader: String)
+
   // Zone transitions
   case ZoneChangeRequested(req: ZoneChangeRequest)
 
@@ -234,7 +237,6 @@ class ZoneClient extends PacketHandler:
         rawOpt.flatMap(ZoneCodec.decodePlayerProfile) match
           case Some(pp) =>
             profile = Some(pp)
-            println(s"[Zone] Profile: ${pp.name} L${pp.level} ${pp.classId} @ zone ${pp.zoneId}")
             state = ZoneState.WaitingForZone
             emit(ZoneEvent.ProfileReceived(pp))
             emit(ZoneEvent.StateChanged(state))
@@ -242,14 +244,12 @@ class ZoneClient extends PacketHandler:
             queueAppPacket(ZoneOpcodes.SetServerFilter, ZoneCodec.encodeServerFilter)
             queueAppPacket(ZoneOpcodes.ReqNewZone, ZoneCodec.encodeReqNewZone)
           case None =>
-            println(s"[Zone] Failed to decrypt/decompress PlayerProfile (${pkt.payload.length}B)")
             emit(ZoneEvent.Error("Failed to decode player profile"))
 
       case ZoneOpcodes.NewZone =>
         ZoneCodec.decodeNewZone(pkt.payload) match
           case Some(nz) =>
             zoneInfo = Some(nz)
-            println(s"[Zone] Zone: ${nz.zoneLongName} (${nz.zoneShortName})")
             emit(ZoneEvent.ZoneDataReceived(nz))
             if state == ZoneState.WaitingForZone then
               state = ZoneState.RequestingSpawns
@@ -260,17 +260,13 @@ class ZoneClient extends PacketHandler:
             emit(ZoneEvent.Error("Failed to decode zone data"))
 
       case ZoneOpcodes.TimeOfDay =>
-        ZoneCodec.decodeTimeOfDay(pkt.payload).foreach { time =>
-          println(s"[Zone] Time: ${time.hour}:${time.minute} day ${time.day}/${time.month}/${time.year}")
-          emit(ZoneEvent.TimeReceived(time))
-        }
+        ZoneCodec.decodeTimeOfDay(pkt.payload).foreach(time => emit(ZoneEvent.TimeReceived(time)))
 
       // --- Spawns ---
 
       case ZoneOpcodes.ZoneEntry =>
         // Server sends our own spawn back as ServerZoneEntry_Struct (356 bytes, unencrypted)
         ZoneCodec.decodeServerZoneEntry(pkt.payload).foreach { spawn =>
-          println(s"[Zone] Self spawn: ${spawn.name} L${spawn.level} race=${spawn.race} @ (${spawn.y}, ${spawn.x}, ${spawn.z})")
           selfSpawn = Some(spawn)
           // The server will later assign our spawn ID via SpawnAppearance(SpawnID)
           emit(ZoneEvent.SpawnAdded(spawn))
@@ -279,13 +275,9 @@ class ZoneClient extends PacketHandler:
       case ZoneOpcodes.ZoneSpawns =>
         // ZoneSpawns are encrypted + zlib compressed (mac.cpp:461-462)
         val rawOpt = PacketCrypto.decryptAndInflateSpawns(pkt.payload)
-        val rawData = rawOpt.getOrElse {
-          println(s"[Zone] Failed to decrypt/decompress ZoneSpawns (${pkt.payload.length}B)")
-          pkt.payload // fall through and try raw (might work if uncompressed)
-        }
+        val rawData = rawOpt.getOrElse(pkt.payload)
         val spawnList = ZoneCodec.decodeZoneSpawns(rawData)
         for s <- spawnList do spawns(s.spawnId) = s
-        println(s"[Zone] ${spawnList.size} zone spawns loaded (${spawns.size} total)")
         emit(ZoneEvent.SpawnsLoaded(spawnList))
 
       case ZoneOpcodes.NewSpawn =>
@@ -333,10 +325,8 @@ class ZoneClient extends PacketHandler:
           // SpawnAppearance(SpawnID) assigns our spawn ID during zone entry
           if change.appearanceType == SpawnAppearanceChange.SpawnID && state == ZoneState.RequestingSpawns then
             mySpawnId = change.parameter
-            println(s"[Zone] My spawn ID: $mySpawnId")
             state = ZoneState.InZone
             emit(ZoneEvent.StateChanged(state))
-            println("[Zone] === Zone entry complete, InZone ===")
             // Send initial position to trigger server's CompleteConnect → ZoneSpawns
             selfSpawn.foreach { s =>
               sendPosition(PlayerPosition(spawnId = mySpawnId, y = s.y, x = s.x, z = s.z,
@@ -387,7 +377,6 @@ class ZoneClient extends PacketHandler:
 
       case ZoneOpcodes.SpawnDoor =>
         val doors = ZoneCodec.decodeDoors(pkt.payload)
-        println(s"[Zone] ${doors.size} door(s) loaded")
         emit(ZoneEvent.DoorsLoaded(doors))
 
       case ZoneOpcodes.GroundSpawn =>
@@ -395,16 +384,18 @@ class ZoneClient extends PacketHandler:
 
       case ZoneOpcodes.SendZonepoints =>
         val points = ZoneCodec.decodeZonePoints(pkt.payload)
-        println(s"[Zone] ${points.size} zone point(s) loaded")
         emit(ZoneEvent.ZonePointsLoaded(points))
+
+      // --- Group ---
+
+      case ZoneOpcodes.GroupUpdate =>
+        ZoneCodec.decodeGroupUpdate(pkt.payload).foreach((members, leader) =>
+          emit(ZoneEvent.GroupUpdated(members, leader)))
 
       // --- Zone Change ---
 
       case ZoneOpcodes.RequestClientZoneChange =>
-        ZoneCodec.decodeRequestClientZoneChange(pkt.payload).foreach { req =>
-          println(s"[Zone] Zone change requested: zone=${req.zoneId}")
-          emit(ZoneEvent.ZoneChangeRequested(req))
-        }
+        ZoneCodec.decodeRequestClientZoneChange(pkt.payload).foreach(req => emit(ZoneEvent.ZoneChangeRequested(req)))
 
       // --- Misc (log but don't emit events) ---
 
@@ -414,10 +405,8 @@ class ZoneClient extends PacketHandler:
           case Some((count, raw)) =>
             val items = ZoneCodec.decodeInventory(raw, count)
             inventory = items
-            println(s"[Zone] Inventory: ${items.size} item(s)")
             emit(ZoneEvent.InventoryLoaded(items))
-          case None =>
-            println(s"[Zone] Inventory data received (${pkt.payload.length}B, decompression failed)")
+          case None => ()
 
       case ZoneOpcodes.MoveItem =>
         ZoneCodec.decodeMoveItem(pkt.payload).foreach { (from, to) =>
@@ -453,7 +442,6 @@ class ZoneClient extends PacketHandler:
         }
 
       case ZoneOpcodes.LogoutReply =>
-        println("[Zone] Logout confirmed")
         state = ZoneState.Disconnected
         emit(ZoneEvent.StateChanged(state))
 
@@ -476,7 +464,7 @@ class ZoneClient extends PacketHandler:
           emit(ZoneEvent.Error(s"Zone server not responding after $ZoneEntryMaxRetries retries"))
           emit(ZoneEvent.StateChanged(state))
         else
-          println(s"[Zone] Retransmitting ZoneEntry (attempt $zoneEntryRetries/$ZoneEntryMaxRetries)")
+          // Retransmit
           buildAppPacket(ZoneOpcodes.ZoneEntry, ZoneCodec.encodeZoneEntry(pendingCharName))
           lastZoneEntrySentMs = now
 

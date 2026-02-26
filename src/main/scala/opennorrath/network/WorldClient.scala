@@ -102,52 +102,41 @@ class WorldClient extends PacketHandler:
     pkt.opcode match
       case WorldOpcodes.SendCharInfo =>
         characters = WorldCodec.decodeCharacterSelect(pkt.payload)
-        println(s"[World] ${characters.size} character(s): ${characters.map(c => s"${c.name} L${c.level}").mkString(", ")}")
         state = WorldState.CharacterSelect
         emit(WorldEvent.CharacterList(characters))
         emit(WorldEvent.StateChanged(state))
 
       case WorldOpcodes.ApproveWorld =>
-        println("[World] World approved")
         state = WorldState.Authenticated
         emit(WorldEvent.StateChanged(state))
 
       case WorldOpcodes.GuildsList =>
         val guilds = WorldCodec.decodeGuildsList(pkt.payload)
-        println(s"[World] ${guilds.size} guild(s) received")
         emit(WorldEvent.GuildsReceived(guilds))
 
       case WorldOpcodes.LogServer =>
         val host = WorldCodec.decodeLogServer(pkt.payload)
-        println(s"[World] LogServer: $host")
         emit(WorldEvent.LogServerReceived(host))
 
       case WorldOpcodes.ExpansionInfo =>
         val exp = WorldCodec.decodeExpansionInfo(pkt.payload)
-        println(s"[World] ExpansionInfo: flags=0x${exp.flags.toHexString}")
         emit(WorldEvent.ExpansionReceived(exp))
 
       case WorldOpcodes.MOTD =>
         val msg = WorldCodec.decodeMOTD(pkt.payload)
-        println(s"[World] MOTD: $msg")
         emit(WorldEvent.MOTDReceived(msg))
 
       case WorldOpcodes.SetChatServer =>
         val host = WorldCodec.decodeChatServer(pkt.payload)
-        println(s"[World] Chat server: $host")
         emit(WorldEvent.ChatServerReceived(host))
 
       case WorldOpcodes.ZoneServerInfo =>
         WorldCodec.decodeZoneServerInfo(pkt.payload) match
-          case Some(addr) =>
-            println(s"[World] Zone server: ${addr.ip}:${addr.port}")
-            emit(WorldEvent.ZoneInfo(addr))
-          case None =>
-            println("[World] Failed to decode zone server info")
+          case Some(addr) => emit(WorldEvent.ZoneInfo(addr))
+          case None => ()
 
       case WorldOpcodes.ApproveName =>
         val approved = WorldCodec.decodeNameApproval(pkt.payload)
-        println(s"[World] Name approval: $approved")
         emit(WorldEvent.NameApproved(approved))
 
       case _ => ()

@@ -13,8 +13,10 @@ class BuffPanel(player: PlayerCharacter) extends Panel:
   val defaultY = 10f
   val defaultWidth = 160f
   val defaultHeight = 300f
-  override def fontScale: Float = 0.85f
+  override def fontScale: Float = Spacing.fontScaleSmall
   override def extraFlags: Int = ImGuiWindowFlags.NoScrollbar
+
+  opacity = 0.5f
 
   override protected def renderContent(): Unit =
     if player.buffs.isEmpty then
