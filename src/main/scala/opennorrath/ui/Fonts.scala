@@ -11,6 +11,7 @@ import imgui.{ImFont, ImFontConfig, ImGui}
   */
 object Fonts:
 
+  var small: ImFont = uninitialized
   var default: ImFont = uninitialized
   var defaultBold: ImFont = uninitialized
   var menu: ImFont = uninitialized
@@ -25,6 +26,7 @@ object Fonts:
     cfg.setFontDataOwnedByAtlas(false)
 
     default = atlas.addFontFromMemoryTTF(loadResource(regular), 18f, cfg)
+    small = atlas.addFontFromMemoryTTF(loadResource(regular), 13f, cfg)
     defaultBold = atlas.addFontFromMemoryTTF(loadResource(bold), 18f, cfg)
     menu = atlas.addFontFromMemoryTTF(loadResource(bold), 28f, cfg)
     title = atlas.addFontFromMemoryTTF(loadResource(bold), 64f, cfg)

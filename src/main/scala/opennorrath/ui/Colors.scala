@@ -53,6 +53,9 @@ object Colors:
   val error   = danger
   val success = heal
 
+  // Buttons
+  val buttonText = hex("1A1A1A") // Dark text for use on colored buttons
+
   // Input fields
   val inputBg     = tint(cream, black, 0.85f)
   val inputBorder = darkContainer

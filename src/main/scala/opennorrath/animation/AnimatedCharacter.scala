@@ -1,6 +1,6 @@
 package opennorrath.animation
 
-import opennorrath.Mesh
+import opennorrath.{EqCoords, Mesh}
 import opennorrath.wld.*
 import org.joml.{Matrix4f, Quaternionf, Vector3f}
 
@@ -81,11 +81,11 @@ class AnimatedCharacter(
               val v = mesh.vertices(vertexIndex)
               val transformed = Vector3f(v.x, v.y, v.z)
               transform.transformPosition(transformed)
-              // Write with EQ→GL swizzle: (X, Z, -Y)
+              val (glX, glY, glZ) = EqCoords.s3dToGl(transformed.x, transformed.y, transformed.z)
               val bufIdx = globalVertexIdx * 5
-              buffer(bufIdx + 0) = transformed.x
-              buffer(bufIdx + 1) = transformed.z
-              buffer(bufIdx + 2) = -transformed.y
+              buffer(bufIdx + 0) = glX
+              buffer(bufIdx + 1) = glY
+              buffer(bufIdx + 2) = glZ
               globalVertexIdx += 1
               vertexIndex += 1
         else

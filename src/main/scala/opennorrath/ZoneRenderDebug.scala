@@ -46,7 +46,7 @@ class ZoneRenderDebug(s3dPath: String, settings: Settings, animationModel: Strin
     val actors = chrWld.fragmentsOfType[Fragment14_Actor]
     // Load global animation tracks for the showcase too
     val globalTrackDefs = zone.loadGlobalAnimationTracks()
-    val builds = ZoneRenderer.buildCharacters(chrWld, actors, globalTrackDefs)
+    val builds = ZoneRenderer.buildCharacters(chrWld, actors, globalTrackDefs, quiet = true)
 
     val target = animationModel.toLowerCase
     val buildOpt = builds.find(_.key == target)

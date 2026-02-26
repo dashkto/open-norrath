@@ -4,7 +4,7 @@ import imgui.ImGui
 
 import org.lwjgl.glfw.GLFW.*
 
-import opennorrath.network.{LoginClient, NetworkThread, WorldClient}
+import opennorrath.network.{LoginClient, NetworkThread, WorldClient, ZoneClient}
 import opennorrath.screen.{GameContext, Screen}
 
 /** Shared login connection, owned by Game, outlives any individual screen. */
@@ -13,6 +13,10 @@ class LoginSession(val client: LoginClient, val network: NetworkThread):
 
 /** Shared world connection, owned by Game, outlives any individual screen. */
 class WorldSession(val client: WorldClient, val network: NetworkThread):
+  def stop(): Unit = network.stop()
+
+/** Shared zone connection, owned by Game, outlives any individual screen. */
+class ZoneSession(val client: ZoneClient, val network: NetworkThread):
   def stop(): Unit = network.stop()
 
 object Game:
@@ -24,6 +28,12 @@ object Game:
 
   /** Active world session — created during server select, survives screen transitions. */
   var worldSession: Option[WorldSession] = None
+
+  /** Active zone session — created on zone entry, survives screen transitions. */
+  var zoneSession: Option[ZoneSession] = None
+
+  /** Active player state — created when entering a zone, updated by networking. */
+  var playerState: Option[PlayerState] = None
 
   def run(ctx: GameContext, initialScreen: Screen): Unit =
     setScreen(initialScreen)
@@ -56,10 +66,13 @@ object Game:
 
     currentScreen.foreach(_.dispose())
     currentScreen = None
+    zoneSession.foreach(_.stop())
+    zoneSession = None
     loginSession.foreach(_.stop())
     loginSession = None
     worldSession.foreach(_.stop())
     worldSession = None
+    playerState = None
 
   def setScreen(screen: Screen): Unit =
     currentScreen.foreach(_.dispose())

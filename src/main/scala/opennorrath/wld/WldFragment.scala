@@ -170,4 +170,4 @@ object MaterialType:
       case 0x00000014 => MaterialType.Diffuse
       case 0x00000015 => MaterialType.Diffuse
       case 0x00000053 => MaterialType.Transparent50
-      case _          => MaterialType.Diffuse
+      case _ => MaterialType.Diffuse

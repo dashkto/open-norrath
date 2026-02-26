@@ -27,7 +27,6 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings()):
     else Nil
 
   // Build interleaved vertex buffer: position (3) + uv (2) [+ color (3) if lit]
-  // EQ uses Z-up; OpenGL/our camera uses Y-up. Swap: EQ(X,Y,Z) → GL(X,Z,-Y)
   private val vertexCount = zoneMesh.vertices.length / 3
   private val zoneStride = if lights.nonEmpty then 8 else 5
   private val interleavedVertices: Array[Float] =
@@ -79,37 +78,102 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings()):
       case None =>
         resolveTexture(group.textureName)
 
+  /** Texture name prefixes that should be rendered with additive blending regardless of WLD material type. */
+  private val additiveTexturePrefixes = List("fire", "bfire", "flame")
+
+  private def isAdditiveTexture(name: String): Boolean =
+    val lower = name.toLowerCase
+    additiveTexturePrefixes.exists(p => lower.startsWith(p))
+
+  private def effectiveMaterialType(group: ZoneMeshGroup): MaterialType =
+    if isAdditiveTexture(group.textureName) then MaterialType.TransparentAdditive
+    else group.materialType
+
+  private def isOpaque(mt: MaterialType): Boolean = mt == MaterialType.Diffuse || mt == MaterialType.TransparentMasked
+  private def isTransparent(mt: MaterialType): Boolean = mt match
+    case MaterialType.Transparent25 | MaterialType.Transparent50 | MaterialType.Transparent75
+       | MaterialType.TransparentAdditive => true
+    case _ => false
+
+  private def setBlendMode(shader: Shader, mt: MaterialType): Unit = mt match
+    case MaterialType.TransparentAdditive =>
+      glBlendFunc(GL_SRC_ALPHA, GL_ONE)
+      shader.setFloat("alphaMultiplier", 1.0f)
+    case MaterialType.Transparent25 =>
+      glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+      shader.setFloat("alphaMultiplier", 0.25f)
+    case MaterialType.Transparent50 =>
+      glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+      shader.setFloat("alphaMultiplier", 0.50f)
+    case MaterialType.Transparent75 =>
+      glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+      shader.setFloat("alphaMultiplier", 0.75f)
+    case _ => ()
+
   def draw(shader: Shader, deltaTime: Float, viewMatrix: Matrix4f): Unit =
     elapsedMs += deltaTime * 1000f
     shader.setInt("tex0", 0)
 
-    // Draw zone geometry
     val identity = Matrix4f()
+
+    // --- Pass 1: Opaque + masked geometry (depth write ON, blend OFF) ---
     shader.setMatrix4f("model", identity)
     for group <- zoneMesh.groups do
-      if group.materialType != MaterialType.Invisible && group.materialType != MaterialType.Boundary then
+      if isOpaque(effectiveMaterialType(group)) then
         glBindTexture(GL_TEXTURE_2D, resolveAnimatedTexture(group))
         mesh.drawRange(group.startIndex, group.indexCount)
 
-    // Set default vertex color to white for unlit meshes (objects/characters use stride-5, no color attribute)
     glVertexAttrib3f(2, 1f, 1f, 1f)
 
-    // Draw placed objects
     for obj <- objectInstances do
       shader.setMatrix4f("model", obj.modelMatrix)
       for group <- obj.zoneMesh.groups do
-        if group.materialType != MaterialType.Invisible && group.materialType != MaterialType.Boundary then
+        if isOpaque(effectiveMaterialType(group)) then
           glBindTexture(GL_TEXTURE_2D, resolveTexture(group.textureName))
           obj.glMesh.drawRange(group.startIndex, group.indexCount)
 
-    // Update and draw animated characters
     for char <- characterInstances do
       char.update(deltaTime)
       shader.setMatrix4f("model", char.modelMatrix)
       for group <- char.zoneMesh.groups do
-        if group.materialType != MaterialType.Invisible && group.materialType != MaterialType.Boundary then
+        if isOpaque(effectiveMaterialType(group)) then
           glBindTexture(GL_TEXTURE_2D, resolveTexture(group.textureName))
           char.glMesh.drawRange(group.startIndex, group.indexCount)
+
+    // --- Pass 2: Transparent geometry (depth write OFF, blend ON) ---
+    glEnable(GL_BLEND)
+    glDepthMask(false)
+
+    shader.setMatrix4f("model", identity)
+    glVertexAttrib3f(2, 1f, 1f, 1f)
+    for group <- zoneMesh.groups do
+      val emt = effectiveMaterialType(group)
+      if isTransparent(emt) then
+        setBlendMode(shader, emt)
+        glBindTexture(GL_TEXTURE_2D, resolveAnimatedTexture(group))
+        mesh.drawRange(group.startIndex, group.indexCount)
+
+    for obj <- objectInstances do
+      shader.setMatrix4f("model", obj.modelMatrix)
+      for group <- obj.zoneMesh.groups do
+        val emt = effectiveMaterialType(group)
+        if isTransparent(emt) then
+          setBlendMode(shader, emt)
+          glBindTexture(GL_TEXTURE_2D, resolveTexture(group.textureName))
+          obj.glMesh.drawRange(group.startIndex, group.indexCount)
+
+    for char <- characterInstances do
+      shader.setMatrix4f("model", char.modelMatrix)
+      for group <- char.zoneMesh.groups do
+        val emt = effectiveMaterialType(group)
+        if isTransparent(emt) then
+          setBlendMode(shader, emt)
+          glBindTexture(GL_TEXTURE_2D, resolveTexture(group.textureName))
+          char.glMesh.drawRange(group.startIndex, group.indexCount)
+
+    glDepthMask(true)
+    glDisable(GL_BLEND)
+    shader.setFloat("alphaMultiplier", 1.0f)
 
     // Update and draw particles (last, for correct additive blending)
     particleSystem.foreach { ps =>
@@ -181,7 +245,7 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings()):
       else None
     }.toMap
 
-    println(s"  Object models: ${actorMeshes.size} (${actorMeshes.keys.mkString(", ")})")
+    println(s"  Object models: ${actorMeshes.size}")
 
     // Compute brazier mesh dimensions (EQ space) for flame placement and sizing
     case class BrazierInfo(height: Float, width: Float)
@@ -204,8 +268,8 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings()):
         val pos = placement.position
         val scl = if placement.scale.y != 0 then placement.scale.y else 1f
         val info = brazierInfo.getOrElse(placement.actorName, BrazierInfo(27f, 20f))
-        // GL position: (eqX, eqZ + meshHeight*scale, -eqY)
-        val flamePos = Vector3f(pos.x, pos.z + info.height * scl, -pos.y)
+        val (glX, glY, glZ) = EqCoords.s3dToGl(pos.x, pos.y, pos.z)
+        val flamePos = Vector3f(glX, glY + info.height * scl, glZ)
         // Scale particles relative to brazier width (normalize to ~20 unit reference width)
         val sizeScale = (info.width * scl / 20f).max(0.3f).min(2f)
         emitterBuilder += Emitter(flamePos, sizeScale)
@@ -313,9 +377,9 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings()):
     val rot = placement.rotation
     val scl = placement.scale
 
-    // EQ coordinates → GL coordinates: (X, Z, -Y)
+    val (glX, glY, glZ) = EqCoords.s3dToGl(pos.x, pos.y, pos.z)
     val mat = Matrix4f()
-    mat.translate(pos.x, pos.z, -pos.y)
+    mat.translate(glX, glY, glZ)
     // Apply rotations (EQ rotation order)
     mat.rotateY(Math.toRadians(-rot.z).toFloat)  // heading (Z rot in EQ → Y rot in GL)
     mat.rotateX(Math.toRadians(rot.y).toFloat)    // pitch
@@ -338,12 +402,14 @@ object ZoneRenderer:
     val vc = zm.vertices.length / 3
     val arr = new Array[Float](vc * 5)
     for i <- 0 until vc do
-      val eqX = zm.vertices(i * 3 + 0)
-      val eqY = zm.vertices(i * 3 + 1)
-      val eqZ = zm.vertices(i * 3 + 2)
-      arr(i * 5 + 0) = eqX
-      arr(i * 5 + 1) = eqZ
-      arr(i * 5 + 2) = -eqY
+      val (glX, glY, glZ) = EqCoords.s3dToGl(
+        zm.vertices(i * 3 + 0),
+        zm.vertices(i * 3 + 1),
+        zm.vertices(i * 3 + 2),
+      )
+      arr(i * 5 + 0) = glX
+      arr(i * 5 + 1) = glY
+      arr(i * 5 + 2) = glZ
       if i * 2 + 1 < zm.uvs.length then
         arr(i * 5 + 3) = zm.uvs(i * 2 + 0)
         arr(i * 5 + 4) = zm.uvs(i * 2 + 1)
@@ -439,31 +505,23 @@ object ZoneRenderer:
     (skeleton, meshFragments)
 
   /** Build character data from actors: resolve meshes, discover animations, compute bounding boxes. */
-  def buildCharacters(chrWld: WldFile, actors: List[Fragment14_Actor], extraTrackDefs: List[Fragment12_TrackDef] = Nil): List[CharBuild] =
-    // Pre-build track name map ONCE for all characters (avoids rebuilding 335K+ map per character).
-    // Keys are clean names like "C01HUMPE" or "C01AHOFBIBICEPL" (see Fragment12_TrackDef docs).
+  def buildCharacters(chrWld: WldFile, actors: List[Fragment14_Actor], extraTrackDefs: List[Fragment12_TrackDef] = Nil, quiet: Boolean = false): List[CharBuild] =
     val allTrackDefs = chrWld.fragmentsOfType[Fragment12_TrackDef] ++ extraTrackDefs
     val trackDefsByName: Map[String, Fragment12_TrackDef] = allTrackDefs.map { td =>
       td.cleanName -> td
     }.toMap
-    // Pre-compute unique 3-char animation codes (C01, L01, P01, etc.) for fast prefix lookup.
-    // discoverAnimations uses these to probe the map with {code}{model}{bone} patterns.
     val animCodes: Set[String] = trackDefsByName.keysIterator
       .filter(_.length > 3).map(_.take(3)).toSet
-    println(s"  Track name map: ${trackDefsByName.size} unique entries, ${animCodes.size} anim codes")
 
     actors.flatMap { actor =>
       val actorKey = actor.name.replace("_ACTORDEF", "").toLowerCase
       val (skeletonOpt, meshFragments) = resolveActorMeshes(chrWld, actor)
 
-      if meshFragments.isEmpty || skeletonOpt.isEmpty then
-        println(s"    $actorKey: no meshes or skeleton found")
-        None
+      if meshFragments.isEmpty || skeletonOpt.isEmpty then None
       else
         val sk = skeletonOpt.get
         val clips = AnimatedCharacter.discoverAnimations(chrWld, sk, trackDefsByName, animCodes)
 
-        // Use the default animation's frame 0 for initial pose and bounding box
         val defaultClip = clips.get("L01").orElse(clips.get("P01")).orElse(clips.headOption.map(_._2))
         val boneTransforms = defaultClip match
           case Some(clip) => AnimatedCharacter.computeBoneTransforms(sk, clip, 0)
@@ -471,7 +529,6 @@ object ZoneRenderer:
         val transformedMeshes = meshFragments.map(mesh => applyBoneTransforms(mesh, boneTransforms))
         val zm = extractMeshGeometry(chrWld, transformedMeshes)
 
-        // Compute bounding box in EQ space
         val vc = zm.vertices.length / 3
         var eqMinX = Float.MaxValue; var eqMaxX = Float.MinValue
         var eqMinY = Float.MaxValue; var eqMaxY = Float.MinValue
@@ -482,10 +539,11 @@ object ZoneRenderer:
           if y < eqMinY then eqMinY = y; if y > eqMaxY then eqMaxY = y
           if z < eqMinZ then eqMinZ = z; if z > eqMaxZ then eqMaxZ = z
 
-        val animInfo = if clips.nonEmpty then
-          clips.map((code, clip) => s"$code(${clip.frameCount}f)").mkString(", ")
-        else "none"
-        println(f"    $actorKey: ${meshFragments.size} meshes, ${zm.vertices.length / 3} verts, size(${eqMaxX - eqMinX}%.1f x ${eqMaxY - eqMinY}%.1f x ${eqMaxZ - eqMinZ}%.1f), anims: $animInfo")
+        if !quiet then
+          val animInfo = if clips.nonEmpty then
+            clips.map((code, clip) => s"$code(${clip.frameCount}f)").mkString(", ")
+          else "none"
+          println(f"    $actorKey: ${meshFragments.size} meshes, ${zm.vertices.length / 3} verts, size(${eqMaxX - eqMinX}%.1f x ${eqMaxY - eqMinY}%.1f x ${eqMaxZ - eqMinZ}%.1f), anims: $animInfo")
         Some(CharBuild(actorKey, sk, meshFragments, zm,
           glWidth = eqMaxX - eqMinX, glDepth = eqMaxY - eqMinY, glHeight = eqMaxZ - eqMinZ,
           glCenterX = (eqMinX + eqMaxX) / 2f, glCenterZ = -(eqMinY + eqMaxY) / 2f, glMinY = eqMinZ,

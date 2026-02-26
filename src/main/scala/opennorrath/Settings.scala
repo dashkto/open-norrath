@@ -14,8 +14,14 @@ case class LoginSettings(
   worldPort: Int = 9000,
 )
 
+case class WindowSettings(
+  width: Int = 1600,
+  height: Int = 900,
+)
+
 case class Settings(
   useEqg: Boolean = false,
+  window: WindowSettings = WindowSettings(),
   debug: DebugSettings = DebugSettings(),
   login: LoginSettings = LoginSettings(),
 )
@@ -55,6 +61,13 @@ object Settings:
       DebugSettings(animationModel = d.string("animation_model"))
     }.getOrElse(DebugSettings())
 
+    val windowSettings = root.nested("window").map { w =>
+      WindowSettings(
+        width = w.int("width", 1280),
+        height = w.int("height", 720),
+      )
+    }.getOrElse(WindowSettings())
+
     val login = root.nested("login").map { l =>
       LoginSettings(
         host = l.string("host", "127.0.0.1"),
@@ -65,6 +78,7 @@ object Settings:
 
     Settings(
       useEqg = root.boolean("use_eqg"),
+      window = windowSettings,
       debug = debug,
       login = login,
     )

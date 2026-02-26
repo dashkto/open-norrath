@@ -10,6 +10,11 @@ enum WorldEvent:
   case CharacterList(characters: Vector[CharacterInfo])
   case ZoneInfo(address: ZoneAddress)
   case NameApproved(approved: Boolean)
+  case GuildsReceived(guilds: Vector[GuildInfo])
+  case MOTDReceived(message: String)
+  case ExpansionReceived(expansions: ExpansionFlags)
+  case ChatServerReceived(host: String)
+  case LogServerReceived(host: String)
   case Error(message: String)
 
 /** World server protocol state machine.
@@ -113,20 +118,29 @@ class WorldClient extends PacketHandler:
         emit(WorldEvent.StateChanged(state))
 
       case WorldOpcodes.GuildsList =>
-        println(s"[World] Guilds list received (${pkt.payload.length}B)")
+        val guilds = WorldCodec.decodeGuildsList(pkt.payload)
+        println(s"[World] ${guilds.size} guild(s) received")
+        emit(WorldEvent.GuildsReceived(guilds))
 
       case WorldOpcodes.LogServer =>
-        println(s"[World] LogServer received (${pkt.payload.length}B)")
+        val host = WorldCodec.decodeLogServer(pkt.payload)
+        println(s"[World] LogServer: $host")
+        emit(WorldEvent.LogServerReceived(host))
 
       case WorldOpcodes.ExpansionInfo =>
-        println(s"[World] ExpansionInfo received (${pkt.payload.length}B)")
+        val exp = WorldCodec.decodeExpansionInfo(pkt.payload)
+        println(s"[World] ExpansionInfo: flags=0x${exp.flags.toHexString}")
+        emit(WorldEvent.ExpansionReceived(exp))
 
       case WorldOpcodes.MOTD =>
-        val msg = new String(pkt.payload, java.nio.charset.StandardCharsets.US_ASCII).takeWhile(_ != '\u0000')
+        val msg = WorldCodec.decodeMOTD(pkt.payload)
         println(s"[World] MOTD: $msg")
+        emit(WorldEvent.MOTDReceived(msg))
 
       case WorldOpcodes.SetChatServer =>
-        println(s"[World] Chat server info received (${pkt.payload.length}B)")
+        val host = WorldCodec.decodeChatServer(pkt.payload)
+        println(s"[World] Chat server: $host")
+        emit(WorldEvent.ChatServerReceived(host))
 
       case WorldOpcodes.ZoneServerInfo =>
         WorldCodec.decodeZoneServerInfo(pkt.payload) match

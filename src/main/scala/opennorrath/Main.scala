@@ -16,13 +16,13 @@ import opennorrath.ui.{Fonts, ImGuiTheme}
 
 object Main:
 
-  private val WindowWidth = 1280
-  private val WindowHeight = 720
   private val WindowTitle = "OpenNorrath"
 
   def main(args: Array[String]): Unit =
     Logging.init()
     val settings = Settings.load()
+    val WindowWidth = settings.window.width
+    val WindowHeight = settings.window.height
     val zonePath = if args.nonEmpty then args(0) else "assets/arena.s3d"
 
     GLFWErrorCallback.createPrint(System.err).set()
@@ -73,7 +73,17 @@ object Main:
     val ctx = GameContext(window, input, settings, WindowWidth, WindowHeight, imGuiGlfw, imGuiGl3)
 
     val initialScreen =
-      if args.nonEmpty then ZoneScreen(ctx, zonePath)
+      if args.nonEmpty then
+        Game.playerState = Some(PlayerState(
+          name = "Testchar",
+          level = 50,
+          classId = 2, // Cleric
+          currentHp = 3200,
+          maxHp = 4000,
+          currentMana = 1800,
+          maxMana = 3000,
+        ))
+        ZoneScreen(ctx, zonePath)
       else SplashScreen(ctx, zonePath)
     Game.run(ctx, initialScreen)
 

@@ -21,6 +21,10 @@ class Camera(
     Matrix4f().lookAt(position, target, up)
 
   def processInput(input: InputManager, deltaTime: Float): Unit =
+    processMovement(input, deltaTime)
+    processLook(input)
+
+  def processMovement(input: InputManager, deltaTime: Float): Unit =
     val velocity = speed * deltaTime
     val movement = Vector3f()
 
@@ -33,6 +37,7 @@ class Camera(
 
     position.add(movement)
 
+  def processLook(input: InputManager): Unit =
     val (dx, dy) = input.mouseDelta
     if dx != 0f || dy != 0f then
       yaw += dx * sensitivity

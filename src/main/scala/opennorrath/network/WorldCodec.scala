@@ -15,6 +15,16 @@ case class CharacterInfo(
 /** Zone server connection info. */
 case class ZoneAddress(ip: String, port: Int)
 
+/** Guild entry from OP_GuildsList. */
+case class GuildInfo(id: Int, name: String)
+
+/** Expansion flags from OP_ExpansionInfo. */
+case class ExpansionFlags(flags: Int):
+  def hasKunark: Boolean = (flags & 0x01) != 0
+  def hasVelious: Boolean = (flags & 0x02) != 0
+  def hasLuclin: Boolean = (flags & 0x04) != 0
+  def hasPlanes: Boolean = (flags & 0x08) != 0
+
 /** Encode/decode world server payloads.
   *
   * Reference: EQMacEmu/Server/common/eq_packet_structs.h
@@ -105,7 +115,7 @@ object WorldCodec:
       None
     else
       val ip = readNullString(data.take(128))
-      val port = ((data(128) & 0xFF) | ((data(129) & 0xFF) << 8)) // little-endian uint16
+      val port = ((data(128) & 0xFF) << 8) | (data(129) & 0xFF) // big-endian (network byte order)
       Some(ZoneAddress(ip, port))
 
   /** Encode OP_ApproveName (76 bytes on the wire).
@@ -170,6 +180,48 @@ object WorldCodec:
     buf.position(5427); buf.put(beard.toByte)
     buf.position(5428); buf.put(face.toByte)
     buf.array()
+
+  /** Decode OP_GuildsList: repeated null-terminated guild names, indexed by position.
+    * The server sends names for guilds that exist; empty names are gaps.
+    * Format: consecutive null-terminated strings, guild ID is the ordinal index.
+    */
+  def decodeGuildsList(data: Array[Byte]): Vector[GuildInfo] =
+    val guilds = Vector.newBuilder[GuildInfo]
+    var offset = 0
+    var id = 0
+    while offset < data.length do
+      val name = readNullStringAt(data, offset)
+      if name.nonEmpty then guilds += GuildInfo(id, name)
+      offset += name.length + 1
+      id += 1
+    guilds.result()
+
+  /** Decode OP_MOTD: null-terminated string. */
+  def decodeMOTD(data: Array[Byte]): String =
+    readNullString(data)
+
+  /** Decode OP_ExpansionInfo: uint32 expansion flags. */
+  def decodeExpansionInfo(data: Array[Byte]): ExpansionFlags =
+    if data.length < 4 then ExpansionFlags(0)
+    else
+      val flags = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN).getInt()
+      ExpansionFlags(flags)
+
+  /** Decode OP_SetChatServer: null-terminated host:port string. */
+  def decodeChatServer(data: Array[Byte]): String =
+    readNullString(data)
+
+  /** Decode OP_LogServer: null-terminated server name/host. */
+  def decodeLogServer(data: Array[Byte]): String =
+    readNullString(data)
+
+  private def readNullStringAt(data: Array[Byte], offset: Int): String =
+    val sb = StringBuilder()
+    var i = offset
+    while i < data.length && data(i) != 0 do
+      sb += data(i).toChar
+      i += 1
+    sb.result()
 
   private def readNullString(data: Array[Byte]): String =
     val sb = StringBuilder()

@@ -85,6 +85,7 @@ class InputManager(window: Long):
   def isKeyHeld(key: Int): Boolean = keysDown.contains(key)
   def isKeyPressed(key: Int): Boolean = keysPressed.contains(key)
   def isKeyReleased(key: Int): Boolean = keysReleased.contains(key)
+  def isMouseHeld(button: Int): Boolean = buttonsDown.contains(button)
   def isMousePressed(button: Int): Boolean = buttonsPressed.contains(button)
   def mousePos: (Float, Float) = (_mouseX, _mouseY)
   def mouseDelta: (Float, Float) = (mouseDX, mouseDY)

@@ -8,7 +8,7 @@ import org.lwjgl.opengl.GL11.*
 
 import opennorrath.Game
 import opennorrath.network.*
-import opennorrath.ui.Colors
+import opennorrath.ui.{Colors, EqData}
 
 class CharacterSelectScreen(
   ctx: GameContext,
@@ -19,6 +19,7 @@ class CharacterSelectScreen(
   private var statusText = s"${characters.size} character(s)"
   private var statusColor = Colors.textDim
   private var entering = false
+  private var enteredCharName = ""
 
   private def worldClient: WorldClient = Game.worldSession.get.client
 
@@ -49,10 +50,9 @@ class CharacterSelectScreen(
     while event.isDefined do
       event.get match
         case WorldEvent.ZoneInfo(addr) =>
-          statusText = s"Zone server: ${addr.ip}:${addr.port}"
-          statusColor = Colors.success
           println(s"[CharSelect] Got zone server: ${addr.ip}:${addr.port}")
-          // TODO: connect to zone server
+          Game.setScreen(ZoneLoadingScreen(ctx, addr, enteredCharName))
+          return
         case WorldEvent.Error(msg) =>
           statusText = msg
           statusColor = Colors.error
@@ -102,7 +102,7 @@ class CharacterSelectScreen(
         ImGui.setCursorPos(listX, itemY)
         if selected then
           pushColor(ImGuiCol.Text, Colors.gold)
-        val label = s"${char.name}  -  Level ${char.level} ${className(char.classId)} ${raceName(char.race)}"
+        val label = s"${char.name}  -  Level ${char.level} ${EqData.className(char.classId)} ${EqData.raceName(char.race)}"
         if ImGui.selectable(label, selected, 0, listW, 0f) then
           selectedIndex = i
           enterWorld()
@@ -139,45 +139,11 @@ class CharacterSelectScreen(
   private def enterWorld(): Unit =
     if characters.nonEmpty && !entering then
       val char = characters(selectedIndex)
+      enteredCharName = char.name
       statusText = s"Entering world as ${char.name}..."
       statusColor = Colors.text
       entering = true
       worldClient.enterWorld(char.name)
-
-  private def className(id: Int): String = id match
-    case 1  => "Warrior"
-    case 2  => "Cleric"
-    case 3  => "Paladin"
-    case 4  => "Ranger"
-    case 5  => "Shadow Knight"
-    case 6  => "Druid"
-    case 7  => "Monk"
-    case 8  => "Bard"
-    case 9  => "Rogue"
-    case 10 => "Shaman"
-    case 11 => "Necromancer"
-    case 12 => "Wizard"
-    case 13 => "Magician"
-    case 14 => "Enchanter"
-    case 15 => "Beastlord"
-    case _  => s"Class($id)"
-
-  private def raceName(id: Int): String = id match
-    case 1   => "Human"
-    case 2   => "Barbarian"
-    case 3   => "Erudite"
-    case 4   => "Wood Elf"
-    case 5   => "High Elf"
-    case 6   => "Dark Elf"
-    case 7   => "Half Elf"
-    case 8   => "Dwarf"
-    case 9   => "Troll"
-    case 10  => "Ogre"
-    case 11  => "Halfling"
-    case 12  => "Gnome"
-    case 128 => "Iksar"
-    case 130 => "Vah Shir"
-    case _   => s"Race($id)"
 
   private def pushColor(idx: Int, c: (Float, Float, Float, Float)): Unit =
     ImGui.pushStyleColor(idx, c._1, c._2, c._3, c._4)
