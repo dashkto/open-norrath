@@ -69,7 +69,18 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings()):
     if name.nonEmpty then textureMap.getOrElse(name.toLowerCase, fallbackTexture)
     else fallbackTexture
 
+  private var elapsedMs: Float = 0f
+
+  private def resolveAnimatedTexture(group: ZoneMeshGroup): Int =
+    group.anim match
+      case Some(anim) =>
+        val frameIndex = ((elapsedMs / anim.delayMs).toInt % anim.frames.size).abs
+        resolveTexture(anim.frames(frameIndex))
+      case None =>
+        resolveTexture(group.textureName)
+
   def draw(shader: Shader, deltaTime: Float, viewMatrix: Matrix4f): Unit =
+    elapsedMs += deltaTime * 1000f
     shader.setInt("tex0", 0)
 
     // Draw zone geometry
@@ -77,7 +88,7 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings()):
     shader.setMatrix4f("model", identity)
     for group <- zoneMesh.groups do
       if group.materialType != MaterialType.Invisible && group.materialType != MaterialType.Boundary then
-        glBindTexture(GL_TEXTURE_2D, resolveTexture(group.textureName))
+        glBindTexture(GL_TEXTURE_2D, resolveAnimatedTexture(group))
         mesh.drawRange(group.startIndex, group.indexCount)
 
     // Set default vertex color to white for unlit meshes (objects/characters use stride-5, no color attribute)
@@ -338,7 +349,12 @@ object ZoneRenderer:
       val verts = mesh.vertices.flatMap(v => Array(v.x, v.y, v.z))
       allVertices = allVertices ++ verts
 
-      val uvs = mesh.uvs.flatMap((u, v) => Array(u, v))
+      // Pad UVs to match vertex count so flat arrays stay aligned
+      val paddedUvs = if mesh.uvs.length < mesh.vertices.length then
+        mesh.uvs ++ Array.fill(mesh.vertices.length - mesh.uvs.length)((0f, 0f))
+      else
+        mesh.uvs.take(mesh.vertices.length)
+      val uvs = paddedUvs.flatMap((u, v) => Array(u, v))
       allUvs = allUvs ++ uvs
 
       var polyIndex = 0
@@ -415,7 +431,7 @@ object ZoneRenderer:
     // Pre-build track name map ONCE for all characters (avoids rebuilding 335K+ map per character)
     val allTrackDefs = chrWld.fragmentsOfType[Fragment12_TrackDef] ++ extraTrackDefs
     val trackDefsByName: Map[String, Fragment12_TrackDef] = allTrackDefs.map { td =>
-      td.name.toUpperCase.replace("_TRACKDEF", "") -> td
+      td.cleanName -> td
     }.toMap
     // Pre-compute unique 3-char animation codes for fast prefix lookup
     val animCodes: Set[String] = trackDefsByName.keysIterator

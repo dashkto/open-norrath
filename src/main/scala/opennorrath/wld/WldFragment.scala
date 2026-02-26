@@ -93,7 +93,16 @@ case class Fragment10_SkeletonHierarchy(
 case class Fragment11_SkeletonHierarchyRef(name: String, skeletonRef: Int) extends WldFragment
 
 // 0x12 - Track definition (bone transforms per frame)
-case class Fragment12_TrackDef(name: String, frames: Array[BoneTransform]) extends WldFragment
+case class Fragment12_TrackDef(name: String, frames: Array[BoneTransform]) extends WldFragment:
+  /** Track name without _TRACKDEF suffix, uppercased. */
+  lazy val cleanName: String = name.toUpperCase.replace("_TRACKDEF", "")
+
+  /** Whether this track has animation (more than 1 frame). */
+  def isAnimated: Boolean = frames.length > 1
+
+  /** Rest-pose translation (frame 0). Safe even for empty frames. */
+  def restTranslation: Vector3f =
+    if frames.nonEmpty then frames(0).translation else Vector3f()
 
 // 0x13 - Track reference
 case class Fragment13_TrackRef(name: String, trackDefRef: Int) extends WldFragment

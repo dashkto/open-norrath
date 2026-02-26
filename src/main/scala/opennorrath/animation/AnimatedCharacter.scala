@@ -173,7 +173,7 @@ object AnimatedCharacter:
       catch case _: Exception => null
     }
     val baseSuffixes: Array[String] = baseTrackDefs.map { td =>
-      if td != null then td.name.toUpperCase.replace("_TRACKDEF", "") else ""
+      if td != null then td.cleanName else ""
     }
 
     val modelPrefix = baseSuffixes.filter(_.nonEmpty).minByOption(_.length).getOrElse("")
@@ -195,55 +195,16 @@ object AnimatedCharacter:
         nonPointSuffixes.exists(s => trackDefsByName.contains(prefix + s))
     }.map(_ + modelPrefix)
 
-    // Step 3: Fallback for models sharing animations with a different model prefix
-    // (e.g., rivervale halfling NPCs "RIF" use halfling "HAF" animations).
-    // Only runs the slower scan when no own-prefix animations found.
-    val prefixesToUse = if validPrefixes.nonEmpty then validPrefixes
-    else
-      // Scan tracks ending with our bone suffixes to find foreign model prefixes
-      val candidatePrefixes = scala.collection.mutable.Set[String]()
-      for (name, td) <- trackDefsByName do
-        if td.frames.length > 1 then
-          for suffix <- nonPointSuffixes do
-            if name.endsWith(suffix) then
-              candidatePrefixes += name.dropRight(suffix.length)
-      // Also check 1-frame root tracks (root bone often has 1 frame)
-      for (name, td) <- trackDefsByName do
-        if td.frames.length == 1 then
-          nonPointSuffixes.headOption.foreach { suffix =>
-            if trackDefsByName.contains(name + suffix) then
-              candidatePrefixes += name
-          }
-      // Group by foreign model prefix (strip 3-char anim code), pick best bone coverage.
-      // Among models with equal coverage, prefer the one with the most animation clips
-      // (more clips = more likely a real character animation set vs incidental bone name match).
-      val byModel = candidatePrefixes.filter(_.length > 3).groupBy(_.drop(3))
-        .filterNot(_._1 == modelPrefix) // exclude our own (already tried)
-      val nonPointBones = boneSuffixes.indices.filter(i => !isAttachmentPoint(i))
-      val scored = byModel.map { (model, prefixes) =>
-        val samplePrefix = prefixes.head
-        val coverage = nonPointBones.count { i =>
-          boneSuffixes(i).isEmpty || trackDefsByName.contains(samplePrefix + boneSuffixes(i))
-        }
-        (model, prefixes, coverage, prefixes.size) // prefixes.size = number of animation clips
-      }
-      scored.filter(_._3 > nonPointBones.length / 2)
-        .toList.sortBy(s => (-s._3, -s._4)).headOption match // coverage desc, then clip count desc
-        case Some((model, prefixes, coverage, clipCount)) =>
-          println(s"      [anim-fallback] '$modelPrefix' → '$model' ($coverage/${nonPointBones.length} bones, $clipCount clips)")
-          prefixes
-        case _ => Set.empty[String]
-
-    // Build clips with fallback to base track (rest pose) for missing bones.
-    val isFallback = validPrefixes.isEmpty && prefixesToUse.nonEmpty
-    val clips = prefixesToUse.flatMap { prefix =>
+    // Don't fallback to a different model's animations — only use own-prefix tracks.
+    // Build clips from own-prefix animations, using base track (rest pose) for missing bones.
+    val clips = validPrefixes.flatMap { prefix =>
       val boneTracks: Array[Fragment12_TrackDef] = boneSuffixes.zipWithIndex.map { (suffix, i) =>
         if isAttachmentPoint(i) then baseTrackDefs(i)
         else trackDefsByName.getOrElse(prefix + suffix, baseTrackDefs(i))
       }
       val frameCount = boneTracks.filter(_ != null).map(_.frames.length).max
       if frameCount > 1 then
-        val animCode = if isFallback then prefix.take(3) else prefix.dropRight(modelPrefix.length)
+        val animCode = prefix.dropRight(modelPrefix.length)
         Some(animCode -> AnimationClip(animCode, frameCount, boneTracks))
       else None
     }.toMap

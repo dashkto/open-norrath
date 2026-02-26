@@ -1,6 +1,8 @@
 package opennorrath.wld
 
-case class ZoneMeshGroup(startIndex: Int, indexCount: Int, textureName: String, materialType: MaterialType)
+case class TextureAnim(frames: Vector[String], delayMs: Int)
+
+case class ZoneMeshGroup(startIndex: Int, indexCount: Int, textureName: String, materialType: MaterialType, anim: Option[TextureAnim] = None)
 
 case class ZoneMesh(
     vertices: Array[Float],  // x, y, z interleaved
@@ -26,8 +28,12 @@ object ZoneGeometry:
       val verts = mesh.vertices.flatMap(v => Array(v.x, v.y, v.z))
       allVertices = allVertices ++ verts
 
-      // Append UVs
-      val uvs = mesh.uvs.flatMap((u, v) => Array(u, v))
+      // Append UVs — pad to match vertex count so flat arrays stay aligned
+      val paddedUvs = if mesh.uvs.length < mesh.vertices.length then
+        mesh.uvs ++ Array.fill(mesh.vertices.length - mesh.uvs.length)((0f, 0f))
+      else
+        mesh.uvs.take(mesh.vertices.length)
+      val uvs = paddedUvs.flatMap((u, v) => Array(u, v))
       allUvs = allUvs ++ uvs
 
       // Process render groups to get material-grouped triangles
@@ -36,6 +42,7 @@ object ZoneGeometry:
         val startIndex = allIndices.length
         val textureName = resolveTextureName(wld, mesh.materialListRef, group.materialIndex)
         val matType = resolveMaterialType(wld, mesh.materialListRef, group.materialIndex)
+        val anim = resolveTextureAnim(wld, mesh.materialListRef, group.materialIndex)
 
         for _ <- 0 until group.polyCount do
           if polyIndex < mesh.polygons.length then
@@ -49,7 +56,7 @@ object ZoneGeometry:
 
         val indexCount = allIndices.length - startIndex
         if indexCount > 0 then
-          allGroups = allGroups :+ ZoneMeshGroup(startIndex, indexCount, textureName, matType)
+          allGroups = allGroups :+ ZoneMeshGroup(startIndex, indexCount, textureName, matType, anim)
 
     ZoneMesh(allVertices, allUvs, allIndices, allGroups)
 
@@ -69,6 +76,23 @@ object ZoneGeometry:
       val bitmapName = wld.fragment(bitmapInfo.textureRefs.head).asInstanceOf[Fragment03_BitmapName]
       bitmapName.filename
     catch case _: Exception => ""
+
+  def resolveTextureAnim(wld: WldFile, materialListRef: Int, materialIndex: Int): Option[TextureAnim] =
+    try
+      val matList = wld.fragment(materialListRef).asInstanceOf[Fragment31_MaterialList]
+      val matRef = matList.materialRefs(materialIndex)
+      val material = wld.fragment(matRef).asInstanceOf[Fragment30_Material]
+      if material.bitmapInfoRefIndex == 0 then return None
+      val bitmapInfoRef = wld.fragment(material.bitmapInfoRefIndex).asInstanceOf[Fragment05_BitmapInfoRef]
+      val bitmapInfo = wld.fragment(bitmapInfoRef.refIndex).asInstanceOf[Fragment04_BitmapInfo]
+      if !bitmapInfo.isAnimated || bitmapInfo.textureRefs.size < 2 then return None
+      val frames = bitmapInfo.textureRefs.flatMap { ref =>
+        try Some(wld.fragment(ref).asInstanceOf[Fragment03_BitmapName].filename)
+        catch case _: Exception => None
+      }.toVector
+      if frames.size < 2 then None
+      else Some(TextureAnim(frames, bitmapInfo.animDelay))
+    catch case _: Exception => None
 
   def resolveMaterialType(wld: WldFile, materialListRef: Int, materialIndex: Int): MaterialType =
     try

@@ -29,4 +29,8 @@ object DumpTracks:
       for len <- 3 to 6 do
         val p = multiFrame.map(_.name.toUpperCase.replace("_TRACKDEF", "").take(len)).distinct.sorted
         println(s"  ${len}-char prefixes: ${p.take(20).mkString(", ")}${if p.size > 20 then s" ... (${p.size} total)" else ""}")
+      // Show unique model codes (chars 4-6, after 3-char anim code)
+      val models = multiFrame.map(_.name.toUpperCase.replace("_TRACKDEF", ""))
+        .filter(_.length > 6).map(_.substring(3, 6)).distinct.sorted
+      println(s"\nUnique model codes (chars 4-6): ${models.mkString(", ")}")
     }
