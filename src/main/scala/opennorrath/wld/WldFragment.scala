@@ -93,6 +93,18 @@ case class Fragment10_SkeletonHierarchy(
 case class Fragment11_SkeletonHierarchyRef(name: String, skeletonRef: Int) extends WldFragment
 
 // 0x12 - Track definition (bone transforms per frame)
+// Each bone in a skeleton (0x10) references a 0x13 TrackRef → 0x12 TrackDef.
+// Naming convention (after stripping _TRACKDEF and uppercasing):
+//   Rest pose:  {MODEL}{BONE}          e.g. HUMPE, BAFBI_L
+//   Old-style:  {CODE}{MODEL}{BONE}    e.g. C01HUMPE, L01BAFBI_L
+//   Luclin-era: {CODE}{A|B}{MODEL}{BONE} e.g. C01AHOFBIBICEPL
+// where MODEL is a 3-char race/gender code (HUM, BAF, HOF, etc.),
+// CODE is a 3-char animation code (C01=combat, L01=idle, P01=passive, etc.),
+// A/B is a Luclin skeleton variant, and BONE is the bone suffix.
+// Old-style bones use short names (PE, CH, BI_L). Luclin uses long names (BIBICEPL, CHCHEST).
+// Race codes: HUM/HUF=Human, BAM/BAF=Barbarian, ELM/ELF=Wood Elf, HAM/HAF=Half Elf,
+//   DWM/DWF=Dwarf, TRM/TRF=Troll, OGM/OGF=Ogre, HOM/HOF=Halfling, GNM/GNF=Gnome,
+//   IKM/IKF=Iksar, KEM/KEF=Vah Shir, ERM/ERF=Erudite.
 case class Fragment12_TrackDef(name: String, frames: Array[BoneTransform]) extends WldFragment:
   /** Track name without _TRACKDEF suffix, uppercased. */
   lazy val cleanName: String = name.toUpperCase.replace("_TRACKDEF", "")

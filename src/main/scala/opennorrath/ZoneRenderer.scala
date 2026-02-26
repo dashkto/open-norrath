@@ -270,6 +270,18 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings()):
     println(s"  Characters placed: ${results.size}")
     results
 
+  /** Load animation tracks from all global*_chr*.s3d files.
+    *
+    * EQ stores character animations across multiple global S3D archives:
+    *   global_chr.s3d    — Old-style anims for many races (DWF, ELF, BAF, HOM, etc.)
+    *   global{N}_chr.s3d — Additional old-style animation tracks (global2..global7)
+    *   global{code}_chr.s3d — Per-race files with Luclin-era skeletons + animations
+    *     e.g. globalbaf_chr.s3d has BAF rest-pose + C01ABAF* Luclin animations
+    *
+    * Old-style tracks use short bone names (PE, CH, BI_L) and the pattern {CODE}{MODEL}{BONE}.
+    * Luclin-era tracks use long bone names (BIBICEPL, CHCHEST) and {CODE}{A|B}{MODEL}{BONE}.
+    * Both are loaded into a single flat list; discoverAnimations handles the pattern matching.
+    */
   private def loadGlobalAnimations(): List[Fragment12_TrackDef] =
     val assetsDir = Path.of(s3dPath).getParent
     if assetsDir == null then return Nil
@@ -428,12 +440,14 @@ object ZoneRenderer:
 
   /** Build character data from actors: resolve meshes, discover animations, compute bounding boxes. */
   def buildCharacters(chrWld: WldFile, actors: List[Fragment14_Actor], extraTrackDefs: List[Fragment12_TrackDef] = Nil): List[CharBuild] =
-    // Pre-build track name map ONCE for all characters (avoids rebuilding 335K+ map per character)
+    // Pre-build track name map ONCE for all characters (avoids rebuilding 335K+ map per character).
+    // Keys are clean names like "C01HUMPE" or "C01AHOFBIBICEPL" (see Fragment12_TrackDef docs).
     val allTrackDefs = chrWld.fragmentsOfType[Fragment12_TrackDef] ++ extraTrackDefs
     val trackDefsByName: Map[String, Fragment12_TrackDef] = allTrackDefs.map { td =>
       td.cleanName -> td
     }.toMap
-    // Pre-compute unique 3-char animation codes for fast prefix lookup
+    // Pre-compute unique 3-char animation codes (C01, L01, P01, etc.) for fast prefix lookup.
+    // discoverAnimations uses these to probe the map with {code}{model}{bone} patterns.
     val animCodes: Set[String] = trackDefsByName.keysIterator
       .filter(_.length > 3).map(_.take(3)).toSet
     println(s"  Track name map: ${trackDefsByName.size} unique entries, ${animCodes.size} anim codes")
