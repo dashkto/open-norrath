@@ -70,6 +70,15 @@ case class Fragment10_SkeletonHierarchy(
     meshRefs: List[Int],
     bones: Array[SkeletonBone],
 ) extends WldFragment:
+  /** Whether this skeleton uses Luclin-era bone naming (incompatible with old-style animations). */
+  def isLuclin(wld: WldFile): Boolean =
+    bones.exists { bone =>
+      try
+        val trackRef = wld.fragment(bone.trackRef).asInstanceOf[Fragment13_TrackRef]
+        wld.fragment(trackRef.trackDefRef).asInstanceOf[Fragment12_TrackDef].isLuclin
+      catch case _: Exception => false
+    }
+
   /** Compute world-space transform for each bone by walking parent chain */
   def boneWorldTransforms(wld: WldFile): Array[Matrix4f] =
     val transforms = new Array[Matrix4f](bones.length)
@@ -111,6 +120,21 @@ case class Fragment12_TrackDef(name: String, frames: Array[BoneTransform]) exten
 
   /** Whether this track has animation (more than 1 frame). */
   def isAnimated: Boolean = frames.length > 1
+
+  /** Whether this track uses Luclin-era bone naming (long compound suffixes like BIBICEPL).
+    * Old-style bone suffixes are short (2-5 chars): PE, BI_L, FI_R2.
+    * Luclin suffixes are long (7+ chars): BIBICEPL, BICLAVL, CHCHEST.
+    */
+  def isLuclin: Boolean =
+    // Strip model prefix (3 chars) and any animation code prefix (3 chars + optional variant letter)
+    // from cleanName to get the bone suffix, then check length.
+    // For rest-pose tracks like "ERMBIBICEPL", suffix = "BIBICEPL" (8 chars) → Luclin.
+    // For rest-pose tracks like "HOFBI_L", suffix = "BI_L" (4 chars) → old-style.
+    val cn = cleanName
+    if cn.length <= 3 then false // root bone (just model prefix)
+    else
+      val suffix = cn.drop(3) // strip 3-char model prefix
+      !suffix.endsWith("_POINT") && suffix.length > 5
 
   /** Rest-pose translation (frame 0). Safe even for empty frames. */
   def restTranslation: Vector3f =

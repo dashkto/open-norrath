@@ -78,14 +78,9 @@ class NameplateRenderer:
     glBindVertexArray(0)
     initialized = true
 
-  /** Draw all nameplates. Call after 3D scene, before ImGui panels.
-    * @param shader the scene shader (already has projection/view set)
-    * @param viewMatrix current camera view matrix (for billboard orientation)
-    * @param spawns live spawn data keyed by spawn ID
-    * @param nameplateData iterable of (spawnId, modelMatrix, headHeight) from renderer
-    */
+  /** Draw all nameplates. Call after 3D scene, before ImGui panels. */
   def draw(shader: Shader, viewMatrix: Matrix4f,
-           spawns: scala.collection.mutable.Map[Int, opennorrath.network.SpawnData],
+           characters: scala.collection.Map[Int, opennorrath.state.ZoneCharacter],
            nameplateData: Iterable[(Int, Matrix4f, Float)]): Unit =
     ensureInit()
 
@@ -101,8 +96,8 @@ class NameplateRenderer:
     val identity = Matrix4f()
 
     for (spawnId, modelMatrix, headHeight) <- nameplateData if quadCount < MaxQuads do
-      spawns.get(spawnId).foreach { s =>
-        val name = cleanName(s.name)
+      characters.get(spawnId).foreach { zc =>
+        val name = zc.displayName
         if name.nonEmpty then
           val tex = getTexture(name)
 
@@ -160,9 +155,6 @@ class NameplateRenderer:
 
           quadCount += 1
       }
-
-  private def cleanName(raw: String): String =
-    raw.replaceAll("\\d+$", "").replace('_', ' ').trim
 
   private def getTexture(name: String): NameTexture =
     cache.getOrElseUpdate(name, createTexture(name))

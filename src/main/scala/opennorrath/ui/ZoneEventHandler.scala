@@ -1,12 +1,13 @@
 package opennorrath.ui
 
 import opennorrath.Game
-import opennorrath.network.{ChatMessage, ZoneEvent}
+import opennorrath.network.{ChatMessage, SpawnAppearanceChange, ZoneEvent}
+import opennorrath.state.ZoneCharacter
 
 /** Processes ZoneClient events — routes messages to the text panel
   * and updates PlayerCharacter. Registers as a ZoneClient listener.
   */
-class ZoneEventHandler(chatPanel: TextPanel):
+class ZoneEventHandler(chatPanel: TextPanel, characters: scala.collection.Map[Int, ZoneCharacter]):
 
   private var seenFirstExp = false
   val listener: ZoneEvent => Unit = handle
@@ -57,10 +58,47 @@ class ZoneEventHandler(chatPanel: TextPanel):
     case ZoneEvent.LevelChanged(lvl) =>
       chatPanel.addLine(s"You have reached level ${lvl.level}!", Colors.gold)
 
+    case ZoneEvent.SkillChanged(sk) =>
+      val name = EqData.skillName(sk.skillId)
+      chatPanel.addLine(s"You have become better at $name! (${ sk.value })", Colors.gold)
+
+    case ZoneEvent.SpellActionTriggered(action) =>
+      if action.spellId > 0 then
+        val src = spawnName(action.sourceId)
+        val tgt = spawnName(action.targetId)
+        if action.sourceId == action.targetId then
+          chatPanel.addLine(s"$src begins to cast a spell.", Colors.secondary)
+        else
+          chatPanel.addLine(s"$src begins to cast a spell on $tgt.", Colors.secondary)
+
+    case ZoneEvent.AppearanceChanged(change) =>
+      change.appearanceType match
+        case SpawnAppearanceChange.LinkDead =>
+          val name = spawnName(change.spawnId)
+          if change.parameter != 0 then
+            chatPanel.addLine(s"$name has gone linkdead.", Colors.textDim)
+          else
+            chatPanel.addLine(s"$name has reconnected.", Colors.textDim)
+        case SpawnAppearanceChange.AFK =>
+          val name = spawnName(change.spawnId)
+          if change.parameter != 0 then
+            chatPanel.addLine(s"$name is AFK.", Colors.textDim)
+        case _ => ()
+
+    case ZoneEvent.ZoneDataReceived(info) =>
+      chatPanel.addLine(s"You have entered ${info.zoneLongName}.", Colors.gold)
+
+    case ZoneEvent.WeatherChanged(weather) =>
+      weather.weatherType match
+        case 1 => chatPanel.addLine("It begins to rain.", Colors.secondary)
+        case 2 => chatPanel.addLine("It begins to snow.", Colors.secondary)
+        case 0 if weather.intensity == 0 => chatPanel.addLine("The sky clears.", Colors.secondary)
+        case _ => ()
+
     case ZoneEvent.Error(msg) =>
       chatPanel.addLine(s"Error: $msg", Colors.danger)
 
-    case _ => () // Spawns, movement, appearance, etc. handled by other listeners
+    case _ => ()
 
   // ===========================================================================
   // Chat formatting
@@ -126,7 +164,9 @@ class ZoneEventHandler(chatPanel: TextPanel):
   // ===========================================================================
 
   private def spawnName(id: Int): String =
-    Game.zoneSession.flatMap(_.client.spawns.get(id).map(_.name)).getOrElse(s"#$id")
+    characters.get(id).map(_.displayName)
+      .orElse(Game.player.filter(_ => Game.zoneSession.exists(_.client.mySpawnId == id)).map(_.name))
+      .getOrElse(s"#$id")
 
   private def conLevelColor(targetLevel: Int): (Float, Float, Float, Float) =
     val myLevel = Game.player.map(_.level).getOrElse(1)

@@ -126,3 +126,51 @@ object EqData:
       case 145 => "eye"  // Eye of Zomm
       case _   => null
     if code != null then Some(code) else None
+
+  private val skillNames: Map[Int, String] = Map(
+    0 -> "1H Blunt", 1 -> "1H Slashing", 2 -> "2H Blunt", 3 -> "2H Slashing",
+    4 -> "Abjuration", 5 -> "Alteration", 6 -> "Apply Poison", 7 -> "Archery",
+    8 -> "Backstab", 9 -> "Bind Wound", 10 -> "Bash", 11 -> "Block",
+    12 -> "Brass Instruments", 13 -> "Channeling", 14 -> "Conjuration",
+    15 -> "Defense", 16 -> "Disarm", 17 -> "Disarm Traps", 18 -> "Divination",
+    19 -> "Dodge", 20 -> "Double Attack", 21 -> "Dragon Punch", 22 -> "Dual Wield",
+    23 -> "Eagle Strike", 24 -> "Evocation", 25 -> "Feign Death",
+    26 -> "Flying Kick", 27 -> "Forage", 28 -> "Hand to Hand", 29 -> "Hide",
+    30 -> "Kick", 31 -> "Meditate", 32 -> "Mend", 33 -> "Offense",
+    34 -> "Parry", 35 -> "Pick Lock", 36 -> "Piercing",
+    37 -> "Riposte", 38 -> "Round Kick", 39 -> "Safe Fall",
+    40 -> "Sense Heading", 41 -> "Singing", 42 -> "Sneak",
+    43 -> "Specialize Abjure", 44 -> "Specialize Alteration",
+    45 -> "Specialize Conjuration", 46 -> "Specialize Divination",
+    47 -> "Specialize Evocation", 48 -> "Pick Pockets",
+    49 -> "Stringed Instruments", 50 -> "Swimming", 51 -> "Throwing",
+    52 -> "Tiger Claw", 53 -> "Tracking", 54 -> "Wind Instruments",
+    55 -> "Fishing", 56 -> "Make Poison", 57 -> "Tinkering",
+    58 -> "Research", 59 -> "Alchemy", 60 -> "Baking",
+    61 -> "Tailoring", 62 -> "Sense Traps", 63 -> "Blacksmithing",
+    64 -> "Fletching", 65 -> "Brewing", 66 -> "Alcohol Tolerance",
+    67 -> "Begging", 68 -> "Jewelry Making", 69 -> "Pottery",
+    70 -> "Percussion Instruments", 71 -> "Intimidation",
+    72 -> "Berserking", 73 -> "Taunt",
+    74 -> "Frenzy",
+  )
+
+  def skillName(id: Int): String = skillNames.getOrElse(id, s"Skill($id)")
+
+  /** Base racial resistances: (MR, FR, CR, DR, PR) */
+  def raceBaseResists(race: Int): (Int, Int, Int, Int, Int) = race match
+    case 1   => (25, 25, 25, 25, 25)  // Human
+    case 2   => (25, 25, 35, 25, 25)  // Barbarian
+    case 3   => (30, 25, 25, 30, 25)  // Erudite
+    case 4   => (25, 25, 25, 25, 25)  // Wood Elf
+    case 5   => (25, 25, 25, 25, 25)  // High Elf
+    case 6   => (25, 25, 25, 25, 25)  // Dark Elf
+    case 7   => (25, 25, 25, 25, 25)  // Half Elf
+    case 8   => (30, 25, 25, 25, 30)  // Dwarf
+    case 9   => (25, 30, 25, 25, 35)  // Troll
+    case 10  => (25, 30, 25, 25, 35)  // Ogre
+    case 11  => (25, 25, 25, 25, 30)  // Halfling
+    case 12  => (25, 30, 25, 25, 25)  // Gnome
+    case 128 => (25, 25, 25, 25, 25)  // Iksar
+    case 130 => (25, 25, 25, 25, 25)  // Vah Shir
+    case _   => (25, 25, 25, 25, 25)

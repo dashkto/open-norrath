@@ -19,15 +19,13 @@ case class TextLine(text: String, color: (Float, Float, Float, Float) = Colors.t
   */
 class TextPanel(
   val id: String,
-  x: Float,
-  y: Float,
   val onSubmit: String => Unit = _ => (),
 ) extends Panel:
 
   private var firstFrame = true
   val title = s"$id###textpanel_$id"
-  val defaultX = x
-  val defaultY = y
+  val defaultX = 10f
+  val defaultY = 500f
   val defaultWidth = 450f
   val defaultHeight = 200f
   override def fontScale: Float = 0.85f
@@ -45,7 +43,7 @@ class TextPanel(
 
   override protected def renderContent(): Unit =
     // Text area fills available space minus input row
-    val inputRowHeight = ImGui.getFrameHeightWithSpacing()
+    val inputRowHeight = ImGui.getFrameHeight() + ImGui.getStyle().getItemSpacingY()
     ImGui.beginChild("##scrollarea", 0f, -inputRowHeight, false, ImGuiWindowFlags.NoBackground)
     for line <- lines do
       pushColor(ImGuiCol.Text, line.color)
@@ -61,7 +59,6 @@ class TextPanel(
       (ImGui.isKeyPressed(ImGuiKey.Enter) || ImGui.isKeyPressed(ImGuiKey.KeypadEnter))
 
     // Input field
-    ImGui.separator()
     ImGui.pushItemWidth(-1f)
     if wantFocus && !firstFrame then ImGui.setKeyboardFocusHere()
     val flags = ImGuiInputTextFlags.EnterReturnsTrue

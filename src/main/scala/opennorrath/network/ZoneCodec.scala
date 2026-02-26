@@ -438,7 +438,11 @@ object ZoneCodec:
         SpellBuff(buffType, bLevel, bardMod, spellId, duration, counters)
       }.filter(_.spellId != 0xFFFF)
 
-      // Skip to mem_spells at offset 2870
+      // spell_book[256] at offset 1846 — int16, -1 = empty
+      buf.position(1846)
+      val spellBook = Array.fill(256)(buf.getShort().toInt).filter(_ >= 0)
+
+      // mem_spells[8] at offset 2870
       buf.position(2870)
       val memSpells = Array.fill(8)(buf.getShort().toInt)
 
@@ -523,7 +527,7 @@ object ZoneCodec:
         face = face, hairColor = hairColor, beardColor = beardColor,
         eyeColor1 = eyeColor1, eyeColor2 = eyeColor2, hairStyle = hairStyle, beard = beard,
         deity = deity, guildId = guildId, guildRank = guildRank,
-        memSpells = memSpells, skills = skills, buffs = buffs,
+        spellBook = spellBook, memSpells = memSpells, skills = skills, buffs = buffs,
         hungerLevel = hungerLevel, thirstLevel = thirstLevel,
         aaExp = aaExp, aaPoints = aaPoints, aaPercentage = aaPercentage,
         expansions = 0, // TODO: read from offset 3392 if needed
@@ -827,6 +831,21 @@ object ZoneCodec:
     val buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
     Some(SkillChange(buf.getInt(), buf.getInt()))
 
+  /** Decode OP_Buff: SpellBuffFade_Struct (12 bytes).
+    * Returns (slotIndex, SpellBuff). */
+  def decodeBuff(data: Array[Byte]): Option[(Int, SpellBuff)] =
+    if data.length < 12 then return None
+    val buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
+    val buffType = buf.get() & 0xFF
+    val bLevel = buf.get() & 0xFF
+    val bardMod = buf.get() & 0xFF
+    val activated = buf.get() & 0xFF
+    val spellId = buf.getShort() & 0xFFFF
+    val duration = buf.getShort() & 0xFFFF
+    val counters = buf.getShort() & 0xFFFF
+    val slotId = buf.getShort() & 0xFFFF
+    Some((slotId, SpellBuff(buffType, bLevel, bardMod, spellId, duration, counters)))
+
   /** Decode OP_SpawnDoor: DoorSpawns_Struct — count(u16) + Door_Struct[count] (44 bytes each). */
   def decodeDoors(data: Array[Byte]): Vector[DoorData] =
     if data.length < 2 then return Vector.empty
@@ -990,9 +1009,20 @@ object ZoneCodec:
     buf.getShort()                        // 0186: unknown
     val slots = buf.getInt()              // 0188: bitmask of valid equipment slots
 
-    // Skip to common union stats
-    // Current position is at 0192, need to advance to 0240 (HP)
-    buf.position(base + 240)
+    // Common union stats (itemClass == 0)
+    buf.position(base + 228)
+    val aStr = buf.get()                  // 0228
+    val aSta = buf.get()                  // 0229
+    val aCha = buf.get()                  // 0230
+    val aDex = buf.get()                  // 0231
+    val aInt = buf.get()                  // 0232
+    val aAgi = buf.get()                  // 0233
+    val aWis = buf.get()                  // 0234
+    val mr = buf.get()                    // 0235
+    val fr = buf.get()                    // 0236
+    val cr = buf.get()                    // 0237
+    val dr = buf.get()                    // 0238
+    val pr = buf.get()                    // 0239
     val hp = buf.getShort()               // 0240
     val mana = buf.getShort()             // 0242
     val ac = buf.getShort()               // 0244
@@ -1006,6 +1036,7 @@ object ZoneCodec:
     buf.position(base + 278)
     val charges = buf.get()               // 0278 (signed)
 
+    val common = itemClass == 0
     InventoryItem(
       name = readNullStr(nameBytes),
       lore = readNullStr(loreBytes),
@@ -1018,11 +1049,23 @@ object ZoneCodec:
       noRent = noRent == 0,
       noDrop = noDrop == 0,
       magic = magic != 0,
-      ac = if itemClass == 0 then ac else 0,
-      hp = if itemClass == 0 then hp else 0,
-      mana = if itemClass == 0 then mana else 0,
-      damage = if itemClass == 0 then damage else 0,
-      delay = if itemClass == 0 then delay else 0,
+      aStr = if common then aStr else 0,
+      aSta = if common then aSta else 0,
+      aCha = if common then aCha else 0,
+      aDex = if common then aDex else 0,
+      aInt = if common then aInt else 0,
+      aAgi = if common then aAgi else 0,
+      aWis = if common then aWis else 0,
+      mr = if common then mr else 0,
+      fr = if common then fr else 0,
+      cr = if common then cr else 0,
+      dr = if common then dr else 0,
+      pr = if common then pr else 0,
+      ac = if common then ac else 0,
+      hp = if common then hp else 0,
+      mana = if common then mana else 0,
+      damage = if common then damage else 0,
+      delay = if common then delay else 0,
       charges = charges,
     )
 

@@ -1,8 +1,7 @@
 package opennorrath.world
 
-import opennorrath.InputManager
+import opennorrath.{GameAction, InputManager}
 import org.joml.{Matrix4f, Vector3f}
-import org.lwjgl.glfw.GLFW.*
 
 class Camera(
     val position: Vector3f = Vector3f(0f, 0f, 3f),
@@ -29,12 +28,12 @@ class Camera(
     val velocity = speed * deltaTime
     val movement = Vector3f()
 
-    if input.isKeyHeld(GLFW_KEY_W) then movement.add(Vector3f(front).mul(velocity))
-    if input.isKeyHeld(GLFW_KEY_S) then movement.sub(Vector3f(front).mul(velocity))
-    if input.isKeyHeld(GLFW_KEY_A) then movement.sub(Vector3f(right).mul(velocity))
-    if input.isKeyHeld(GLFW_KEY_D) then movement.add(Vector3f(right).mul(velocity))
-    if input.isKeyHeld(GLFW_KEY_SPACE) then movement.add(Vector3f(up).mul(velocity))
-    if input.isKeyHeld(GLFW_KEY_LEFT_SHIFT) then movement.sub(Vector3f(up).mul(velocity))
+    if input.isActionHeld(GameAction.MoveForward) then movement.add(Vector3f(front).mul(velocity))
+    if input.isActionHeld(GameAction.MoveBackward) then movement.sub(Vector3f(front).mul(velocity))
+    if input.isActionHeld(GameAction.StrafeLeft) then movement.sub(Vector3f(right).mul(velocity))
+    if input.isActionHeld(GameAction.StrafeRight) then movement.add(Vector3f(right).mul(velocity))
+    if input.isActionHeld(GameAction.MoveUp) then movement.add(Vector3f(up).mul(velocity))
+    if input.isActionHeld(GameAction.MoveDown) then movement.sub(Vector3f(up).mul(velocity))
 
     position.add(movement)
 

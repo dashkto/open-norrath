@@ -36,15 +36,21 @@ class ZoneLoadingScreen(
   private val listener: ZoneEvent => Unit = {
     case ZoneEvent.ProfileReceived(pp) =>
       statusText = s"Loading ${pp.name}..."
-      Game.player = Some(PlayerCharacter(
+      val pc = PlayerCharacter(
         name = pp.name,
         level = pp.level,
+        race = pp.race,
         classId = pp.classId,
         currentHp = pp.curHp,
         maxHp = pp.curHp,
         currentMana = pp.mana,
         maxMana = pp.mana,
-      ))
+        str = pp.str, sta = pp.sta, agi = pp.agi, dex = pp.dex,
+        wis = pp.wis, int = pp.int_, cha = pp.cha,
+      )
+      pc.loadBuffs(pp.buffs)
+      pc.spellBook ++= pp.spellBook
+      Game.player = Some(pc)
     case ZoneEvent.ZoneDataReceived(nz) =>
       statusText = s"Entering ${nz.zoneLongName}..."
     case ZoneEvent.StateChanged(ZoneState.InZone) =>

@@ -16,15 +16,15 @@ object AnimDebug:
 
   case class BoneInfo(index: Int, parentIndex: Int, trackName: String)
 
-  def loadTigSkeleton(archiveName: String): (WldFile, Fragment10_SkeletonHierarchy, Array[BoneInfo]) =
+  def loadSkeleton(archiveName: String, actorFilter: String = "TIG"): (WldFile, Fragment10_SkeletonHierarchy, Array[BoneInfo]) =
     val path = Path.of(AssetsDir, archiveName)
     val entries = PfsArchive.load(path)
     val wldEntry = entries.find(_.extension == "wld").get
     val wld = WldFile(wldEntry.data)
 
     val actors = wld.fragmentsOfType[Fragment14_Actor]
-    val tigActor = actors.find(_.name.toUpperCase.contains("TIG")).getOrElse {
-      throw RuntimeException(s"No TIG actor found in $archiveName")
+    val tigActor = actors.find(_.name.toUpperCase.contains(actorFilter.toUpperCase)).getOrElse {
+      throw RuntimeException(s"No $actorFilter actor found in $archiveName")
     }
 
     val skeleton = tigActor.componentRefs.flatMap { ref =>
@@ -57,57 +57,65 @@ object AnimDebug:
       println(f"  [${b.index}%2d]  ${b.parentIndex}%6d  ${b.trackName}")
 
   def main(args: Array[String]): Unit =
-    // ---- Load arena_chr.s3d TIG skeleton ----
-    val (arenaWld, arenaSkel, arenaBones) = loadTigSkeleton("arena_chr.s3d")
-    printSkeleton("arena_chr.s3d - TIG Skeleton", arenaBones)
+    val actor = if args.length > 0 then args(0) else "TIG"
+    val archives = if args.length > 1 then args.drop(1).toList else List("arena_chr.s3d", "global6_chr.s3d")
 
-    // ---- Load global6_chr.s3d TIG skeleton ----
-    val (global6Wld, global6Skel, global6Bones) = loadTigSkeleton("global6_chr.s3d")
-    printSkeleton("global6_chr.s3d - TIG Skeleton", global6Bones)
+    val loaded = archives.flatMap { arch =>
+      try
+        val (wld, skel, bones) = loadSkeleton(arch, actor)
+        printSkeleton(s"$arch - $actor Skeleton", bones)
+        Some((arch, bones))
+      catch case e: Exception =>
+        println(s"\n$arch: ${e.getMessage}")
+        None
+    }
+
+    if loaded.size < 2 then return
+
+    val (arch1, bones1) = loaded(0)
+    val (arch2, bones2) = loaded(1)
 
     // ---- Compare ----
     println(s"\n=== Comparison ===")
-    println(s"  arena_chr  bones: ${arenaBones.length}")
-    println(s"  global6_chr bones: ${global6Bones.length}")
+    println(s"  $arch1 bones: ${bones1.length}")
+    println(s"  $arch2 bones: ${bones2.length}")
 
-    if arenaBones.length != global6Bones.length then
+    if bones1.length != bones2.length then
       println(s"  DIFFERENT bone count!")
 
-    val arenaParents = arenaBones.map(_.parentIndex).toSeq
-    val global6Parents = global6Bones.map(_.parentIndex).toSeq
+    val parents1 = bones1.map(_.parentIndex).toSeq
+    val parents2 = bones2.map(_.parentIndex).toSeq
 
-    if arenaParents == global6Parents then
+    if parents1 == parents2 then
       println("\n  SAME ORDER - index mapping is correct")
-      // Still show side-by-side for track name comparison
-      println(f"\n  ${"Idx"}%4s  ${"Parent"}%6s  ${"Arena Track"}%-40s  Global6 Track")
+      println(f"\n  ${"Idx"}%4s  ${"Parent"}%6s  ${"Track 1"}%-40s  Track 2")
       println("  " + "-" * 100)
-      for i <- arenaBones.indices do
-        val a = arenaBones(i)
-        val g = if i < global6Bones.length then global6Bones(i) else BoneInfo(i, -999, "<missing>")
+      for i <- bones1.indices do
+        val a = bones1(i)
+        val g = if i < bones2.length then bones2(i) else BoneInfo(i, -999, "<missing>")
         val marker = if a.trackName != g.trackName then " <-- DIFF" else ""
         println(f"  [${a.index}%2d]  ${a.parentIndex}%6d  ${a.trackName}%-40s  ${g.trackName}$marker")
     else
       println("\n  DIFFERENT parent hierarchy! Building bone mapping by track name...")
 
-      // Build mapping: for each arena bone, find the global6 bone with the same track name
-      val global6ByTrack = global6Bones.map(b => b.trackName.toUpperCase -> b).toMap
-      println(f"\n  ${"Arena"}%5s  ${"ArenaParent"}%11s  ${"Track"}%-40s  ${"Global6"}%7s  ${"G6Parent"}%8s")
+      val byTrack2 = bones2.map(b => b.trackName.toUpperCase -> b).toMap
+      println(f"\n  ${"Idx1"}%5s  ${"Parent1"}%8s  ${"Track"}%-40s  ${"Idx2"}%5s  ${"Parent2"}%8s")
       println("  " + "-" * 110)
-      for a <- arenaBones do
+      for a <- bones1 do
         val key = a.trackName.toUpperCase
-        val g = global6ByTrack.get(key)
+        val g = byTrack2.get(key)
         val gIdx = g.map(_.index.toString).getOrElse("???")
         val gPar = g.map(_.parentIndex.toString).getOrElse("???")
         val marker = g match
           case Some(gb) if gb.index != a.index => " <-- REORDERED"
           case None => " <-- NOT FOUND"
           case _ => ""
-        println(f"  [${a.index}%2d]  ${a.parentIndex}%11d  ${a.trackName}%-40s  ${gIdx}%7s  ${gPar}%8s$marker")
+        println(f"  [${a.index}%2d]  ${a.parentIndex}%8d  ${a.trackName}%-40s  ${gIdx}%5s  ${gPar}%8s$marker")
 
       // Print explicit index mapping array
-      println("\n  Index mapping (arena -> global6):")
-      val mapping = arenaBones.map { a =>
+      println(s"\n  Index mapping ($arch1 -> $arch2):")
+      val mapping = bones1.map { a =>
         val key = a.trackName.toUpperCase
-        global6ByTrack.get(key).map(_.index).getOrElse(-1)
+        byTrack2.get(key).map(_.index).getOrElse(-1)
       }
       println(s"  ${mapping.mkString(", ")}")

@@ -193,6 +193,10 @@ All tools default to `assets/arena*` if no argument is given.
 | `LightDebug` | `.txt` | Line lights with coordinates/RGB, portals |
 | `EmitterDebug` | `_EnvironmentEmitters.txt` | Particle emitter names, IDs, positions |
 
+## UI Window Layout
+
+Window positions and sizes are persisted by Dear ImGui in `imgui.ini` (project root). Panel code sets `defaultX`/`defaultY` with `ImGuiCond.FirstUseEver` as initial fallbacks, but after the first run the ini file takes over. Delete `imgui.ini` to reset all window positions.
+
 ## Key Technical Challenges
 - **S3D/WLD format:** Custom archive + world format with BSP trees, region-based visibility, baked lighting. WLD is notoriously underdocumented. LanternExtractor (C#) and zone-utilities (C++) are the best existing parsers.
 - **EQ protocol:** Partially documented via EQEmu. Will need Wireshark for gaps. P1999 uses Titanium-era opcodes.

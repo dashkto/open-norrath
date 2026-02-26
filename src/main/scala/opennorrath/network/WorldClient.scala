@@ -95,15 +95,9 @@ class WorldClient extends PacketHandler:
     // Fragment reassembly — may buffer and return None until complete
     val pkt = assembler.process(packet) match
       case Some(p) => p
-      case None =>
-        println(s"[World] Fragment buffered (arq=${packet.arq})")
-        return
+      case None => return
 
-    if pkt.opcode == 0 then
-      println(s"[World] ACK (seq=${pkt.seq}, arsp=${pkt.arsp})")
-      return
-
-    println(s"[World] Recv ${WorldOpcodes.name(pkt.opcode)} (${pkt.payload.length}B)")
+    if pkt.opcode == 0 then return
 
     pkt.opcode match
       case WorldOpcodes.SendCharInfo =>
@@ -156,8 +150,7 @@ class WorldClient extends PacketHandler:
         println(s"[World] Name approval: $approved")
         emit(WorldEvent.NameApproved(approved))
 
-      case other =>
-        println(s"[World] Unhandled opcode: ${WorldOpcodes.name(other)}")
+      case _ => ()
 
   /** Called periodically from network thread. Builds queued app packets and ACKs. */
   def tick(): Unit =
@@ -186,12 +179,10 @@ class WorldClient extends PacketHandler:
 
   /** Queue an app packet for sending. Safe to call from game thread. */
   private def queueAppPacket(opcode: Short, payload: Array[Byte]): Unit =
-    println(s"[World] Queuing ${WorldOpcodes.name(opcode)} (${payload.length}B)")
     pendingApps.add((opcode, payload))
 
   /** Build and enqueue a raw packet. Called from network thread only. */
   private def buildAppPacket(opcode: Short, payload: Array[Byte]): Unit =
-    println(s"[World] Building ${WorldOpcodes.name(opcode)} (${payload.length}B) seq=$outSeq arq=$outArq")
     if payload.length > 510 then
       buildFragmentedPacket(opcode, payload)
       return
@@ -214,7 +205,6 @@ class WorldClient extends PacketHandler:
   private def buildFragmentedPacket(opcode: Short, payload: Array[Byte]): Unit =
     val fSeq = nextFragSeq()
     val fragments = assembler.fragment(opcode, payload, fSeq)
-    println(s"[World] Fragmenting ${WorldOpcodes.name(opcode)} (${payload.length}B) into ${fragments.size} fragments")
     for (frag, i) <- fragments.zipWithIndex do
       val arsp = if i == 0 && needArsp then Some(lastInArq) else None
       if i == 0 then needArsp = false

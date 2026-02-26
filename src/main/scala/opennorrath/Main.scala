@@ -12,7 +12,7 @@ import org.lwjgl.opengl.GL11.*
 import org.lwjgl.system.MemoryUtil.NULL
 
 import opennorrath.screen.{GameContext, SplashScreen, ZoneScreen}
-import opennorrath.ui.{Fonts, ImGuiTheme, ItemIcons}
+import opennorrath.ui.{Fonts, ImGuiTheme, ItemIcons, SpellData}
 import opennorrath.state.PlayerCharacter
 
 object Main:
@@ -71,6 +71,7 @@ object Main:
     imGuiGl3.init("#version 330 core")
     ImGuiTheme.apply()
     ItemIcons.init("assets/EverQuest")
+    SpellData.init("assets/EverQuest")
 
     val ctx = GameContext(window, input, settings, WindowWidth, WindowHeight, imGuiGlfw, imGuiGl3)
 
@@ -79,11 +80,13 @@ object Main:
         Game.player = Some(PlayerCharacter(
           name = "Testchar",
           level = 50,
+          race = 1, // Human
           classId = 2, // Cleric
           currentHp = 3200,
           maxHp = 4000,
           currentMana = 1800,
           maxMana = 3000,
+          str = 80, sta = 85, agi = 70, dex = 75, wis = 105, int = 85, cha = 60,
         ))
         ZoneScreen(ctx, zonePath)
       else SplashScreen(ctx, zonePath)

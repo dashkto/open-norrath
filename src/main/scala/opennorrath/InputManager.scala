@@ -2,7 +2,36 @@ package opennorrath
 
 import org.lwjgl.glfw.GLFW.*
 
-class InputManager(window: Long):
+enum GameAction:
+  case MoveForward, MoveBackward, StrafeLeft, StrafeRight, MoveUp, MoveDown
+  case FreeLook, Target
+  case TargetSelf
+  case ToggleInventory, ToggleSpellBook, DumpDebug, Escape
+
+sealed trait InputBinding
+case class KeyBind(key: Int) extends InputBinding
+case class MouseBind(button: Int) extends InputBinding
+
+class KeyBindings(val bindings: Map[GameAction, Seq[InputBinding]] = KeyBindings.defaults)
+
+object KeyBindings:
+  val defaults: Map[GameAction, Seq[InputBinding]] = Map(
+    GameAction.MoveForward  -> Seq(KeyBind(GLFW_KEY_W)),
+    GameAction.MoveBackward -> Seq(KeyBind(GLFW_KEY_S)),
+    GameAction.StrafeLeft   -> Seq(KeyBind(GLFW_KEY_A)),
+    GameAction.StrafeRight  -> Seq(KeyBind(GLFW_KEY_D)),
+    GameAction.MoveUp       -> Seq(KeyBind(GLFW_KEY_SPACE)),
+    GameAction.MoveDown     -> Seq(KeyBind(GLFW_KEY_LEFT_SHIFT)),
+    GameAction.FreeLook     -> Seq(MouseBind(GLFW_MOUSE_BUTTON_RIGHT)),
+    GameAction.Target       -> Seq(MouseBind(GLFW_MOUSE_BUTTON_LEFT)),
+    GameAction.TargetSelf      -> Seq(KeyBind(GLFW_KEY_F1)),
+    GameAction.ToggleInventory -> Seq(KeyBind(GLFW_KEY_I)),
+    GameAction.ToggleSpellBook -> Seq(KeyBind(GLFW_KEY_B)),
+    GameAction.DumpDebug    -> Seq(KeyBind(GLFW_KEY_T)),
+    GameAction.Escape       -> Seq(KeyBind(GLFW_KEY_ESCAPE)),
+  )
+
+class InputManager(window: Long, val keyBindings: KeyBindings = KeyBindings()):
 
   // Key state — held is persistent, pressed/released are per-frame edges
   private val keysDown = java.util.HashSet[Int]()
@@ -89,3 +118,15 @@ class InputManager(window: Long):
   def isMousePressed(button: Int): Boolean = buttonsPressed.contains(button)
   def mousePos: (Float, Float) = (_mouseX, _mouseY)
   def mouseDelta: (Float, Float) = (mouseDX, mouseDY)
+
+  def isActionHeld(action: GameAction): Boolean =
+    keyBindings.bindings.getOrElse(action, Seq.empty).exists {
+      case KeyBind(k) => keysDown.contains(k)
+      case MouseBind(b) => buttonsDown.contains(b)
+    }
+
+  def isActionPressed(action: GameAction): Boolean =
+    keyBindings.bindings.getOrElse(action, Seq.empty).exists {
+      case KeyBind(k) => keysPressed.contains(k)
+      case MouseBind(b) => buttonsPressed.contains(b)
+    }

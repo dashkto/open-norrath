@@ -51,13 +51,15 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings()):
 
   // Load character build templates (zone + global models) and global animation tracks
   private var cachedGlobalTrackDefs: List[Fragment12_TrackDef] = Nil
+  private var cachedGlobalWld: Option[WldFile] = None
   val characterBuilds: Map[String, ZoneRenderer.CharBuild] = loadCharacterBuilds()
 
   /** Return cached global animation TrackDefs (loaded during character init). */
   def loadGlobalAnimationTracks(): List[Fragment12_TrackDef] = cachedGlobalTrackDefs
 
   // Live spawn characters — managed by addSpawn/removeSpawn/updateSpawnPosition
-  private case class SpawnInstance(char: AnimatedCharacter, build: ZoneRenderer.CharBuild, size: Float, var moving: Boolean = false)
+  private case class SpawnInstance(char: AnimatedCharacter, build: ZoneRenderer.CharBuild, size: Float, var moving: Boolean = false,
+    var textureOverrides: Map[String, String] = Map.empty)
   private val _spawnCharacters = scala.collection.mutable.Map[Int, SpawnInstance]()
 
   /** Return (spawnId, modelMatrix, headHeight) for each live spawn — used for nameplates. */
@@ -81,17 +83,6 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings()):
         val effectiveSize = if size > 0f then size / 6f else 1f
         val modelMatrix = buildSpawnMatrix(build, position, heading, effectiveSize)
         val char = AnimatedCharacter(build.skeleton, build.meshFragments, build.zm, glMesh, modelMatrix, build.clips, interleaved.clone())
-        println(s"  [Spawn $spawnId] model=$modelCode pos=(${position.x},${position.y},${position.z}) clips=${build.clips.keys.toSeq.sorted.mkString(",")} default=${char.currentClipCode}")
-        // Debug: dump root bone translations for first animated spawn
-        if build.clips.nonEmpty && _spawnCharacters.size < 3 then
-          build.clips.get(char.currentClipCode).foreach { clip =>
-            val frames = (0 until Math.min(clip.frameCount, 4)).map { f =>
-              val td = clip.boneTrackDefs(0)
-              val fr = td.frames(if f < td.frames.length then f else 0)
-              f"$f:(${fr.translation.x}%.2f,${fr.translation.y}%.2f,${fr.translation.z}%.2f)"
-            }
-            println(s"    [RootBone] ${char.currentClipCode} root: ${frames.mkString(" ")}")
-          }
         _spawnCharacters(spawnId) = SpawnInstance(char, build, effectiveSize)
         true
 
@@ -114,9 +105,83 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings()):
           if inst.char.clips.contains(AnimCode.Run.code) then AnimCode.Run.code else AnimCode.Walk.code
         else
           if inst.char.clips.contains(AnimCode.Idle.code) then AnimCode.Idle.code else AnimCode.Passive.code
-        println(s"  [Spawn $spawnId] anim change: moving=$moving animType=$animType → $code")
         inst.char.play(code)
     }
+
+  /** Update a spawn's equipment texture overrides.
+    * Parses base texture names to determine body part, then constructs variant names
+    * using the equipment material IDs.
+    * Texture naming: {race:3}{bodyPart:2}{material:02d}{index:02d}.bmp
+    */
+  def updateSpawnEquipment(spawnId: Int, equipment: Array[Int], bodyTexture: Int = 0): Unit =
+    _spawnCharacters.get(spawnId).foreach { inst =>
+      val overrides = scala.collection.mutable.Map[String, String]()
+      for group <- inst.char.zoneMesh.groups do
+        val baseName = group.textureName.toLowerCase
+        if baseName.length >= 9 && baseName.endsWith(".bmp") then
+          val prefix = baseName.substring(0, 3) // race code
+          if prefix == inst.build.key then
+            val bodyPart = baseName.substring(3, 5)
+            val slot = ZoneRenderer.bodyPartToSlot.getOrElse(bodyPart, -1)
+            if slot >= 0 then
+              val material = if equipment(slot) != 0 then equipment(slot)
+                else if bodyTexture != 0 then bodyTexture
+                else 0
+              if material != 0 then
+                val index = baseName.substring(7, 9) // preserve original texture index
+                val variant = s"${prefix}${bodyPart}${"%02d".format(material)}${index}.bmp"
+                if textureMap.contains(variant) then
+                  overrides(group.textureName.toLowerCase) = variant
+      inst.textureOverrides = overrides.toMap
+    }
+
+  /** Spawn a line of models using a given race's mesh, each with a different race/gender's walk animation.
+    * Returns list of (spawnId, label) for nameplate display.
+    */
+  def spawnAnimationTestLine(modelCode: String, basePosition: Vector3f, spacing: Float = 15f): List[(Int, String)] =
+    val globalWld = cachedGlobalWld.getOrElse { println("[AnimTest] No global WLD cached"); return Nil }
+    val build = characterBuilds.get(modelCode).getOrElse {
+      println(s"[AnimTest] No $modelCode model (available: ${characterBuilds.keys.toSeq.sorted.mkString(", ")})")
+      return Nil
+    }
+
+    val trackDefsByName: Map[String, Fragment12_TrackDef] = cachedGlobalTrackDefs.map(td => td.cleanName -> td).toMap
+    val animCodes: Set[String] = trackDefsByName.keysIterator.filter(_.length > 3).map(_.take(3)).toSet
+
+    // All playable race/gender combos (uppercase model prefix)
+    val candidates = List(
+      "HUM", "HUF", "BAM", "BAF", "ERM", "ERF", "ELM", "ELF",
+      "EHM", "EHF", "DEM", "DEF", "HAM", "HAF", "DWM", "DWF",
+      "TRM", "TRF", "OGM", "OGF", "GNM", "GNF", "IKM", "IKF",
+      "KEM", "KEF",
+    )
+
+    val results = List.newBuilder[(Int, String)]
+    var spawnId = 90000 // high IDs to avoid collision with real spawns
+    var col = 0
+
+    for prefix <- candidates do
+      val clips = AnimatedCharacter.discoverAnimationsWithPrefix(
+        globalWld, build.skeleton, trackDefsByName, animCodes, prefix)
+      val walkClip = clips.get(AnimCode.Walk.code).orElse(clips.get(AnimCode.Run.code))
+      if walkClip.isDefined then
+        val pos = Vector3f(basePosition.x + col * spacing, basePosition.y, basePosition.z)
+        val interleaved = ZoneRenderer.buildInterleaved(build.zm)
+        val glMesh = Mesh(interleaved, build.zm.indices, dynamic = true)
+        val modelMatrix = buildSpawnMatrix(build, pos, 0, 1f)
+        val char = AnimatedCharacter(build.skeleton, build.meshFragments, build.zm,
+          glMesh, modelMatrix, clips, interleaved.clone())
+        char.play(walkClip.get.code)
+        _spawnCharacters(spawnId) = SpawnInstance(char, build, 1f, moving = true)
+        val label = prefix.toLowerCase
+        println(s"[AnimTest] Spawned $modelCode with $label walk at col $col (${clips.size} clips)")
+        results += ((spawnId, label))
+        spawnId += 1
+        col += 1
+      else
+        println(s"[AnimTest] $prefix: no walk animation for $modelCode")
+
+    results.result()
 
   // No recenter needed here — character mesh vertices are already in local space with
   // origin near feet. CharacterPreview uses recenter to frame the model in its viewport.
@@ -216,7 +281,8 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings()):
         val emt = effectiveMaterialType(group)
         if isOpaque(emt) then
           shader.setInt("alphaTest", if emt == MaterialType.TransparentMasked then 1 else 0)
-          glBindTexture(GL_TEXTURE_2D, resolveTexture(group.textureName))
+          val texName = inst.textureOverrides.getOrElse(group.textureName.toLowerCase, group.textureName)
+          glBindTexture(GL_TEXTURE_2D, resolveTexture(texName))
           inst.char.glMesh.drawRange(group.startIndex, group.indexCount)
 
     // --- Pass 2: Transparent geometry (depth write OFF, blend ON) ---
@@ -248,7 +314,8 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings()):
         val emt = effectiveMaterialType(group)
         if isTransparent(emt) then
           setBlendMode(shader, emt)
-          glBindTexture(GL_TEXTURE_2D, resolveTexture(group.textureName))
+          val texName = inst.textureOverrides.getOrElse(group.textureName.toLowerCase, group.textureName)
+          glBindTexture(GL_TEXTURE_2D, resolveTexture(texName))
           inst.char.glMesh.drawRange(group.startIndex, group.indexCount)
 
     glDepthMask(true)
@@ -437,6 +504,7 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings()):
             val fileWld = WldFile(wldEntry.data)
             trackDefs ++= fileWld.fragmentsOfType[Fragment12_TrackDef]
             val actors = fileWld.fragmentsOfType[Fragment14_Actor]
+            cachedGlobalWld = Some(fileWld)
             if actors.nonEmpty then classicData = Some((fileWld, actors))
           }
         else
@@ -481,6 +549,14 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings()):
 
 object ZoneRenderer:
   private[opennorrath] val PerRacePattern = "^global([a-z]{2,3})_chr\\.s3d$".r
+
+  /** Map texture body-part codes → equipment slot indices.
+    * Slots: 0=Head, 1=Chest, 2=Arms, 3=Wrist, 4=Hands, 5=Legs, 6=Feet
+    */
+  val bodyPartToSlot: Map[String, Int] = Map(
+    "he" -> 0, "ch" -> 1, "ua" -> 2, "fa" -> 3,
+    "hn" -> 4, "lg" -> 5, "ft" -> 6,
+  )
 
   case class CharBuild(
     key: String, skeleton: Fragment10_SkeletonHierarchy, meshFragments: List[Fragment36_Mesh],
@@ -611,34 +687,38 @@ object ZoneRenderer:
       if meshFragments.isEmpty || skeletonOpt.isEmpty then None
       else
         val sk = skeletonOpt.get
-        val clips = AnimatedCharacter.discoverAnimations(chrWld, sk, trackDefsByName, animCodes)
+        if sk.isLuclin(chrWld) then
+          if !quiet then println(f"    $actorKey: skipped (Luclin skeleton)")
+          None
+        else
+          val clips = AnimatedCharacter.discoverAnimations(chrWld, sk, trackDefsByName, animCodes)
 
-        val defaultClip = clips.get(AnimCode.Idle.code).orElse(clips.get(AnimCode.Passive.code)).orElse(clips.headOption.map(_._2))
-        val boneTransforms = defaultClip match
-          case Some(clip) => AnimatedCharacter.computeBoneTransforms(sk, clip, 0)
-          case None => sk.boneWorldTransforms(chrWld)
-        val transformedMeshes = meshFragments.map(mesh => applyBoneTransforms(mesh, boneTransforms))
-        val zm = extractMeshGeometry(chrWld, transformedMeshes)
+          val defaultClip = clips.get(AnimCode.Idle.code).orElse(clips.get(AnimCode.Passive.code)).orElse(clips.headOption.map(_._2))
+          val boneTransforms = defaultClip match
+            case Some(clip) => AnimatedCharacter.computeBoneTransforms(sk, clip, 0)
+            case None => sk.boneWorldTransforms(chrWld)
+          val transformedMeshes = meshFragments.map(mesh => applyBoneTransforms(mesh, boneTransforms))
+          val zm = extractMeshGeometry(chrWld, transformedMeshes)
 
-        val vc = zm.vertices.length / 3
-        var eqMinX = Float.MaxValue; var eqMaxX = Float.MinValue
-        var eqMinY = Float.MaxValue; var eqMaxY = Float.MinValue
-        var eqMinZ = Float.MaxValue; var eqMaxZ = Float.MinValue
-        for i <- 0 until vc do
-          val x = zm.vertices(i * 3); val y = zm.vertices(i * 3 + 1); val z = zm.vertices(i * 3 + 2)
-          if x < eqMinX then eqMinX = x; if x > eqMaxX then eqMaxX = x
-          if y < eqMinY then eqMinY = y; if y > eqMaxY then eqMaxY = y
-          if z < eqMinZ then eqMinZ = z; if z > eqMaxZ then eqMaxZ = z
+          val vc = zm.vertices.length / 3
+          var eqMinX = Float.MaxValue; var eqMaxX = Float.MinValue
+          var eqMinY = Float.MaxValue; var eqMaxY = Float.MinValue
+          var eqMinZ = Float.MaxValue; var eqMaxZ = Float.MinValue
+          for i <- 0 until vc do
+            val x = zm.vertices(i * 3); val y = zm.vertices(i * 3 + 1); val z = zm.vertices(i * 3 + 2)
+            if x < eqMinX then eqMinX = x; if x > eqMaxX then eqMaxX = x
+            if y < eqMinY then eqMinY = y; if y > eqMaxY then eqMaxY = y
+            if z < eqMinZ then eqMinZ = z; if z > eqMaxZ then eqMaxZ = z
 
-        if !quiet then
-          val animInfo = if clips.nonEmpty then
-            clips.map((code, clip) => s"$code(${clip.frameCount}f)").mkString(", ")
-          else "none"
-          println(f"    $actorKey: ${meshFragments.size} meshes, ${zm.vertices.length / 3} verts, size(${eqMaxX - eqMinX}%.1f x ${eqMaxY - eqMinY}%.1f x ${eqMaxZ - eqMinZ}%.1f), anims: $animInfo")
-        Some(CharBuild(actorKey, sk, meshFragments, zm,
-          glWidth = eqMaxX - eqMinX, glDepth = eqMaxY - eqMinY, glHeight = eqMaxZ - eqMinZ,
-          glCenterX = (eqMinX + eqMaxX) / 2f, glCenterZ = -(eqMinY + eqMaxY) / 2f, glMinY = eqMinZ,
-          clips))
+          if !quiet then
+            val animInfo = if clips.nonEmpty then
+              clips.map((code, clip) => s"$code(${clip.frameCount}f)").mkString(", ")
+            else "none"
+            println(f"    $actorKey: ${meshFragments.size} meshes, ${zm.vertices.length / 3} verts, size(${eqMaxX - eqMinX}%.1f x ${eqMaxY - eqMinY}%.1f x ${eqMaxZ - eqMinZ}%.1f), anims: $animInfo")
+          Some(CharBuild(actorKey, sk, meshFragments, zm,
+            glWidth = eqMaxX - eqMinX, glDepth = eqMaxY - eqMinY, glHeight = eqMaxZ - eqMinZ,
+            glCenterX = (eqMinX + eqMaxX) / 2f, glCenterZ = -(eqMinY + eqMaxY) / 2f, glMinY = eqMinZ,
+            clips))
     }
 
 case class ObjectRenderData(zoneMesh: ZoneMesh, glMesh: Mesh, modelMatrix: Matrix4f)

@@ -61,6 +61,10 @@ enum ZoneEvent:
   case InventoryItemUpdated(item: InventoryItem)
   case InventoryMoved(fromSlot: Int, toSlot: Int)
 
+  // Buffs — UI buff panel
+  case BuffsLoaded(buffs: Array[SpellBuff])
+  case BuffUpdated(slot: Int, buff: SpellBuff)
+
   // Environment — rendering system updates
   case WeatherChanged(weather: WeatherInfo)
 
@@ -215,14 +219,10 @@ class ZoneClient extends PacketHandler:
     // Fragment reassembly
     val pkt = assembler.process(packet) match
       case Some(p) => p
-      case None =>
-        println(s"[Zone] Fragment buffered (arq=${packet.arq})")
-        return
+      case None => return
 
     if pkt.opcode == 0 then
       return // pure ACK
-
-    println(s"[Zone] Recv ${ZoneOpcodes.name(pkt.opcode)} (${pkt.payload.length}B)")
 
     pkt.opcode match
 
@@ -294,14 +294,12 @@ class ZoneClient extends PacketHandler:
         val rawData = rawOpt.getOrElse(pkt.payload)
         ZoneCodec.decodeSpawn(rawData).foreach { s =>
           spawns(s.spawnId) = s
-          println(s"[Zone] New spawn: ${s.name} (${s.spawnId}) L${s.level} race=${s.race}")
           emit(ZoneEvent.SpawnAdded(s))
         }
 
       case ZoneOpcodes.DeleteSpawn =>
         ZoneCodec.decodeDeleteSpawn(pkt.payload).foreach { id =>
           spawns.remove(id)
-          println(s"[Zone] Spawn deleted: $id")
           emit(ZoneEvent.SpawnRemoved(id))
         }
 
@@ -416,16 +414,13 @@ class ZoneClient extends PacketHandler:
           case Some((count, raw)) =>
             val items = ZoneCodec.decodeInventory(raw, count)
             inventory = items
-            println(s"[Zone] Inventory: $count item(s), ${items.size} decoded from ${raw.length}B (${raw.length / 362} possible entries)")
-            for item <- items do
-              println(s"[Zone]   slot=${item.equipSlot} id=${item.id} '${item.name}' class=${item.itemClass}")
+            println(s"[Zone] Inventory: ${items.size} item(s)")
             emit(ZoneEvent.InventoryLoaded(items))
           case None =>
             println(s"[Zone] Inventory data received (${pkt.payload.length}B, decompression failed)")
 
       case ZoneOpcodes.MoveItem =>
         ZoneCodec.decodeMoveItem(pkt.payload).foreach { (from, to) =>
-          println(s"[Zone] Server move/resync: slot $from -> $to")
           // Server-initiated move or resync — update local inventory
           if to == -1 || to == 0xFFFFFFFF then
             inventory = inventory.filterNot(_.equipSlot == from)
@@ -442,29 +437,27 @@ class ZoneClient extends PacketHandler:
            ZoneOpcodes.SummonedItem | ZoneOpcodes.ContainerPacket | ZoneOpcodes.BookPacket =>
         handleItemPacket(pkt.opcode, pkt.payload)
 
-      case ZoneOpcodes.Stamina =>
-        println(s"[Zone] Stamina update (${pkt.payload.length}B)")
+      case ZoneOpcodes.Stamina => ()
 
       case ZoneOpcodes.SendExpZonein =>
-        println(s"[Zone] ExpZonein (${pkt.payload.length}B)")
         if state == ZoneState.RequestingSpawns then
           // Server sent SendExpZonein after doors/objects — respond to complete handshake
           // This triggers server to send SpawnAppearance(SpawnID), make us visible, etc.
           queueAppPacket(ZoneOpcodes.SendExpZonein, Array.emptyByteArray)
 
-      case ZoneOpcodes.SafePoint =>
-        println(s"[Zone] SafePoint (${pkt.payload.length}B)")
+      case ZoneOpcodes.SafePoint => ()
 
       case ZoneOpcodes.Buff =>
-        println(s"[Zone] Buff update (${pkt.payload.length}B)")
+        ZoneCodec.decodeBuff(pkt.payload).foreach { (slot, buff) =>
+          emit(ZoneEvent.BuffUpdated(slot, buff))
+        }
 
       case ZoneOpcodes.LogoutReply =>
         println("[Zone] Logout confirmed")
         state = ZoneState.Disconnected
         emit(ZoneEvent.StateChanged(state))
 
-      case other =>
-        println(s"[Zone] Unhandled opcode: ${ZoneOpcodes.name(other)} (${pkt.payload.length}B)")
+      case _ => ()
 
   def tick(): Unit =
     // Build pending app packets
@@ -509,14 +502,9 @@ class ZoneClient extends PacketHandler:
     * All item packet opcodes carry a raw Item_Struct (360 bytes) payload.
     */
   private def handleItemPacket(opcode: Short, data: Array[Byte]): Unit =
-    if data.length < 360 then
-      println(s"[Zone] ${ZoneOpcodes.name(opcode)} too short: ${data.length}B (need 360)")
-      return
+    if data.length < 360 then return
     val item = ZoneCodec.decodeItem(data, 0)
-    if item.name.isEmpty then
-      println(s"[Zone] ${ZoneOpcodes.name(opcode)}: empty item name, ignoring")
-      return
-    println(s"[Zone] ${ZoneOpcodes.name(opcode)}: '${item.name}' slot=${item.equipSlot} id=${item.id}")
+    if item.name.isEmpty then return
     // Update local inventory
     inventory = inventory.filterNot(_.equipSlot == item.equipSlot) :+ item
     emit(ZoneEvent.InventoryItemUpdated(item))
@@ -526,11 +514,9 @@ class ZoneClient extends PacketHandler:
   // ===========================================================================
 
   private def queueAppPacket(opcode: Short, payload: Array[Byte]): Unit =
-    println(s"[Zone] Queuing ${ZoneOpcodes.name(opcode)} (${payload.length}B)")
     pendingApps.add((opcode, payload))
 
   private def buildAppPacket(opcode: Short, payload: Array[Byte]): Unit =
-    println(s"[Zone] Building ${ZoneOpcodes.name(opcode)} (${payload.length}B) seq=$outSeq arq=$outArq")
     if payload.length > 510 then
       buildFragmentedPacket(opcode, payload)
       return
@@ -553,7 +539,6 @@ class ZoneClient extends PacketHandler:
   private def buildFragmentedPacket(opcode: Short, payload: Array[Byte]): Unit =
     val fSeq = nextFragSeq()
     val fragments = assembler.fragment(opcode, payload, fSeq)
-    println(s"[Zone] Fragmenting ${ZoneOpcodes.name(opcode)} (${payload.length}B) into ${fragments.size} fragments")
     for (frag, i) <- fragments.zipWithIndex do
       val arsp = if i == 0 && needArsp then Some(lastInArq) else None
       if i == 0 then needArsp = false

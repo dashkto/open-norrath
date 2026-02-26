@@ -246,6 +246,9 @@ case class PlayerProfileData(
   guildId: Int,
   guildRank: Int,
 
+  // Spell book (256 slots, -1 = empty)
+  spellBook: Array[Int],
+
   // Spells memorized (8 gem slots)
   memSpells: Array[Int],
 
@@ -565,6 +568,8 @@ case class InventoryItem(
   noDrop: Boolean,
   magic: Boolean,
   // Common item stats (itemClass == 0)
+  aStr: Int, aSta: Int, aCha: Int, aDex: Int, aInt: Int, aAgi: Int, aWis: Int,
+  mr: Int, fr: Int, cr: Int, dr: Int, pr: Int,
   ac: Int,
   hp: Int,
   mana: Int,

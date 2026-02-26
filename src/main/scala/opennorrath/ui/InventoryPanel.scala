@@ -6,15 +6,18 @@ import imgui.flag.{ImGuiCol, ImGuiCond, ImGuiDragDropFlags, ImGuiWindowFlags}
 
 import opennorrath.Game
 import opennorrath.network.InventoryItem
+import opennorrath.state.PlayerCharacter
 
-/** Inventory panel toggled with the "i" key. Shows equipment slots and general inventory. */
+/** Inventory panel toggled with the "i" key.
+  * Three-column layout: equipment (left), general inventory (middle), stats (right).
+  */
 class InventoryPanel extends Panel:
 
   val title = "Inventory"
-  val defaultX = 400f
+  val defaultX = 200f
   val defaultY = 50f
-  val defaultWidth = 300f
-  val defaultHeight = 500f
+  val defaultWidth = 800f
+  val defaultHeight = 580f
   override def fontScale: Float = 0.9f
 
   visible = false
@@ -32,8 +35,7 @@ class InventoryPanel extends Panel:
 
     ImGui.setNextWindowPos(defaultX, defaultY, ImGuiCond.FirstUseEver)
     ImGui.setNextWindowSize(defaultWidth, defaultHeight, ImGuiCond.FirstUseEver)
-    if minWidth > 0f || minHeight > 0f then
-      ImGui.setNextWindowSizeConstraints(minWidth, minHeight, Float.MaxValue, Float.MaxValue)
+    ImGui.setNextWindowSizeConstraints(600f, 400f, Float.MaxValue, Float.MaxValue)
 
     val flags = extraFlags | (if locked then ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoResize else 0)
     pOpen.set(true)
@@ -54,52 +56,191 @@ class InventoryPanel extends Panel:
 
     ImGui.end()
 
-  // Slot pairs for two-column equipment layout
-  private val slotRows: Vector[(Int, String, Int, String)] = Vector(
-    (InventoryItem.Charm,     "Charm",      InventoryItem.Ammo,      "Ammo"),
-    (InventoryItem.EarL,      "Ear (L)",    InventoryItem.EarR,      "Ear (R)"),
-    (InventoryItem.Head,      "Head",       InventoryItem.Face,      "Face"),
-    (InventoryItem.Neck,      "Neck",       InventoryItem.Shoulders, "Shoulders"),
-    (InventoryItem.Back,      "Back",       InventoryItem.Arms,      "Arms"),
-    (InventoryItem.WristL,    "Wrist (L)",  InventoryItem.WristR,    "Wrist (R)"),
-    (InventoryItem.Range,     "Range",      InventoryItem.Hands,     "Hands"),
-    (InventoryItem.RingL,     "Ring (L)",   InventoryItem.RingR,     "Ring (R)"),
-    (InventoryItem.Primary,   "Primary",    InventoryItem.Secondary, "Secondary"),
-    (InventoryItem.Chest,     "Chest",      InventoryItem.Waist,     "Waist"),
-    (InventoryItem.Legs,      "Legs",       InventoryItem.Feet,      "Feet"),
+  // Equipment slots grouped into rows
+  private val equipRows: Vector[Vector[(Int, String)]] = Vector(
+    // Head & face
+    Vector(
+      (InventoryItem.Charm, "Charm"), (InventoryItem.EarL, "Ear L"),
+      (InventoryItem.Head, "Head"),   (InventoryItem.Face, "Face"),
+      (InventoryItem.EarR, "Ear R"),  (InventoryItem.Neck, "Neck"),
+    ),
+    // Upper body
+    Vector(
+      (InventoryItem.Shoulders, "Shld"), (InventoryItem.Arms, "Arms"),
+      (InventoryItem.Back, "Back"),      (InventoryItem.WristL, "Wrs L"),
+      (InventoryItem.WristR, "Wrs R"),   (InventoryItem.Hands, "Hands"),
+    ),
+    // Lower body
+    Vector(
+      (InventoryItem.Chest, "Chest"), (InventoryItem.Waist, "Waist"),
+      (InventoryItem.Legs, "Legs"),   (InventoryItem.Feet, "Feet"),
+    ),
+    // Weapons & accessories
+    Vector(
+      (InventoryItem.Primary, "Pri"),   (InventoryItem.Secondary, "Sec"),
+      (InventoryItem.Range, "Range"),   (InventoryItem.RingL, "Ring L"),
+      (InventoryItem.RingR, "Ring R"),  (InventoryItem.Ammo, "Ammo"),
+    ),
   )
 
-  private val SlotBoxH = 40f
+  private val SlotBoxH = 32f
+  private val SlotSize = 52f
+  private val SlotGap = 4f
   private val SlotPad = 4f
+  private val ColPad = 8f
 
   override protected def renderContent(): Unit =
     val availW = ImGui.getContentRegionAvailX()
-    val slotW = (availW - SlotPad) / 2f
+    val availH = ImGui.getContentRegionAvailY()
+    val statsW = 120f
+    val equipW = SlotSize * MaxSlotsPerRow + SlotGap * (MaxSlotsPerRow - 1)
+    val invCols = 2
+    val invW = SlotSize * invCols + SlotGap * (invCols - 1)
+    val childFlags = ImGuiWindowFlags.NoBackground
 
-    // Equipment slots
-    for (leftId, leftName, rightId, rightName) <- slotRows do
-      renderSlot(leftId, leftName, slotW)
-      ImGui.sameLine(0f, SlotPad)
-      renderSlot(rightId, rightName, slotW)
+    // Left column — equipment grid (fixed size)
+    ImGui.beginChild("##equip", equipW, availH, false, childFlags)
+    sectionHeader("Equipment")
+    for row <- equipRows do
+      renderSlotRow(row)
+    ImGui.endChild()
 
-    // General inventory section
+    ImGui.sameLine(0f, ColPad)
+
+    // Middle column — general inventory (2x4 grid)
+    ImGui.beginChild("##general", invW, availH, false, childFlags)
+    sectionHeader("General")
+    for row <- 0 until 4 do
+      for col <- 0 until invCols do
+        val i = row * invCols + col
+        renderSquareSlot(22 + i, s"Slot ${i + 1}", SlotSize)
+        if col < invCols - 1 then ImGui.sameLine(0f, SlotGap)
+      ImGui.spacing()
+    ImGui.endChild()
+
+    ImGui.sameLine(0f, ColPad)
+
+    // Right column — stats & resists
+    ImGui.beginChild("##stats", statsW, availH, false, childFlags)
+    Game.player.foreach(renderStats)
+    ImGui.endChild()
+
+  private def renderStats(pc: PlayerCharacter): Unit =
+    val items = itemsBySlot
+    sectionHeader("Stats")
+
+    // HP / Mana
+    pushColor(ImGuiCol.Text, Colors.text)
+    ImGui.text(s"HP: ${pc.currentHp} / ${pc.maxHp}")
+    ImGui.popStyleColor()
+    if EqData.usesMana(pc.classId) then
+      pushColor(ImGuiCol.Text, Colors.text)
+      ImGui.text(s"Mana: ${pc.currentMana} / ${pc.maxMana}")
+      ImGui.popStyleColor()
+
+    ImGui.spacing()
+
+    // Attributes
+    statLine("STR", pc.str)
+    statLine("STA", pc.sta)
+    statLine("AGI", pc.agi)
+    statLine("DEX", pc.dex)
+    statLine("WIS", pc.wis)
+    statLine("INT", pc.int)
+    statLine("CHA", pc.cha)
+
+    // Resistances
     ImGui.spacing()
     ImGui.separator()
+    sectionHeader("Resists")
+
+    val (baseMr, baseFr, baseCr, baseDr, basePr) = EqData.raceBaseResists(pc.race)
+    val equipItems = items.filter((slot, _) => slot >= 0 && slot <= 21).values
+    val gearMr = equipItems.map(_.mr).sum
+    val gearFr = equipItems.map(_.fr).sum
+    val gearCr = equipItems.map(_.cr).sum
+    val gearDr = equipItems.map(_.dr).sum
+    val gearPr = equipItems.map(_.pr).sum
+
+    statLine("MR", baseMr + gearMr)
+    statLine("FR", baseFr + gearFr)
+    statLine("CR", baseCr + gearCr)
+    statLine("DR", baseDr + gearDr)
+    statLine("PR", basePr + gearPr)
+
+  private def sectionHeader(text: String): Unit =
     ImGui.pushFont(Fonts.defaultBold)
     pushColor(ImGuiCol.Text, Colors.gold)
-    ImGui.text("General")
+    ImGui.text(text)
     ImGui.popStyleColor()
     ImGui.popFont()
 
-    val genSlotW = (availW - SlotPad) / 2f
-    for row <- 0 until 4 do
-      val leftIdx = row
-      val rightIdx = row + 4
-      val leftSlotId = 22 + leftIdx
-      val rightSlotId = 22 + rightIdx
-      renderSlot(leftSlotId, s"Slot ${leftIdx + 1}", genSlotW)
-      ImGui.sameLine(0f, SlotPad)
-      renderSlot(rightSlotId, s"Slot ${rightIdx + 1}", genSlotW)
+  private val MaxSlotsPerRow = equipRows.map(_.size).max
+
+  private def renderSlotRow(slots: Vector[(Int, String)]): Unit =
+    for i <- slots.indices do
+      val (slotId, label) = slots(i)
+      renderSquareSlot(slotId, label, SlotSize)
+      if i < slots.size - 1 then ImGui.sameLine(0f, SlotGap)
+    ImGui.spacing()
+
+  private def renderSquareSlot(slotId: Int, label: String, size: Float): Unit =
+    val item = itemsBySlot.get(slotId)
+    val drawList = ImGui.getWindowDrawList()
+    val cx = ImGui.getCursorScreenPosX()
+    val cy = ImGui.getCursorScreenPosY()
+
+    // Background
+    val bgColor = if item.isDefined then Colors.withAlpha(Colors.darkContainer, 0.6f) else Colors.withAlpha(Colors.background, 0.5f)
+    val (br, bg, bb, ba) = bgColor
+    drawList.addRectFilled(cx, cy, cx + size, cy + size,
+      ImGui.colorConvertFloat4ToU32(br, bg, bb, ba), 3f)
+
+    // Border
+    val (borR, borG, borB, borA) = Colors.withAlpha(Colors.darkContainer, 0.8f)
+    drawList.addRect(cx, cy, cx + size, cy + size,
+      ImGui.colorConvertFloat4ToU32(borR, borG, borB, borA), 3f)
+
+    item match
+      case Some(it) =>
+        val iconSize = size - 6f
+        ImGui.setCursorScreenPos(cx + 3f, cy + 3f)
+        ItemIcons.render(it.icon, iconSize)
+      case None =>
+        val textW = ImGui.calcTextSize(label).x
+        val textH = ImGui.calcTextSize(label).y
+        val (tr, tg, tb, ta) = Colors.withAlpha(Colors.textDim, 0.5f)
+        drawList.addText(cx + (size - textW) / 2f, cy + (size - textH) / 2f,
+          ImGui.colorConvertFloat4ToU32(tr, tg, tb, ta), label)
+
+    // Invisible button for interaction
+    ImGui.setCursorScreenPos(cx, cy)
+    ImGui.invisibleButton(s"##slot$slotId", size, size)
+    if item.isDefined && ImGui.isItemHovered() then renderTooltip(item.get)
+
+    // Drag source
+    if item.isDefined && ImGui.beginDragDropSource(ImGuiDragDropFlags.None) then
+      ImGui.setDragDropPayload("INV_SLOT", Integer.valueOf(slotId))
+      val it = item.get
+      ItemIcons.render(it.icon, 32f)
+      ImGui.sameLine()
+      ImGui.text(it.name)
+      ImGui.endDragDropSource()
+
+    // Drop target
+    if ImGui.beginDragDropTarget() then
+      val payload = ImGui.acceptDragDropPayload("INV_SLOT", classOf[Integer])
+      if payload != null then
+        val sourceSlot = payload.intValue()
+        if sourceSlot != slotId then
+          val sourceItem = itemsBySlot.get(sourceSlot)
+          val destItem = itemsBySlot.get(slotId)
+          val srcAllowed = sourceItem.forall(_.canEquipIn(slotId))
+          val dstAllowed = destItem.forall(_.canEquipIn(sourceSlot))
+          if srcAllowed && dstAllowed then
+            Game.player.foreach(_.inventory.swap(sourceSlot, slotId))
+            Game.zoneSession.foreach(_.client.sendMoveItem(sourceSlot, slotId))
+      ImGui.endDragDropTarget()
 
   private def renderSlot(slotId: Int, label: String, width: Float): Unit =
     val item = itemsBySlot.get(slotId)
@@ -145,7 +286,6 @@ class InventoryPanel extends Panel:
     // Drag source — occupied slots can be dragged
     if item.isDefined && ImGui.beginDragDropSource(ImGuiDragDropFlags.None) then
       ImGui.setDragDropPayload("INV_SLOT", Integer.valueOf(slotId))
-      // Preview tooltip
       val it = item.get
       ItemIcons.render(it.icon, 32f)
       ImGui.sameLine()
@@ -160,7 +300,6 @@ class InventoryPanel extends Panel:
         if sourceSlot != slotId then
           val sourceItem = itemsBySlot.get(sourceSlot)
           val destItem = itemsBySlot.get(slotId)
-          // Check both items can go in their destination slots
           val srcAllowed = sourceItem.forall(_.canEquipIn(slotId))
           val dstAllowed = destItem.forall(_.canEquipIn(sourceSlot))
           if srcAllowed && dstAllowed then
@@ -201,11 +340,25 @@ class InventoryPanel extends Panel:
 
     // Stats (common items only)
     if item.itemClass == 0 then
-      if item.ac != 0 then statLine("AC", item.ac)
-      if item.hp != 0 then statLine("HP", item.hp)
-      if item.mana != 0 then statLine("Mana", item.mana)
-      if item.damage != 0 then statLine("Dmg", item.damage)
-      if item.delay != 0 then statLine("Delay", item.delay)
+      if item.ac != 0 then tooltipStat("AC", item.ac)
+      if item.hp != 0 then tooltipStat("HP", item.hp)
+      if item.mana != 0 then tooltipStat("Mana", item.mana)
+      if item.damage != 0 then tooltipStat("Dmg", item.damage)
+      if item.delay != 0 then tooltipStat("Delay", item.delay)
+      // Attribute bonuses
+      if item.aStr != 0 then tooltipStat("STR", item.aStr)
+      if item.aSta != 0 then tooltipStat("STA", item.aSta)
+      if item.aAgi != 0 then tooltipStat("AGI", item.aAgi)
+      if item.aDex != 0 then tooltipStat("DEX", item.aDex)
+      if item.aWis != 0 then tooltipStat("WIS", item.aWis)
+      if item.aInt != 0 then tooltipStat("INT", item.aInt)
+      if item.aCha != 0 then tooltipStat("CHA", item.aCha)
+      // Resist bonuses
+      if item.mr != 0 then tooltipStat("SvMagic", item.mr)
+      if item.fr != 0 then tooltipStat("SvFire", item.fr)
+      if item.cr != 0 then tooltipStat("SvCold", item.cr)
+      if item.dr != 0 then tooltipStat("SvDisease", item.dr)
+      if item.pr != 0 then tooltipStat("SvPoison", item.pr)
 
     // Lore
     if item.lore.nonEmpty then
@@ -237,7 +390,18 @@ class InventoryPanel extends Panel:
         names += name
     names.result()
 
+  private val StatValueCol = 40f
+
   private def statLine(label: String, value: Int): Unit =
+    pushColor(ImGuiCol.Text, Colors.textDim)
+    ImGui.text(label)
+    ImGui.popStyleColor()
+    ImGui.sameLine(StatValueCol)
+    pushColor(ImGuiCol.Text, Colors.text)
+    ImGui.text(value.toString)
+    ImGui.popStyleColor()
+
+  private def tooltipStat(label: String, value: Int): Unit =
     pushColor(ImGuiCol.Text, Colors.text)
     ImGui.text(s"  $label: $value")
     ImGui.popStyleColor()
