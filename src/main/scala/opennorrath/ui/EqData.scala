@@ -61,3 +61,68 @@ object EqData:
   def usesMana(classId: Int): Boolean = classId match
     case 1 | 7 | 8 | 9 => false // WAR, MNK, BRD, ROG
     case _              => true
+
+  /** Map race ID + gender to 3-char S3D model code (lowercase).
+    * Gender: 0=male, 1=female, 2=neutral (uses male code).
+    * Returns None for unknown races.
+    */
+  def raceModelCode(race: Int, gender: Int): Option[String] =
+    val code = race match
+      // Playable races
+      case 1   => if gender == 1 then "huf" else "hum"  // Human
+      case 2   => if gender == 1 then "baf" else "bam"  // Barbarian
+      case 3   => if gender == 1 then "erf" else "erm"  // Erudite
+      case 4   => if gender == 1 then "elf" else "elm"  // Wood Elf
+      case 5   => if gender == 1 then "ehf" else "ehm"  // High Elf
+      case 6   => if gender == 1 then "def" else "dem"  // Dark Elf
+      case 7   => if gender == 1 then "haf" else "ham"  // Half Elf
+      case 8   => if gender == 1 then "dwf" else "dwm"  // Dwarf
+      case 9   => if gender == 1 then "trf" else "trm"  // Troll
+      case 10  => if gender == 1 then "ogf" else "ogm"  // Ogre
+      case 11  => if gender == 1 then "hof" else "hom"  // Halfling
+      case 12  => if gender == 1 then "gnf" else "gnm"  // Gnome
+      case 128 => if gender == 1 then "ikf" else "ikm"  // Iksar
+      case 130 => if gender == 1 then "kef" else "kem"  // Vah Shir
+      // Common NPC races (gender-neutral)
+      case 14  => "wer"  // Werewolf
+      case 15  => "ske"  // Skeleton (tall)
+      case 19  => "ten"  // Tentacle Terror
+      case 21  => "gua"  // Guard
+      case 26  => "bat"  // Bat
+      case 27  => "eel"  // Eel (Ghoul variant)
+      case 28  => "rat"  // Rat
+      case 29  => "sna"  // Snake
+      case 33  => "spi"  // Spider
+      case 36  => "min"  // Minotaur
+      case 38  => "ali"  // Alligator
+      case 42  => "orc"  // Orc
+      case 43  => "ske"  // Skeleton
+      case 44  => "bro"  // Brownie
+      case 45  => "dri"  // Drixie
+      case 46  => "wol"  // Wolf
+      case 47  => "bea"  // Bear
+      case 49  => "fae"  // Fairy
+      case 50  => "fun"  // Fungus Man
+      case 51  => "gar"  // Gargoyle
+      case 52  => "gal"  // Gasbag
+      case 55  => "gno"  // Gnoll
+      case 56  => "gob"  // Goblin
+      case 60  => "gor"  // Gorilla
+      case 62  => "cor"  // Cornsnake
+      case 63  => "pix"  // Pixie
+      case 67  => "imp"  // Imp
+      case 69  => "bix"  // Bixie
+      case 71  => "sca"  // Scarecrow
+      case 72  => "dra"  // Drake
+      case 73  => "dra"  // Drake (variant)
+      case 75  => "wil"  // Will-o-wisp
+      case 77  => "ele"  // Elemental
+      case 85  => "spe"  // Spectre
+      case 88  => "ban"  // Banshee
+      case 89  => "lic"  // Basilisk
+      case 93  => "gho"  // Ghost
+      case 94  => "gho"  // Ghoul
+      case 120 => "lio"  // Lion
+      case 145 => "eye"  // Eye of Zomm
+      case _   => null
+    if code != null then Some(code) else None

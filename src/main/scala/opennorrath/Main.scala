@@ -12,7 +12,7 @@ import org.lwjgl.opengl.GL11.*
 import org.lwjgl.system.MemoryUtil.NULL
 
 import opennorrath.screen.{GameContext, SplashScreen, ZoneScreen}
-import opennorrath.ui.{Fonts, ImGuiTheme}
+import opennorrath.ui.{Fonts, ImGuiTheme, ItemIcons}
 
 object Main:
 
@@ -69,6 +69,7 @@ object Main:
     Fonts.init()
     imGuiGl3.init("#version 330 core")
     ImGuiTheme.apply()
+    ItemIcons.init("assets/EverQuest")
 
     val ctx = GameContext(window, input, settings, WindowWidth, WindowHeight, imGuiGlfw, imGuiGl3)
 
@@ -88,6 +89,7 @@ object Main:
     Game.run(ctx, initialScreen)
 
     println("Shutting down")
+    ItemIcons.cleanup()
     imGuiGl3.shutdown()
     imGuiGlfw.shutdown()
     ImGui.destroyContext()

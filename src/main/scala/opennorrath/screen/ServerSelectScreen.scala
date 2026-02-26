@@ -21,6 +21,7 @@ class ServerSelectScreen(
   private var statusText = s"${servers.size} server(s) found"
   private var statusColor = Colors.textDim
   private var waiting = false
+  private var loginError = false
 
   override def show(): Unit =
     glfwSetInputMode(ctx.window, GLFW_CURSOR, GLFW_CURSOR_NORMAL)
@@ -51,17 +52,20 @@ class ServerSelectScreen(
       while event.isDefined do
         event.get match
           case LoginEvent.PlayApproved(key) =>
-            statusText = s"Play approved - connecting to world..."
-            statusColor = Colors.success
+            if !loginError then
+              statusText = s"Play approved - connecting to world..."
+              statusColor = Colors.success
             println(s"[ServerSelect] World key received: $key")
           case LoginEvent.LoginComplete =>
-            statusText = "Connecting to world server..."
-            statusColor = Colors.success
-            connectToWorld()
+            if !loginError then
+              statusText = "Connecting to world server..."
+              statusColor = Colors.success
+              connectToWorld()
           case LoginEvent.Error(msg) =>
             statusText = msg
             statusColor = Colors.error
             waiting = false
+            loginError = true
           case _ => ()
         event = session.client.pollEvent()
     }
@@ -134,6 +138,7 @@ class ServerSelectScreen(
       statusText = s"Connecting to ${server.name}..."
       statusColor = Colors.text
       waiting = true
+      loginError = false
       loginSession.client.selectServer(server.ip)
 
   private def pollWorldEvents(): Unit =

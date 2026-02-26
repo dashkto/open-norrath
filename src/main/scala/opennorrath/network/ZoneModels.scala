@@ -542,3 +542,83 @@ case class ZoneChangeResult(
   zoneReason: Int,
   success: Int,           // 0=pending, 1=success, negative=error
 )
+
+// =============================================================================
+// Inventory Items — decoded from OP_CharInventory
+// =============================================================================
+
+/** An item from the player's inventory.
+  *
+  * Decoded from Item_Struct (360 bytes) in mac_structs.h.
+  * Only the fields needed for UI display are extracted.
+  */
+case class InventoryItem(
+  name: String,
+  lore: String,
+  equipSlot: Int,         // Current slot: 0-21=equipment, 22-29=general, 250+=bag contents
+  itemClass: Int,         // 0=common, 1=container, 2=book
+  id: Int,                // Item ID
+  icon: Int,              // Icon number
+  weight: Int,            // Weight (tenths of a unit)
+  noRent: Boolean,
+  noDrop: Boolean,
+  magic: Boolean,
+  // Common item stats (itemClass == 0)
+  ac: Int,
+  hp: Int,
+  mana: Int,
+  damage: Int,
+  delay: Int,
+  charges: Int,
+)
+
+object InventoryItem:
+  // Equipment slot constants (Mac client slot IDs)
+  val Charm     = 0
+  val EarL      = 1
+  val Head      = 2
+  val Face      = 3
+  val EarR      = 4
+  val Neck      = 5
+  val Shoulders = 6
+  val Arms      = 7
+  val Back      = 8
+  val WristL    = 9
+  val WristR    = 10
+  val Range     = 11
+  val Hands     = 12
+  val Primary   = 13
+  val Secondary = 14
+  val RingL     = 15
+  val RingR     = 16
+  val Chest     = 17
+  val Legs      = 18
+  val Feet      = 19
+  val Waist     = 20
+  val Ammo      = 21
+
+  /** All equipment slot IDs in display order, with labels. */
+  val equipmentSlots: Vector[(Int, String)] = Vector(
+    Charm     -> "Charm",
+    EarL      -> "Ear (L)",
+    Head      -> "Head",
+    Face      -> "Face",
+    EarR      -> "Ear (R)",
+    Neck      -> "Neck",
+    Shoulders -> "Shoulders",
+    Arms      -> "Arms",
+    Back      -> "Back",
+    WristL    -> "Wrist (L)",
+    WristR    -> "Wrist (R)",
+    Range     -> "Range",
+    Hands     -> "Hands",
+    Primary   -> "Primary",
+    Secondary -> "Secondary",
+    RingL     -> "Ring (L)",
+    RingR     -> "Ring (R)",
+    Chest     -> "Chest",
+    Legs      -> "Legs",
+    Feet      -> "Feet",
+    Waist     -> "Waist",
+    Ammo      -> "Ammo",
+  )

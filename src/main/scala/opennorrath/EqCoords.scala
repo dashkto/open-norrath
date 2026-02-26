@@ -53,3 +53,9 @@ object EqCoords:
   /** Convert a profile heading float (0-512, 0=north, clockwise) to camera yaw degrees. */
   inline def profileHeadingToYaw(heading: Float): Float =
     (heading * 360f / 512f) - 90f
+
+  /** Convert a spawn heading byte (0-255, 0=north, clockwise) to model rotation radians.
+    * Returns a Y-axis rotation for the model matrix (negative = clockwise in GL).
+    */
+  inline def spawnHeadingToRadians(heading: Int): Float =
+    -(heading * 2f * Math.PI.toFloat / 256f)

@@ -2,17 +2,29 @@ package opennorrath
 
 import opennorrath.animation.AnimatedCharacter
 import opennorrath.wld.*
-import org.joml.Matrix4f
+import org.joml.{Matrix4f, Vector3f}
 import org.lwjgl.opengl.GL11.*
 import org.lwjgl.opengl.GL20.glVertexAttrib3f
 
 /** Debug renderer that wraps ZoneRenderer and adds an animation showcase grid.
   * All animations for `animationModel` are displayed simultaneously in a grid above the arena.
-  * Other character models are still shown in their normal positions via ZoneRenderer.
+  * Delegates spawn management to the inner ZoneRenderer.
   */
 class ZoneRenderDebug(s3dPath: String, settings: Settings, animationModel: String):
 
   private val zone = ZoneRenderer(s3dPath, settings)
+
+  /** Expose character build templates for spawn creation. */
+  def characterBuilds: Map[String, ZoneRenderer.CharBuild] = zone.characterBuilds
+
+  // Spawn management — delegate to ZoneRenderer
+  def addSpawn(spawnId: Int, modelCode: String, position: Vector3f, heading: Int, size: Float): Boolean =
+    zone.addSpawn(spawnId, modelCode, position, heading, size)
+
+  def removeSpawn(spawnId: Int): Unit = zone.removeSpawn(spawnId)
+
+  def updateSpawnPosition(spawnId: Int, position: Vector3f, heading: Int): Unit =
+    zone.updateSpawnPosition(spawnId, position, heading)
 
   private val showcaseChars: List[AnimatedCharacter] =
     if animationModel.nonEmpty then loadShowcase() else Nil
@@ -35,23 +47,10 @@ class ZoneRenderDebug(s3dPath: String, settings: Settings, animationModel: Strin
     showcaseChars.foreach(_.glMesh.cleanup())
 
   private def loadShowcase(): List[AnimatedCharacter] =
-    val chrS3dPath = s3dPath.replace(".s3d", "_chr.s3d")
-    if !java.nio.file.Files.exists(java.nio.file.Path.of(chrS3dPath)) then return Nil
-
-    val chrEntries = opennorrath.archive.PfsArchive.load(java.nio.file.Path.of(chrS3dPath))
-    val chrWldEntry = chrEntries.find(_.extension == "wld")
-    if chrWldEntry.isEmpty then return Nil
-
-    val chrWld = WldFile(chrWldEntry.get.data)
-    val actors = chrWld.fragmentsOfType[Fragment14_Actor]
-    // Load global animation tracks for the showcase too
-    val globalTrackDefs = zone.loadGlobalAnimationTracks()
-    val builds = ZoneRenderer.buildCharacters(chrWld, actors, globalTrackDefs, quiet = true)
-
     val target = animationModel.toLowerCase
-    val buildOpt = builds.find(_.key == target)
+    val buildOpt = zone.characterBuilds.get(target)
     if buildOpt.isEmpty then
-      println(s"  Animation model '$target' not found, available: ${builds.map(_.key).mkString(", ")}")
+      println(s"  Animation model '$target' not found, available: ${zone.characterBuilds.keys.toSeq.sorted.mkString(", ")}")
       return Nil
 
     val build = buildOpt.get

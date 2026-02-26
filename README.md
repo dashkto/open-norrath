@@ -109,6 +109,50 @@ docker compose up
 - Server source is the EQMacEmu fork (SecretsOTheP/EQMacEmu) at `Server/` submodule.
 - **Rancher Desktop users:** The default SSH port forwarder only forwards TCP. The login server uses UDP, so you must disable it: `rdctl set --experimental.virtual-machine.ssh-port-forwarder=false`. This switches to Lima's native port forwarding which supports UDP. Docker Desktop for Mac may have similar UDP limitations.
 
+### Querying the Database
+
+The EQEmu database is the source of truth for game data — items, spells, NPCs, zones, starting equipment, etc. You can query it directly to understand server behavior or debug client issues.
+
+```bash
+# Interactive MySQL shell
+docker exec -it eqmacdocker-db-1 mysql -u quarm -pquarmpassword quarm
+
+# One-off queries
+docker exec eqmacdocker-db-1 mysql -u quarm -pquarmpassword quarm -e "SELECT * FROM items WHERE id = 9998;"
+```
+
+Useful tables:
+
+| Table | Description |
+|-------|-------------|
+| `items` | All item definitions — name, stats, slots, icon, item class |
+| `starting_items` | Items given to new characters (by race/class, `slot=-1` = auto-assign) |
+| `npc_types` | NPC definitions — name, race, class, level, stats |
+| `spawn2` / `spawnentry` / `spawngroup` | Spawn points and NPC assignments per zone |
+| `zone` | Zone metadata — short/long names, safe coordinates, level range |
+| `start_zones` | Starting zone assignments by race/class/deity |
+| `spells_new` | Spell definitions — name, effects, cast time, mana cost |
+| `lootdrop` / `loottable` | Loot tables and drop rates |
+
+Example queries:
+```sql
+-- What items does a Human Warrior start with?
+SELECT si.slot, si.itemid, i.Name
+FROM starting_items si
+JOIN items i ON si.itemid = i.id
+WHERE (si.race = 0 OR si.race = 1) AND (si.class = 0 OR si.class = 1);
+
+-- What NPCs spawn in a zone?
+SELECT nt.name, nt.level, nt.race, s2.x, s2.y, s2.z
+FROM spawn2 s2
+JOIN spawnentry se ON s2.spawngroupID = se.spawngroupID
+JOIN npc_types nt ON se.npcID = nt.id
+WHERE s2.zone = 'arena';
+
+-- Look up an item by name
+SELECT id, Name, ac, hp, mana, damage, delay, slots FROM items WHERE Name LIKE '%Short Sword%';
+```
+
 ## Settings
 
 `settings.yml` in the project root controls runtime configuration:

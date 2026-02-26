@@ -6,7 +6,7 @@ import imgui.flag.{ImGuiCol, ImGuiCond, ImGuiKey, ImGuiWindowFlags}
 import org.lwjgl.glfw.GLFW.*
 import org.lwjgl.opengl.GL11.*
 
-import opennorrath.Game
+import opennorrath.{CharacterPreview, Game}
 import opennorrath.network.*
 import opennorrath.ui.{Colors, EqData}
 
@@ -16,16 +16,19 @@ class CharacterSelectScreen(
 ) extends Screen:
 
   private var selectedIndex = 0
+  private var lastSelectedIndex = -1
   private var statusText = s"${characters.size} character(s)"
   private var statusColor = Colors.textDim
   private var entering = false
   private var enteredCharName = ""
+  private var preview: CharacterPreview = null
 
   private def worldClient: WorldClient = Game.worldSession.get.client
 
   override def show(): Unit =
     glfwSetInputMode(ctx.window, GLFW_CURSOR, GLFW_CURSOR_NORMAL)
     glClearColor(0.08f, 0.08f, 0.12f, 1f)
+    preview = CharacterPreview("assets/EverQuest")
 
   override def update(dt: Float): Unit =
     // Keyboard navigation
@@ -37,6 +40,14 @@ class CharacterSelectScreen(
 
       if ImGui.isKeyPressed(ImGuiKey.Enter) || ImGui.isKeyPressed(ImGuiKey.KeypadEnter) then
         enterWorld()
+
+    // Update preview when selection changes
+    if selectedIndex != lastSelectedIndex && characters.nonEmpty then
+      lastSelectedIndex = selectedIndex
+      val char = characters(selectedIndex)
+      EqData.raceModelCode(char.race, char.gender) match
+        case Some(code) => preview.setCharacter(code)
+        case None => preview.setCharacter("")
 
     // Escape to go back — tear down world session
     if ImGui.isKeyPressed(ImGuiKey.Escape) then
@@ -65,19 +76,30 @@ class CharacterSelectScreen(
   override def render(dt: Float): Unit =
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
 
-    val w = ctx.windowWidth.toFloat
-    val h = ctx.windowHeight.toFloat
+    val w = ctx.windowWidth
+    val h = ctx.windowHeight
+    val wf = w.toFloat
+    val hf = h.toFloat
+    val halfW = w / 2
+
+    // Draw 3D character preview on right half
+    if preview != null then
+      preview.draw(dt, halfW, 0, w - halfW, h, w, h)
+
+    // ImGui panel on left half
     val flags = ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoResize |
-      ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoScrollbar
+      ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoBackground
 
     ImGui.setNextWindowPos(0f, 0f, ImGuiCond.Always)
-    ImGui.setNextWindowSize(w, h, ImGuiCond.Always)
+    ImGui.setNextWindowSize(halfW.toFloat, hf, ImGuiCond.Always)
     ImGui.begin("##charselect", flags)
+
+    val panelW = halfW.toFloat
 
     // Title
     val titleText = "SELECT CHARACTER"
     val titleW = ImGui.calcTextSize(titleText).x
-    ImGui.setCursorPos((w - titleW) / 2f, 100f)
+    ImGui.setCursorPos((panelW - titleW) / 2f, 100f)
     pushColor(ImGuiCol.Text, Colors.cream)
     ImGui.text(titleText)
     ImGui.popStyleColor()
@@ -85,20 +107,19 @@ class CharacterSelectScreen(
     if characters.isEmpty then
       val noChars = "No characters - create one!"
       val noW = ImGui.calcTextSize(noChars).x
-      ImGui.setCursorPos((w - noW) / 2f, h / 2f - 30f)
+      ImGui.setCursorPos((panelW - noW) / 2f, hf / 2f - 30f)
       pushColor(ImGuiCol.Text, Colors.textDim)
       ImGui.text(noChars)
       ImGui.popStyleColor()
     else
-      // Character list — fixed-width column, centered
-      val listW = 400f
-      val listX = (w - listW) / 2f
+      // Character list
+      val listW = math.min(400f, panelW - 40f)
+      val listX = (panelW - listW) / 2f
       val listStartY = 200f
       for (char, i) <- characters.zipWithIndex do
         val selected = i == selectedIndex
         val itemY = listStartY + i * 60f
 
-        // Character name
         ImGui.setCursorPos(listX, itemY)
         if selected then
           pushColor(ImGuiCol.Text, Colors.gold)
@@ -111,7 +132,7 @@ class CharacterSelectScreen(
 
     // Create Character button
     val createW = 180f
-    ImGui.setCursorPos((w - createW) / 2f, h - 120f)
+    ImGui.setCursorPos((panelW - createW) / 2f, hf - 120f)
     pushColor(ImGuiCol.Button, Colors.primary)
     pushColor(ImGuiCol.ButtonHovered, Colors.primary2)
     pushColor(ImGuiCol.ButtonActive, Colors.hex("C06820"))
@@ -125,7 +146,7 @@ class CharacterSelectScreen(
 
     // Status
     val statusTextW = ImGui.calcTextSize(statusText).x
-    ImGui.setCursorPos((w - statusTextW) / 2f, h - 65f)
+    ImGui.setCursorPos((panelW - statusTextW) / 2f, hf - 65f)
     pushColor(ImGuiCol.Text, statusColor)
     ImGui.text(statusText)
     ImGui.popStyleColor()
@@ -133,8 +154,7 @@ class CharacterSelectScreen(
     ImGui.end()
 
   override def dispose(): Unit =
-    // World session is owned by Game, not by this screen
-    ()
+    if preview != null then preview.cleanup()
 
   private def enterWorld(): Unit =
     if characters.nonEmpty && !entering then

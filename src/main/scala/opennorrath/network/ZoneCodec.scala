@@ -892,6 +892,101 @@ object ZoneCodec:
     ))
 
   // ===========================================================================
+  // Inventory — OP_CharInventory
+  // ===========================================================================
+
+  /** Decode decompressed inventory data into a list of items.
+    *
+    * After decompression, the data is N concatenated PlayerItemsPacket_Struct entries,
+    * each 362 bytes: int16 opcode + Item_Struct (360 bytes).
+    *
+    * Layout of Item_Struct (mac_structs.h, #pragma pack(1)):
+    *   0000: Name[64]        — item name
+    *   0064: Lore[80]        — lore text
+    *   0144: IDFile[30]      — model filename
+    *   0174: Weight (uint8)
+    *   0175: NoRent (uint8)  — 1=normal, 0=nosave
+    *   0176: NoDrop (uint8)  — 1=normal, 0=nodrop
+    *   0177: Size (uint8)
+    *   0178: ItemClass (int16) — 0=common, 1=container, 2=book
+    *   0180: ID (int16)
+    *   0182: Icon (uint16)
+    *   0184: equipSlot (int16) — current slot location
+    *   ...
+    *   0228-0276: union { common, book, container }
+    *     common.AC at 0244 (int16), common.HP at 0240 (int16), common.Mana at 0242 (int16)
+    *     common.Damage at 0250 (uint8), common.Delay at 0249 (uint8), common.Magic at 0254 (uint8)
+    *   0278: Charges (int8)
+    */
+  private val PlayerItemsPacketSize = 362
+  private val ItemStructSize = 360
+
+  def decodeInventory(data: Array[Byte], count: Int): Vector[InventoryItem] =
+    val items = Vector.newBuilder[InventoryItem]
+    var offset = 0
+    var i = 0
+    while i < count && offset + PlayerItemsPacketSize <= data.length do
+      val item = decodeItem(data, offset + 2) // skip 2-byte opcode
+      if item.name.nonEmpty then
+        items += item
+      offset += PlayerItemsPacketSize
+      i += 1
+    items.result()
+
+  private def decodeItem(data: Array[Byte], base: Int): InventoryItem =
+    val buf = ByteBuffer.wrap(data, base, ItemStructSize).order(ByteOrder.LITTLE_ENDIAN)
+
+    val nameBytes = new Array[Byte](64)
+    buf.get(nameBytes)
+    val loreBytes = new Array[Byte](80)
+    buf.get(loreBytes)
+    buf.position(buf.position() + 30) // skip IDFile[30]
+
+    val weight = buf.get() & 0xFF        // 0174
+    val noRent = buf.get() & 0xFF        // 0175
+    val noDrop = buf.get() & 0xFF        // 0176
+    buf.get()                             // 0177: Size
+    val itemClass = buf.getShort() & 0xFFFF // 0178
+    val id = buf.getShort()               // 0180
+    val icon = buf.getShort() & 0xFFFF    // 0182
+    val equipSlot = buf.getShort()        // 0184
+
+    // Skip to common union stats at offset 0228
+    // Current position is at 0186, need to advance to 0240 (HP)
+    buf.position(base + 240)
+    val hp = buf.getShort()               // 0240
+    val mana = buf.getShort()             // 0242
+    val ac = buf.getShort()               // 0244
+    buf.position(base + 249)
+    val delay = buf.get() & 0xFF          // 0249
+    val damage = buf.get() & 0xFF         // 0250
+    buf.position(base + 254)
+    val magic = buf.get() & 0xFF          // 0254
+
+    // Charges at offset 0278
+    buf.position(base + 278)
+    val charges = buf.get()               // 0278 (signed)
+
+    InventoryItem(
+      name = readNullStr(nameBytes),
+      lore = readNullStr(loreBytes),
+      equipSlot = equipSlot,
+      itemClass = itemClass,
+      id = id,
+      icon = icon,
+      weight = weight,
+      noRent = noRent == 0,
+      noDrop = noDrop == 0,
+      magic = magic != 0,
+      ac = if itemClass == 0 then ac else 0,
+      hp = if itemClass == 0 then hp else 0,
+      mana = if itemClass == 0 then mana else 0,
+      damage = if itemClass == 0 then damage else 0,
+      delay = if itemClass == 0 then delay else 0,
+      charges = charges,
+    )
+
+  // ===========================================================================
   // Helpers
   // ===========================================================================
 

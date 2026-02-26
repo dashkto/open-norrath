@@ -9,8 +9,8 @@ import org.lwjgl.opengl.GL11.*
 import imgui.ImGui
 
 import opennorrath.{Camera, EqCoords, Game, Shader, ZoneRenderDebug}
-import opennorrath.network.{PlayerProfileData, SpawnData}
-import opennorrath.ui.{CharacterInfoPanel, EscapeMenu, TextPanel}
+import opennorrath.network.{PlayerProfileData, SpawnData, ZoneEvent}
+import opennorrath.ui.{CharacterInfoPanel, EqData, EscapeMenu, InventoryPanel, TextPanel, ZoneEventHandler}
 
 class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData] = None, profile: Option[PlayerProfileData] = None) extends Screen:
 
@@ -21,12 +21,36 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
   private val model = Matrix4f()
   private val charInfoPanel = Game.playerState.map(CharacterInfoPanel(_))
   private val escapeMenu = EscapeMenu(ctx)
+  private val inventoryPanel = InventoryPanel()
   private var chatPanel: TextPanel = null
+  private var eventHandler: ZoneEventHandler = null
   private def initChat(): Unit =
     chatPanel = TextPanel("Main", 10f, 500f, onSubmit = text => {
-      // TODO: send to zone server
-      chatPanel.addLine(s"You: $text")
+      eventHandler.submitChat(text)
     })
+    eventHandler = ZoneEventHandler(chatPanel)
+    Game.zoneSession.foreach(_.client.addListener(eventHandler.listener))
+
+  // --- Spawn rendering ---
+
+  private val spawnListener: ZoneEvent => Unit =
+    case ZoneEvent.SpawnAdded(s) => addSpawnIfKnown(s)
+    case ZoneEvent.SpawnRemoved(id) => zone.removeSpawn(id)
+    case ZoneEvent.SpawnMoved(upd) =>
+      val pos = EqCoords.serverToGl(upd.y, upd.x, upd.z)
+      zone.updateSpawnPosition(upd.spawnId, pos, upd.heading)
+    case _ => ()
+
+  private def addSpawnIfKnown(s: SpawnData): Unit =
+    val myId = Game.zoneSession.map(_.client.mySpawnId).getOrElse(0)
+    if s.spawnId == myId then return
+    EqData.raceModelCode(s.race, s.gender) match
+      case Some(code) =>
+        val pos = EqCoords.serverToGl(s.y, s.x, s.z)
+        if !zone.addSpawn(s.spawnId, code, pos, s.heading, s.size) then
+          println(s"  No model for ${s.name} (code=$code race=${s.race})")
+      case None =>
+        println(s"  Unknown race for ${s.name} (race=${s.race} gender=${s.gender})")
 
   private var freeLook = false
 
@@ -65,7 +89,21 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
     )
     println(s"Loading zone: $zonePath, camera: pos=$startPos yaw=$startYaw")
 
+    // Load initial spawns (SpawnsLoaded was consumed by ZoneLoadingScreen)
+    Game.zoneSession.foreach { session =>
+      val zc = session.client
+      zc.addListener(spawnListener)
+      zc.addListener(inventoryPanel.listener)
+      for s <- zc.spawns.values do addSpawnIfKnown(s)
+      println(s"  Rendered ${zc.spawns.size} initial spawns")
+      // Load inventory that arrived during zone entry handshake
+      if zc.inventory.nonEmpty then
+        inventoryPanel.listener(ZoneEvent.InventoryLoaded(zc.inventory))
+    }
+
   override def update(dt: Float): Unit =
+    Game.zoneSession.foreach(_.client.dispatchEvents())
+
     if ctx.input.isKeyPressed(GLFW_KEY_ESCAPE) then
       escapeMenu.toggle()
 
@@ -80,6 +118,8 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
         glfwSetInputMode(ctx.window, GLFW_CURSOR, GLFW_CURSOR_NORMAL)
 
     if !ImGui.getIO().getWantCaptureKeyboard() then
+      if ctx.input.isKeyPressed(GLFW_KEY_I) then
+        inventoryPanel.toggle()
       camera.processMovement(ctx.input, dt)
     if freeLook then
       camera.processLook(ctx.input)
@@ -97,9 +137,15 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
     zone.draw(shader, dt, camera.viewMatrix)
 
     charInfoPanel.foreach(_.render())
+    inventoryPanel.render()
     chatPanel.render()
     escapeMenu.render()
 
   override def dispose(): Unit =
+    Game.zoneSession.foreach { session =>
+      session.client.removeListener(eventHandler.listener)
+      session.client.removeListener(spawnListener)
+      session.client.removeListener(inventoryPanel.listener)
+    }
     zone.cleanup()
     shader.cleanup()

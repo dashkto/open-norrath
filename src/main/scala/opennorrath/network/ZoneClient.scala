@@ -56,6 +56,9 @@ enum ZoneEvent:
   // Chat — UI chat window
   case ChatReceived(msg: ChatMessage)
 
+  // Inventory — UI inventory panel
+  case InventoryLoaded(items: Vector[InventoryItem])
+
   // Environment — rendering system updates
   case WeatherChanged(weather: WeatherInfo)
 
@@ -94,6 +97,27 @@ class ZoneClient extends PacketHandler:
   val events = ConcurrentLinkedQueue[ZoneEvent]()
   val errors = ConcurrentLinkedQueue[String]()
 
+  // Listener-based event dispatch — game thread only
+  private val listeners = scala.collection.mutable.ArrayBuffer.empty[ZoneEvent => Unit]
+
+  /** Register a listener for zone events. Called from game thread. */
+  def addListener(fn: ZoneEvent => Unit): Unit = listeners += fn
+
+  /** Remove a previously registered listener. Called from game thread. */
+  def removeListener(fn: ZoneEvent => Unit): Unit = listeners -= fn
+
+  /** Drain the event queue and broadcast to all listeners. Call once per frame from game thread. */
+  def dispatchEvents(): Unit =
+    var err = errors.poll()
+    while err != null do
+      events.add(ZoneEvent.Error(err))
+      err = errors.poll()
+    var event = events.poll()
+    while event != null do
+      val snapshot = listeners.toArray
+      for fn <- snapshot do fn(event)
+      event = events.poll()
+
   private val outQueue = ConcurrentLinkedQueue[Array[Byte]]()
   private val pendingApps = ConcurrentLinkedQueue[(Short, Array[Byte])]()
 
@@ -113,6 +137,7 @@ class ZoneClient extends PacketHandler:
   var zoneInfo: Option[NewZoneInfo] = None
   var selfSpawn: Option[SpawnData] = None // From ServerZoneEntry — authoritative position
   var spawns: scala.collection.mutable.Map[Int, SpawnData] = scala.collection.mutable.Map.empty
+  var inventory: Vector[InventoryItem] = Vector.empty
   var mySpawnId: Int = 0
 
   // Pending connection info
@@ -382,7 +407,12 @@ class ZoneClient extends PacketHandler:
         // CharInventory: uint16(item_count) + zlib compressed data (mac.cpp:627-628)
         PacketCrypto.inflateInventory(pkt.payload) match
           case Some((count, raw)) =>
-            println(s"[Zone] Inventory: $count item(s), ${raw.length}B decompressed from ${pkt.payload.length}B")
+            val items = ZoneCodec.decodeInventory(raw, count)
+            inventory = items
+            println(s"[Zone] Inventory: $count item(s), ${items.size} decoded from ${raw.length}B (${raw.length / 362} possible entries)")
+            for item <- items do
+              println(s"[Zone]   slot=${item.equipSlot} id=${item.id} '${item.name}' class=${item.itemClass}")
+            emit(ZoneEvent.InventoryLoaded(items))
           case None =>
             println(s"[Zone] Inventory data received (${pkt.payload.length}B, decompression failed)")
 
@@ -441,14 +471,6 @@ class ZoneClient extends PacketHandler:
 
   def pollOutgoing(): Option[Array[Byte]] =
     Option(outQueue.poll())
-
-  /** Poll next event. Called from game thread. */
-  def pollEvent(): Option[ZoneEvent] =
-    var err = errors.poll()
-    while err != null do
-      events.add(ZoneEvent.Error(err))
-      err = errors.poll()
-    Option(events.poll())
 
   // ===========================================================================
   // Internal packet building — mirrors WorldClient

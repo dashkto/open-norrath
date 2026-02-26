@@ -14,7 +14,7 @@ import opennorrath.ui.Colors
   *
   * Handles:
   *   - Creating the ZoneSession and connecting to the zone server
-  *   - Polling ZoneEvents until zone entry is complete (InZone)
+  *   - Listening for ZoneEvents until zone entry is complete (InZone)
   *   - Populating PlayerState from the player profile
   *   - Transitioning to ZoneScreen with zone path and camera position
   *
@@ -30,6 +30,41 @@ class ZoneLoadingScreen(
 
   private var statusText = s"Connecting to zone..."
   private var statusColor = Colors.text
+  private var transitioned = false
+
+  private val listener: ZoneEvent => Unit = {
+    case ZoneEvent.ProfileReceived(pp) =>
+      statusText = s"Loading ${pp.name}..."
+      Game.playerState = Some(PlayerState(
+        name = pp.name,
+        level = pp.level,
+        classId = pp.classId,
+        currentHp = pp.curHp,
+        maxHp = pp.curHp,
+        currentMana = pp.mana,
+        maxMana = pp.mana,
+      ))
+    case ZoneEvent.ZoneDataReceived(nz) =>
+      statusText = s"Entering ${nz.zoneLongName}..."
+    case ZoneEvent.StateChanged(ZoneState.InZone) =>
+      Game.zoneSession.foreach { session =>
+        val zc = session.client
+        val shortName = zc.zoneInfo.map(_.zoneShortName).getOrElse("arena")
+        val zonePath = s"assets/EverQuest/$shortName.s3d"
+        println(s"[ZoneLoading] Zone ready: $zonePath")
+        transitioned = true
+        Game.setScreen(ZoneScreen(ctx, zonePath, zc.selfSpawn, zc.profile))
+      }
+    case ZoneEvent.StateChanged(ZoneState.Failed) =>
+      statusText = "Zone connection failed"
+      statusColor = Colors.error
+      Game.zoneSession.foreach(_.stop())
+      Game.zoneSession = None
+    case ZoneEvent.Error(msg) =>
+      statusText = s"Zone: $msg"
+      statusColor = Colors.error
+    case _ => ()
+  }
 
   override def show(): Unit =
     glfwSetInputMode(ctx.window, GLFW_CURSOR, GLFW_CURSOR_NORMAL)
@@ -37,6 +72,7 @@ class ZoneLoadingScreen(
 
     // Create zone session and connect
     val zc = ZoneClient()
+    zc.addListener(listener)
     val znt = NetworkThread(zc)
     Game.zoneSession = Some(ZoneSession(zc, znt))
     znt.start()
@@ -44,42 +80,8 @@ class ZoneLoadingScreen(
     zc.connect(charName)
 
   override def update(dt: Float): Unit =
-    Game.zoneSession match
-      case None => return
-      case Some(session) =>
-        val zc = session.client
-        var zEvent = zc.pollEvent()
-        while zEvent.isDefined do
-          zEvent.get match
-            case ZoneEvent.ProfileReceived(pp) =>
-              statusText = s"Loading ${pp.name}..."
-              Game.playerState = Some(PlayerState(
-                name = pp.name,
-                level = pp.level,
-                classId = pp.classId,
-                currentHp = pp.curHp,
-                maxHp = pp.curHp,
-                currentMana = pp.mana,
-                maxMana = pp.mana,
-              ))
-            case ZoneEvent.ZoneDataReceived(nz) =>
-              statusText = s"Entering ${nz.zoneLongName}..."
-            case ZoneEvent.StateChanged(ZoneState.InZone) =>
-              val shortName = zc.zoneInfo.map(_.zoneShortName).getOrElse("arena")
-              val zonePath = s"assets/EverQuest/$shortName.s3d"
-              println(s"[ZoneLoading] Zone ready: $zonePath")
-              Game.setScreen(ZoneScreen(ctx, zonePath, zc.selfSpawn, zc.profile))
-              return
-            case ZoneEvent.StateChanged(ZoneState.Failed) =>
-              statusText = "Zone connection failed"
-              statusColor = Colors.error
-              Game.zoneSession.foreach(_.stop())
-              Game.zoneSession = None
-            case ZoneEvent.Error(msg) =>
-              statusText = s"Zone: $msg"
-              statusColor = Colors.error
-            case _ => ()
-          zEvent = zc.pollEvent()
+    if transitioned then return
+    Game.zoneSession.foreach(_.client.dispatchEvents())
 
   override def render(dt: Float): Unit =
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
@@ -108,4 +110,5 @@ class ZoneLoadingScreen(
 
     ImGui.end()
 
-  override def dispose(): Unit = ()
+  override def dispose(): Unit =
+    Game.zoneSession.foreach(_.client.removeListener(listener))

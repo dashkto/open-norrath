@@ -9,6 +9,7 @@ case class CharacterInfo(
   level: Int,
   classId: Int,
   race: Int,
+  gender: Int,
   zone: Int,
 )
 
@@ -90,6 +91,8 @@ object WorldCodec:
       val races = Array.fill(10)(buf.getShort() & 0xFFFF)
       // zone[10] — uint32 each (40 bytes, offset 680)
       val zones = Array.fill(10)(buf.getInt())
+      // gender[10] — uint8 each (10 bytes, offset 720)
+      val genders = Array.fill(10)(buf.get() & 0xFF)
 
       for i <- 0 until 10 do
         if names(i).nonEmpty && levels(i) > 0 then
@@ -98,6 +101,7 @@ object WorldCodec:
             level = levels(i),
             classId = classes(i),
             race = races(i),
+            gender = genders(i),
             zone = zones(i),
           )
     catch
