@@ -5,23 +5,25 @@ import scala.compiletime.uninitialized
 import org.joml.{Matrix4f, Vector3f}
 import org.lwjgl.glfw.GLFW.*
 import org.lwjgl.opengl.GL11.*
+import org.lwjgl.opengl.GL20.glVertexAttrib3f
 
 import imgui.ImGui
 
-import opennorrath.{Camera, EqCoords, Game, Shader, ZoneRenderDebug}
+import opennorrath.{Camera, EqCoords, Game, Shader, ZoneRenderer}
 import opennorrath.network.{PlayerProfileData, SpawnData, ZoneEvent}
-import opennorrath.ui.{CharacterInfoPanel, EqData, EscapeMenu, InventoryPanel, TextPanel, ZoneEventHandler}
+import opennorrath.ui.{CharacterInfoPanel, EqData, EscapeMenu, InventoryPanel, NameplateRenderer, TextPanel, ZoneEventHandler}
 
 class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData] = None, profile: Option[PlayerProfileData] = None) extends Screen:
 
   private var shader: Shader = uninitialized
-  private var zone: ZoneRenderDebug = uninitialized
+  private var zone: ZoneRenderer = uninitialized
   private var camera: Camera = uninitialized
   private var projection: Matrix4f = uninitialized
   private val model = Matrix4f()
   private val charInfoPanel = Game.playerState.map(CharacterInfoPanel(_))
   private val escapeMenu = EscapeMenu(ctx)
   private val inventoryPanel = InventoryPanel()
+  private val nameplateRenderer = NameplateRenderer()
   private var chatPanel: TextPanel = null
   private var eventHandler: ZoneEventHandler = null
   private def initChat(): Unit =
@@ -39,6 +41,7 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
     case ZoneEvent.SpawnMoved(upd) =>
       val pos = EqCoords.serverToGl(upd.y, upd.x, upd.z)
       zone.updateSpawnPosition(upd.spawnId, pos, upd.heading)
+      zone.updateSpawnAnimation(upd.spawnId, moving = upd.animType != 0, upd.animType)
     case _ => ()
 
   private def addSpawnIfKnown(s: SpawnData): Unit =
@@ -60,7 +63,7 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
 
     initChat()
     shader = Shader.fromResources("/shaders/default.vert", "/shaders/default.frag")
-    zone = ZoneRenderDebug(zonePath, ctx.settings, ctx.settings.debug.animationModel)
+    zone = ZoneRenderer(zonePath, ctx.settings)
 
     val EyeHeight = 6f
     val (startPos, startYaw) = selfSpawn match
@@ -136,6 +139,18 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
 
     zone.draw(shader, dt, camera.viewMatrix)
 
+    // Nameplates: billboarded 3D quads with depth test (occluded by geometry)
+    glEnable(GL_BLEND)
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+    glDepthMask(false) // don't write to depth buffer
+    shader.setFloat("alphaMultiplier", 1.0f)
+    glVertexAttrib3f(2, 1f, 1f, 1f) // white vertex color
+    Game.zoneSession.foreach { session =>
+      nameplateRenderer.draw(shader, camera.viewMatrix, session.client.spawns, zone.spawnNameplateData)
+    }
+    glDepthMask(true)
+    glDisable(GL_BLEND)
+
     charInfoPanel.foreach(_.render())
     inventoryPanel.render()
     chatPanel.render()
@@ -147,5 +162,6 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
       session.client.removeListener(spawnListener)
       session.client.removeListener(inventoryPanel.listener)
     }
+    nameplateRenderer.cleanup()
     zone.cleanup()
     shader.cleanup()

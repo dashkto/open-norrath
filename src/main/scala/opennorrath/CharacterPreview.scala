@@ -1,6 +1,6 @@
 package opennorrath
 
-import opennorrath.animation.AnimatedCharacter
+import opennorrath.animation.{AnimCode, AnimatedCharacter}
 import opennorrath.archive.PfsArchive
 import opennorrath.wld.*
 import org.joml.{Matrix4f, Vector3f}
@@ -51,8 +51,8 @@ class CharacterPreview(assetsDir: String):
         mm.translate(-build.glCenterX, -build.glMinY, -build.glCenterZ)
         val char = AnimatedCharacter(build.skeleton, build.meshFragments, build.zm, glMesh, mm, build.clips, interleaved.clone())
         // Play idle animation
-        val idleCode = if build.clips.contains("L01") then "L01"
-          else if build.clips.contains("P01") then "P01"
+        val idleCode = if build.clips.contains(AnimCode.Idle.code) then AnimCode.Idle.code
+          else if build.clips.contains(AnimCode.Passive.code) then AnimCode.Passive.code
           else build.clips.headOption.map(_._1).getOrElse("")
         if idleCode.nonEmpty then char.play(idleCode)
         currentChar = Some(char)
@@ -68,6 +68,7 @@ class CharacterPreview(assetsDir: String):
         glViewport(viewportX, viewportY, viewportW, viewportH)
         glClear(GL_DEPTH_BUFFER_BIT)
         glEnable(GL_DEPTH_TEST)
+        glDisable(GL_BLEND)
 
         // Projection for this viewport
         val aspect = viewportW.toFloat / viewportH.toFloat
@@ -116,7 +117,7 @@ class CharacterPreview(assetsDir: String):
     for entry <- entries if entry.extension == "bmp" do
       val key = entry.name.toLowerCase
       if !textureMap.contains(key) then
-        try textureMap(key) = Texture.loadFromBytes(entry.data)
+        try textureMap(key) = Texture.loadFromBytes(entry.data, applyColorKey = false)
         catch case _: Exception => ()
 
   private def loadGlobalCharacters(): Map[String, ZoneRenderer.CharBuild] =

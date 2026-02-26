@@ -19,6 +19,9 @@ object Colors:
   def withAlpha(c: (Float, Float, Float, Float), a: Float): (Float, Float, Float, Float) =
     (c._1, c._2, c._3, a)
 
+  def toAwt(c: (Float, Float, Float, Float)): java.awt.Color =
+    new java.awt.Color(c._1, c._2, c._3, c._4)
+
   def tint(from: (Float, Float, Float, Float), to: (Float, Float, Float, Float), t: Float): (Float, Float, Float, Float) =
     (from._1 + (to._1 - from._1) * t,
      from._2 + (to._2 - from._2) * t,

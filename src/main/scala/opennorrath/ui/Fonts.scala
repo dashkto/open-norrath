@@ -2,6 +2,8 @@ package opennorrath.ui
 
 import scala.compiletime.uninitialized
 
+import java.awt.{Font => AwtFont}
+
 import imgui.{ImFont, ImFontConfig, ImGui}
 
 /** Loads Roboto at multiple sizes for ImGui. Call `init()` before any ImGui rendering.
@@ -17,8 +19,8 @@ object Fonts:
   var menu: ImFont = uninitialized
   var title: ImFont = uninitialized
 
-  private val regular = "/fonts/Roboto-Regular.ttf"
-  private val bold = "/fonts/Roboto-Bold.ttf"
+  val regular = "/fonts/Roboto-Regular.ttf"
+  val bold = "/fonts/Roboto-Bold.ttf"
 
   def init(): Unit =
     val atlas = ImGui.getIO().getFonts()
@@ -33,6 +35,13 @@ object Fonts:
 
     atlas.build()
     cfg.destroy()
+
+  /** Load a bundled font as a Java2D AWT Font at the given size. */
+  def awt(path: String, size: Float): AwtFont =
+    val stream = getClass.getResourceAsStream(path)
+    if stream == null then throw RuntimeException(s"Font resource not found: $path")
+    try AwtFont.createFont(AwtFont.TRUETYPE_FONT, stream).deriveFont(size)
+    finally stream.close()
 
   private def loadResource(path: String): Array[Byte] =
     val stream = getClass.getResourceAsStream(path)

@@ -4,6 +4,17 @@ import opennorrath.{EqCoords, Mesh}
 import opennorrath.wld.*
 import org.joml.{Matrix4f, Quaternionf, Vector3f}
 
+/** Standard EQ 3-char animation codes. */
+enum AnimCode(val code: String):
+  case Idle    extends AnimCode("P01")
+  case Walk    extends AnimCode("L01")
+  case Run     extends AnimCode("L02")
+  case Passive extends AnimCode("P02")
+  case Sit     extends AnimCode("L05")
+  case Crouch  extends AnimCode("L06")
+  case Death   extends AnimCode("D01")
+  case Combat  extends AnimCode("C01")
+
 case class AnimationClip(code: String, frameCount: Int, boneTrackDefs: Array[Fragment12_TrackDef])
 
 class AnimatedCharacter(
@@ -27,6 +38,7 @@ class AnimatedCharacter(
   private var needsInit = true
 
   def clipNames: Seq[String] = clips.keys.toSeq.sorted
+  def currentClipCode: String = currentClip.map(_.code).getOrElse("none")
 
   def play(code: String): Unit =
     clips.get(code).foreach { clip =>
@@ -93,8 +105,8 @@ class AnimatedCharacter(
           vertexIndex += piece.count
 
   private def selectDefaultClip(): Option[AnimationClip] =
-    clips.get("L01") // idle
-      .orElse(clips.get("P01")) // idle variant
+    clips.get(AnimCode.Idle.code)
+      .orElse(clips.get(AnimCode.Passive.code))
       .orElse(clips.headOption.map(_._2))
 
 object AnimatedCharacter:

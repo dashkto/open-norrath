@@ -75,8 +75,8 @@ object Texture:
     val r = data(paletteOffset.toInt + 2) & 0xFF
     Some((r, g, b))
 
-  def loadFromBytes(data: Array[Byte]): Int =
-    val colorKey = extractBmpColorKey(data)
+  def loadFromBytes(data: Array[Byte], applyColorKey: Boolean = true): Int =
+    val colorKey = if applyColorKey then extractBmpColorKey(data) else None
 
     val stack = MemoryStack.stackPush()
     try
@@ -109,14 +109,15 @@ object Texture:
             if math.abs(r - kr) + math.abs(g - kg) + math.abs(b - kb) < 10 then
               pixels.put(offset + 3, 0.toByte)
         case None =>
-          // Non-paletted: fall back to near-black masking
-          for i <- 0 until pixelCount do
-            val offset = i * 4
-            val r = pixels.get(offset) & 0xFF
-            val g = pixels.get(offset + 1) & 0xFF
-            val b = pixels.get(offset + 2) & 0xFF
-            if r + g + b < 10 then
-              pixels.put(offset + 3, 0.toByte)
+          // Non-paletted: fall back to near-black masking (only if color keying enabled)
+          if applyColorKey then
+            for i <- 0 until pixelCount do
+              val offset = i * 4
+              val r = pixels.get(offset) & 0xFF
+              val g = pixels.get(offset + 1) & 0xFF
+              val b = pixels.get(offset + 2) & 0xFF
+              if r + g + b < 10 then
+                pixels.put(offset + 3, 0.toByte)
 
       // Bleed opaque edge colors into transparent pixels to prevent dark halos
       // from bilinear filtering at color-key boundaries.

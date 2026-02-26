@@ -4,9 +4,7 @@ import org.yaml.snakeyaml.Yaml
 import java.nio.file.{Files, Path}
 import scala.jdk.CollectionConverters.*
 
-case class DebugSettings(
-  animationModel: String = "",
-)
+case class DebugSettings()
 
 case class LoginSettings(
   host: String = "127.0.0.1",
@@ -57,9 +55,7 @@ object Settings:
     if raw == null then return Settings()
 
     val root = YamlMap(raw)
-    val debug = root.nested("debug").map { d =>
-      DebugSettings(animationModel = d.string("animation_model"))
-    }.getOrElse(DebugSettings())
+    val debug = DebugSettings()
 
     val windowSettings = root.nested("window").map { w =>
       WindowSettings(

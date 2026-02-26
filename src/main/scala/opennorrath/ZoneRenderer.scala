@@ -1,6 +1,6 @@
 package opennorrath
 
-import opennorrath.animation.AnimatedCharacter
+import opennorrath.animation.{AnimCode, AnimatedCharacter}
 import opennorrath.archive.{PfsArchive, PfsEntry}
 import opennorrath.wld.*
 import org.joml.{Matrix4f, Vector3f}
@@ -55,8 +55,12 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings()):
   def loadGlobalAnimationTracks(): List[Fragment12_TrackDef] = cachedGlobalTrackDefs
 
   // Live spawn characters — managed by addSpawn/removeSpawn/updateSpawnPosition
-  private case class SpawnInstance(char: AnimatedCharacter, build: ZoneRenderer.CharBuild, size: Float)
+  private case class SpawnInstance(char: AnimatedCharacter, build: ZoneRenderer.CharBuild, size: Float, var moving: Boolean = false)
   private val _spawnCharacters = scala.collection.mutable.Map[Int, SpawnInstance]()
+
+  /** Return (spawnId, modelMatrix, headHeight) for each live spawn — used for nameplates. */
+  def spawnNameplateData: Iterable[(Int, Matrix4f, Float)] =
+    _spawnCharacters.map { (id, inst) => (id, inst.char.modelMatrix, inst.build.glHeight * inst.size) }
 
   /** Create a spawn character from a CharBuild template. Returns false if model not found. */
   def addSpawn(spawnId: Int, modelCode: String, position: Vector3f, heading: Int, size: Float): Boolean =
@@ -65,9 +69,20 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings()):
       case Some(build) =>
         val interleaved = ZoneRenderer.buildInterleaved(build.zm)
         val glMesh = Mesh(interleaved, build.zm.indices, dynamic = build.clips.nonEmpty)
-        val effectiveSize = if size > 0f then size else 6f
+        val effectiveSize = if size > 0f then size / 6f else 1f
         val modelMatrix = buildSpawnMatrix(build, position, heading, effectiveSize)
         val char = AnimatedCharacter(build.skeleton, build.meshFragments, build.zm, glMesh, modelMatrix, build.clips, interleaved.clone())
+        println(s"  [Spawn $spawnId] model=$modelCode pos=(${position.x},${position.y},${position.z}) clips=${build.clips.keys.toSeq.sorted.mkString(",")} default=${char.currentClipCode}")
+        // Debug: dump root bone translations for first animated spawn
+        if build.clips.nonEmpty && _spawnCharacters.size < 3 then
+          build.clips.get(char.currentClipCode).foreach { clip =>
+            val frames = (0 until Math.min(clip.frameCount, 4)).map { f =>
+              val td = clip.boneTrackDefs(0)
+              val fr = td.frames(if f < td.frames.length then f else 0)
+              f"$f:(${fr.translation.x}%.2f,${fr.translation.y}%.2f,${fr.translation.z}%.2f)"
+            }
+            println(s"    [RootBone] ${char.currentClipCode} root: ${frames.mkString(" ")}")
+          }
         _spawnCharacters(spawnId) = SpawnInstance(char, build, effectiveSize)
         true
 
@@ -79,6 +94,19 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings()):
   def updateSpawnPosition(spawnId: Int, position: Vector3f, heading: Int): Unit =
     _spawnCharacters.get(spawnId).foreach { inst =>
       buildSpawnMatrix(inst.build, position, heading, inst.size, inst.char.modelMatrix)
+    }
+
+  /** Switch a spawn's animation based on movement state. */
+  def updateSpawnAnimation(spawnId: Int, moving: Boolean, animType: Int = 0): Unit =
+    _spawnCharacters.get(spawnId).foreach { inst =>
+      if inst.moving != moving then
+        inst.moving = moving
+        val code = if moving then
+          if inst.char.clips.contains(AnimCode.Run.code) then AnimCode.Run.code else AnimCode.Walk.code
+        else
+          if inst.char.clips.contains(AnimCode.Idle.code) then AnimCode.Idle.code else AnimCode.Passive.code
+        println(s"  [Spawn $spawnId] anim change: moving=$moving animType=$animType → $code")
+        inst.char.play(code)
     }
 
   private def buildSpawnMatrix(build: ZoneRenderer.CharBuild, position: Vector3f, heading: Int, size: Float, target: Matrix4f = Matrix4f()): Matrix4f =
@@ -225,13 +253,13 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings()):
     textureMap.values.foreach(glDeleteTextures(_))
     glDeleteTextures(fallbackTexture)
 
-  private[opennorrath] def loadTextures(s3dEntries: List[PfsEntry]): Unit =
+  private[opennorrath] def loadTextures(s3dEntries: List[PfsEntry], applyColorKey: Boolean = true): Unit =
     val bmpEntries = s3dEntries.filter(_.extension == "bmp")
     for entry <- bmpEntries do
       val key = entry.name.toLowerCase
       if !textureMap.contains(key) then
         try
-          val texId = Texture.loadFromBytes(entry.data)
+          val texId = Texture.loadFromBytes(entry.data, applyColorKey = applyColorKey)
           textureMap(key) = texId
         catch case _: Exception => ()
 
@@ -337,7 +365,7 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings()):
     val chrS3dPath = s3dPath.replace(".s3d", "_chr.s3d")
     if Files.exists(Path.of(chrS3dPath)) then
       val chrEntries = PfsArchive.load(Path.of(chrS3dPath))
-      loadTextures(chrEntries)
+      loadTextures(chrEntries, applyColorKey = false)
       val chrWldEntry = chrEntries.find(_.extension == "wld")
       chrWldEntry.foreach { entry =>
         val chrWld = WldFile(entry.data)
@@ -386,7 +414,7 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings()):
         if fileName == "global_chr.s3d" then
           // Classic models: load fully with BMP textures
           val fileEntries = PfsArchive.load(file)
-          loadTextures(fileEntries)
+          loadTextures(fileEntries, applyColorKey = false)
           fileEntries.find(_.extension == "wld").foreach { wldEntry =>
             val fileWld = WldFile(wldEntry.data)
             trackDefs ++= fileWld.fragmentsOfType[Fragment12_TrackDef]
@@ -567,7 +595,7 @@ object ZoneRenderer:
         val sk = skeletonOpt.get
         val clips = AnimatedCharacter.discoverAnimations(chrWld, sk, trackDefsByName, animCodes)
 
-        val defaultClip = clips.get("L01").orElse(clips.get("P01")).orElse(clips.headOption.map(_._2))
+        val defaultClip = clips.get(AnimCode.Idle.code).orElse(clips.get(AnimCode.Passive.code)).orElse(clips.headOption.map(_._2))
         val boneTransforms = defaultClip match
           case Some(clip) => AnimatedCharacter.computeBoneTransforms(sk, clip, 0)
           case None => sk.boneWorldTransforms(chrWld)

@@ -71,6 +71,10 @@ object ZoneOpcodes:
   // --- Items / Inventory ---
   val CharInventory: Short      = 0xf641.toShort  // Zone → Client: inventory data
   val ItemPacket: Short         = 0x6441.toShort  // Zone → Client: item data
+  val MerchantItemPacket: Short = 0x3140.toShort  // Zone → Client: item data (trade/resync)
+  val SummonedItem: Short       = 0x7841.toShort  // Zone → Client: summoned item
+  val ContainerPacket: Short    = 0x6641.toShort  // Zone → Client: container item
+  val BookPacket: Short         = 0x6541.toShort  // Zone → Client: book item
   val MoveItem: Short           = 0x2c41.toShort  // Client → Zone: move item
   val MoneyUpdate: Short        = 0x0840.toShort  // Zone → Client: money change
   val MoneyOnCorpse: Short      = 0x5040.toShort  // Zone → Client: corpse money
@@ -200,6 +204,10 @@ object ZoneOpcodes:
     case Buff                  => "Buff"
     case CharInventory         => "CharInventory"
     case ItemPacket            => "ItemPacket"
+    case MerchantItemPacket    => "MerchantItemPacket"
+    case SummonedItem          => "SummonedItem"
+    case ContainerPacket       => "ContainerPacket"
+    case BookPacket            => "BookPacket"
     case MoveItem              => "MoveItem"
     case MoneyUpdate           => "MoneyUpdate"
     case LootRequest           => "LootRequest"

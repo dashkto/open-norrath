@@ -25,7 +25,7 @@ object ItemIcons:
   private val GridCols = 6
   private val GridRows = 6
   private val AtlasSize = 256f
-  private val CellSize = AtlasSize / GridCols // ~42.67 pixels
+  private val CellSize = 40f // exact cell size from EQUI_Animations.xml (last 16px of atlas unused)
 
   // Loaded atlas GL texture IDs, keyed by sheet number (1-based)
   private var atlases = Map.empty[Int, Int]
@@ -41,9 +41,10 @@ object ItemIcons:
     * Returns true if the icon was rendered, false if unavailable.
     */
   def render(icon: Int, size: Float = 40f): Boolean =
-    if !initialized || icon < 0 then return false
-    val sheet = icon / IconsPerSheet + 1
-    val cell = icon % IconsPerSheet
+    if !initialized || icon < 500 then return false
+    val adjusted = icon - 500
+    val sheet = adjusted / IconsPerSheet + 1
+    val cell = adjusted % IconsPerSheet
     val col = cell / GridRows  // Vertical=true: fills top-to-bottom first
     val row = cell % GridRows
 

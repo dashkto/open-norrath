@@ -58,6 +58,8 @@ enum ZoneEvent:
 
   // Inventory — UI inventory panel
   case InventoryLoaded(items: Vector[InventoryItem])
+  case InventoryItemUpdated(item: InventoryItem)
+  case InventoryMoved(fromSlot: Int, toSlot: Int)
 
   // Environment — rendering system updates
   case WeatherChanged(weather: WeatherInfo)
@@ -191,6 +193,11 @@ class ZoneClient extends PacketHandler:
   def camp(): Unit =
     queueAppPacket(ZoneOpcodes.Camp, ZoneCodec.encodeCamp)
 
+  /** Move/swap an inventory item. Called from game thread. */
+  def sendMoveItem(fromSlot: Int, toSlot: Int, stackCount: Int = 0): Unit =
+    if state == ZoneState.InZone then
+      queueAppPacket(ZoneOpcodes.MoveItem, ZoneCodec.encodeMoveItem(fromSlot, toSlot, stackCount))
+
   /** Save character. Called from game thread. */
   def save(): Unit =
     queueAppPacket(ZoneOpcodes.Save, ZoneCodec.encodeSave)
@@ -301,16 +308,11 @@ class ZoneClient extends PacketHandler:
       // --- Movement ---
 
       case ZoneOpcodes.MobUpdate =>
-        ZoneCodec.decodeMobUpdate(pkt.payload).foreach { upd =>
-          spawns.get(upd.spawnId).foreach { existing =>
-            spawns(upd.spawnId) = existing.copy(
-              y = upd.y, x = upd.x, z = upd.z,
-              heading = upd.heading,
-              deltaY = upd.deltaY, deltaX = upd.deltaX, deltaZ = upd.deltaZ,
-            )
-          }
-          emit(ZoneEvent.SpawnMoved(upd))
-        }
+        for upd <- ZoneCodec.decodeMobUpdates(pkt.payload) do
+          handleMobPositionUpdate(upd)
+
+      case ZoneOpcodes.ClientUpdate =>
+        ZoneCodec.decodeClientUpdate(pkt.payload).foreach(handleMobPositionUpdate)
 
       // --- Combat ---
 
@@ -337,6 +339,11 @@ class ZoneClient extends PacketHandler:
             state = ZoneState.InZone
             emit(ZoneEvent.StateChanged(state))
             println("[Zone] === Zone entry complete, InZone ===")
+            // Send initial position to trigger server's CompleteConnect → ZoneSpawns
+            selfSpawn.foreach { s =>
+              sendPosition(PlayerPosition(spawnId = mySpawnId, y = s.y, x = s.x, z = s.z,
+                heading = s.heading.toFloat, deltaY = 0, deltaX = 0, deltaZ = 0, deltaHeading = 0, animation = 0))
+            }
           emit(ZoneEvent.AppearanceChanged(change))
         }
 
@@ -416,8 +423,24 @@ class ZoneClient extends PacketHandler:
           case None =>
             println(s"[Zone] Inventory data received (${pkt.payload.length}B, decompression failed)")
 
-      case ZoneOpcodes.ItemPacket =>
-        println(s"[Zone] Item data received (${pkt.payload.length}B)")
+      case ZoneOpcodes.MoveItem =>
+        ZoneCodec.decodeMoveItem(pkt.payload).foreach { (from, to) =>
+          println(s"[Zone] Server move/resync: slot $from -> $to")
+          // Server-initiated move or resync — update local inventory
+          if to == -1 || to == 0xFFFFFFFF then
+            inventory = inventory.filterNot(_.equipSlot == from)
+          else
+            val fromItem = inventory.find(_.equipSlot == from)
+            val toItem = inventory.find(_.equipSlot == to)
+            inventory = inventory.filterNot(i => i.equipSlot == from || i.equipSlot == to)
+            fromItem.foreach(i => inventory = inventory :+ i.copy(equipSlot = to))
+            toItem.foreach(i => inventory = inventory :+ i.copy(equipSlot = from))
+          emit(ZoneEvent.InventoryMoved(from, to))
+        }
+
+      case ZoneOpcodes.ItemPacket | ZoneOpcodes.MerchantItemPacket |
+           ZoneOpcodes.SummonedItem | ZoneOpcodes.ContainerPacket | ZoneOpcodes.BookPacket =>
+        handleItemPacket(pkt.opcode, pkt.payload)
 
       case ZoneOpcodes.Stamina =>
         println(s"[Zone] Stamina update (${pkt.payload.length}B)")
@@ -471,6 +494,32 @@ class ZoneClient extends PacketHandler:
 
   def pollOutgoing(): Option[Array[Byte]] =
     Option(outQueue.poll())
+
+  private def handleMobPositionUpdate(upd: MobPositionUpdate): Unit =
+    spawns.get(upd.spawnId).foreach { existing =>
+      spawns(upd.spawnId) = existing.copy(
+        y = upd.y, x = upd.x, z = upd.z,
+        heading = upd.heading,
+        deltaY = upd.deltaY, deltaX = upd.deltaX, deltaZ = upd.deltaZ,
+      )
+    }
+    emit(ZoneEvent.SpawnMoved(upd))
+
+  /** Handle incoming item packets (resync, summoned items, loot, etc).
+    * All item packet opcodes carry a raw Item_Struct (360 bytes) payload.
+    */
+  private def handleItemPacket(opcode: Short, data: Array[Byte]): Unit =
+    if data.length < 360 then
+      println(s"[Zone] ${ZoneOpcodes.name(opcode)} too short: ${data.length}B (need 360)")
+      return
+    val item = ZoneCodec.decodeItem(data, 0)
+    if item.name.isEmpty then
+      println(s"[Zone] ${ZoneOpcodes.name(opcode)}: empty item name, ignoring")
+      return
+    println(s"[Zone] ${ZoneOpcodes.name(opcode)}: '${item.name}' slot=${item.equipSlot} id=${item.id}")
+    // Update local inventory
+    inventory = inventory.filterNot(_.equipSlot == item.equipSlot) :+ item
+    emit(ZoneEvent.InventoryItemUpdated(item))
 
   // ===========================================================================
   // Internal packet building — mirrors WorldClient

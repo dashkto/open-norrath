@@ -9,13 +9,13 @@ import org.joml.{Matrix4f, Vector3f}
 import org.lwjgl.glfw.GLFW.*
 import org.lwjgl.opengl.GL11.*
 
-import opennorrath.{BuildInfo, Camera, Game, Shader, ZoneRenderDebug}
+import opennorrath.{BuildInfo, Camera, Game, Shader, ZoneRenderer}
 import opennorrath.ui.{Colors, Fonts}
 
 class SplashScreen(ctx: GameContext, zonePath: String) extends Screen:
 
   private var zoneShader: Shader = uninitialized
-  private var zone: ZoneRenderDebug = uninitialized
+  private var zone: ZoneRenderer = uninitialized
   private var camera: Camera = uninitialized
   private var projection3d: Matrix4f = uninitialized
 
@@ -28,7 +28,7 @@ class SplashScreen(ctx: GameContext, zonePath: String) extends Screen:
     glClearColor(0.1f, 0.1f, 0.15f, 1f)
 
     zoneShader = Shader.fromResources("/shaders/default.vert", "/shaders/default.frag")
-    zone = ZoneRenderDebug(zonePath, ctx.settings, "")
+    zone = ZoneRenderer(zonePath, ctx.settings)
     camera = Camera(
       position = Vector3f(-150f, 60f, -460f),
       yaw = 30f,

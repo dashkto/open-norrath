@@ -55,7 +55,7 @@ object EqCoords:
     (heading * 360f / 512f) - 90f
 
   /** Convert a spawn heading byte (0-255, 0=north, clockwise) to model rotation radians.
-    * Returns a Y-axis rotation for the model matrix (negative = clockwise in GL).
+    * EQ models face south in their rest pose, so add π to flip them to face north at heading 0.
     */
   inline def spawnHeadingToRadians(heading: Int): Float =
-    -(heading * 2f * Math.PI.toFloat / 256f)
+    Math.PI.toFloat - (heading * 2f * Math.PI.toFloat / 256f)

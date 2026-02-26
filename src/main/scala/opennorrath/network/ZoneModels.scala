@@ -559,6 +559,7 @@ case class InventoryItem(
   itemClass: Int,         // 0=common, 1=container, 2=book
   id: Int,                // Item ID
   icon: Int,              // Icon number
+  slots: Int,             // Bitmask of valid equipment slots (bit N = slot N allowed)
   weight: Int,            // Weight (tenths of a unit)
   noRent: Boolean,
   noDrop: Boolean,
@@ -570,7 +571,11 @@ case class InventoryItem(
   damage: Int,
   delay: Int,
   charges: Int,
-)
+):
+  /** Check if this item can be placed in the given equipment slot (0-21). */
+  def canEquipIn(slotId: Int): Boolean =
+    if slotId < 0 || slotId > 21 then true // general/bag slots always allowed
+    else (slots & (1 << slotId)) != 0
 
 object InventoryItem:
   // Equipment slot constants (Mac client slot IDs)

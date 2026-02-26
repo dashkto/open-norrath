@@ -42,7 +42,7 @@ object ZoneCodec:
     buf.put(0.toByte) // delta_heading
     buf.putShort(pos.y.toInt.toShort)
     buf.putShort(pos.x.toInt.toShort)
-    buf.putShort(pos.z.toInt.toShort)
+    buf.putShort((pos.z * 10f).toInt.toShort) // server expects z × 10
     // Pack deltaY:11, deltaZ:11, deltaX:10 into uint32
     val dy = ((pos.deltaY * 16f).toInt & 0x7FF)
     val dz = ((pos.deltaZ * 16f).toInt & 0x7FF)
@@ -82,6 +82,20 @@ object ZoneCodec:
   /** OP_AutoAttack: single byte, 0=off, 1=on. */
   def encodeAutoAttack(enabled: Boolean): Array[Byte] =
     Array(if enabled then 1.toByte else 0.toByte)
+
+  /** OP_MoveItem: MoveItem_Struct (12 bytes) — 3x uint32: from_slot, to_slot, number_in_stack. */
+  def encodeMoveItem(fromSlot: Int, toSlot: Int, stackCount: Int): Array[Byte] =
+    val buf = ByteBuffer.allocate(12).order(ByteOrder.LITTLE_ENDIAN)
+    buf.putInt(fromSlot)
+    buf.putInt(toSlot)
+    buf.putInt(stackCount)
+    buf.array()
+
+  /** Decode server OP_MoveItem response (12 bytes). Returns (fromSlot, toSlot). */
+  def decodeMoveItem(data: Array[Byte]): Option[(Int, Int)] =
+    if data.length < 12 then return None
+    val buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
+    Some((buf.getInt(), buf.getInt()))
 
   /** OP_Camp: empty payload. */
   def encodeCamp: Array[Byte] = Array.emptyByteArray
@@ -133,7 +147,7 @@ object ZoneCodec:
       val deltaHeading = buf.get() // 6
       val y = buf.getShort().toFloat // 7
       val x = buf.getShort().toFloat // 9
-      val z = buf.getShort().toFloat // 11
+      val z = buf.getShort().toFloat / 10f // 11 — server encodes z × 10
 
       // Packed velocity: deltaY:11, deltaZ:11, deltaX:10 (13)
       val packed = buf.getInt()
@@ -239,31 +253,52 @@ object ZoneCodec:
     println(s"[ZoneCodec] Decoded ${result.size} zone spawns from ${data.length}B")
     result
 
-  /** Decode OP_MobUpdate: SpawnPositionUpdate_Struct (15 bytes). */
-  def decodeMobUpdate(data: Array[Byte]): Option[MobPositionUpdate] =
+  /** Decode a single SpawnPositionUpdate_Struct (15 bytes) from a ByteBuffer. */
+  private def decodeSingleMobUpdate(buf: ByteBuffer): MobPositionUpdate =
+    val spawnId = buf.getShort() & 0xFFFF
+    val animType = buf.get() & 0xFF
+    val heading = buf.get() & 0xFF
+    val deltaHeading = buf.get()
+    val y = buf.getShort().toFloat
+    val x = buf.getShort().toFloat
+    val z = buf.getShort().toFloat / 10f // Mac encodes z_pos = z * 10
+    val packed = buf.getInt()
+    val rawDY = packed & 0x7FF
+    val rawDZ = (packed >> 11) & 0x7FF
+    val rawDX = (packed >> 22) & 0x3FF
+    MobPositionUpdate(
+      spawnId = spawnId, y = y, x = x, z = z,
+      heading = heading, deltaHeading = deltaHeading, animType = animType,
+      deltaY = signExtend(rawDY, 11) * 0.0625f,
+      deltaX = signExtend(rawDX, 10) * 0.0625f,
+      deltaZ = signExtend(rawDZ, 11) * 0.0625f,
+    )
+
+  /** Decode OP_ClientUpdate: bare SpawnPositionUpdate_Struct (15 bytes, no header). */
+  def decodeClientUpdate(data: Array[Byte]): Option[MobPositionUpdate] =
     if data.length < 15 then return None
     try
       val buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
-      val spawnId = buf.getShort() & 0xFFFF
-      val animType = buf.get() & 0xFF
-      val heading = buf.get() & 0xFF
-      val deltaHeading = buf.get()
-      val y = buf.getShort().toFloat
-      val x = buf.getShort().toFloat
-      val z = buf.getShort().toFloat
-      val packed = buf.getInt()
-      val rawDY = packed & 0x7FF
-      val rawDZ = (packed >> 11) & 0x7FF
-      val rawDX = (packed >> 22) & 0x3FF
-      Some(MobPositionUpdate(
-        spawnId = spawnId, y = y, x = x, z = z,
-        heading = heading, deltaHeading = deltaHeading, animType = animType,
-        deltaY = signExtend(rawDY, 11) * 0.0625f,
-        deltaX = signExtend(rawDX, 10) * 0.0625f,
-        deltaZ = signExtend(rawDZ, 11) * 0.0625f,
-      ))
+      Some(decodeSingleMobUpdate(buf))
     catch
       case _: Exception => None
+
+  /** Decode OP_MobUpdate: SpawnPositionUpdates_Struct.
+    * 4-byte uint32 count header followed by N × 15-byte SpawnPositionUpdate_Struct.
+    */
+  def decodeMobUpdates(data: Array[Byte]): Vector[MobPositionUpdate] =
+    if data.length < 19 then return Vector.empty // 4 header + at least 15
+    try
+      val buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
+      val count = buf.getInt() & 0xFFFFFFF // num_updates
+      val results = Vector.newBuilder[MobPositionUpdate]
+      var i = 0
+      while i < count && buf.remaining() >= 15 do
+        results += decodeSingleMobUpdate(buf)
+        i += 1
+      results.result()
+    catch
+      case _: Exception => Vector.empty
 
   /** Decode OP_NewZone: Mac NewZone_Struct (572 bytes). */
   def decodeNewZone(data: Array[Byte]): Option[NewZoneInfo] =
@@ -933,7 +968,8 @@ object ZoneCodec:
       i += 1
     items.result()
 
-  private def decodeItem(data: Array[Byte], base: Int): InventoryItem =
+  /** Decode a single Item_Struct (360 bytes) at the given offset. */
+  def decodeItem(data: Array[Byte], base: Int): InventoryItem =
     val buf = ByteBuffer.wrap(data, base, ItemStructSize).order(ByteOrder.LITTLE_ENDIAN)
 
     val nameBytes = new Array[Byte](64)
@@ -945,14 +981,17 @@ object ZoneCodec:
     val weight = buf.get() & 0xFF        // 0174
     val noRent = buf.get() & 0xFF        // 0175
     val noDrop = buf.get() & 0xFF        // 0176
+
     buf.get()                             // 0177: Size
     val itemClass = buf.getShort() & 0xFFFF // 0178
     val id = buf.getShort()               // 0180
     val icon = buf.getShort() & 0xFFFF    // 0182
     val equipSlot = buf.getShort()        // 0184
+    buf.getShort()                        // 0186: unknown
+    val slots = buf.getInt()              // 0188: bitmask of valid equipment slots
 
-    // Skip to common union stats at offset 0228
-    // Current position is at 0186, need to advance to 0240 (HP)
+    // Skip to common union stats
+    // Current position is at 0192, need to advance to 0240 (HP)
     buf.position(base + 240)
     val hp = buf.getShort()               // 0240
     val mana = buf.getShort()             // 0242
@@ -974,6 +1013,7 @@ object ZoneCodec:
       itemClass = itemClass,
       id = id,
       icon = icon,
+      slots = slots,
       weight = weight,
       noRent = noRent == 0,
       noDrop = noDrop == 0,
