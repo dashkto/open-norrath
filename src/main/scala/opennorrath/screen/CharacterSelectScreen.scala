@@ -6,7 +6,8 @@ import imgui.flag.{ImGuiCol, ImGuiCond, ImGuiKey, ImGuiWindowFlags}
 import org.lwjgl.glfw.GLFW.*
 import org.lwjgl.opengl.GL11.*
 
-import opennorrath.{CharacterPreview, Game}
+import opennorrath.Game
+import opennorrath.world.CharacterPreview
 import opennorrath.network.*
 import opennorrath.ui.{Colors, EqData}
 

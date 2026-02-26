@@ -6,7 +6,8 @@ import imgui.flag.{ImGuiCol, ImGuiCond, ImGuiWindowFlags}
 import org.lwjgl.glfw.GLFW.*
 import org.lwjgl.opengl.GL11.*
 
-import opennorrath.{Game, PlayerState, ZoneSession}
+import opennorrath.{Game, ZoneSession}
+import opennorrath.state.PlayerCharacter
 import opennorrath.network.*
 import opennorrath.ui.Colors
 
@@ -15,7 +16,7 @@ import opennorrath.ui.Colors
   * Handles:
   *   - Creating the ZoneSession and connecting to the zone server
   *   - Listening for ZoneEvents until zone entry is complete (InZone)
-  *   - Populating PlayerState from the player profile
+  *   - Populating PlayerCharacter from the player profile
   *   - Transitioning to ZoneScreen with zone path and camera position
   *
   * Used from:
@@ -35,7 +36,7 @@ class ZoneLoadingScreen(
   private val listener: ZoneEvent => Unit = {
     case ZoneEvent.ProfileReceived(pp) =>
       statusText = s"Loading ${pp.name}..."
-      Game.playerState = Some(PlayerState(
+      Game.player = Some(PlayerCharacter(
         name = pp.name,
         level = pp.level,
         classId = pp.classId,

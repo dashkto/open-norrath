@@ -13,6 +13,7 @@ import org.lwjgl.system.MemoryUtil.NULL
 
 import opennorrath.screen.{GameContext, SplashScreen, ZoneScreen}
 import opennorrath.ui.{Fonts, ImGuiTheme, ItemIcons}
+import opennorrath.state.PlayerCharacter
 
 object Main:
 
@@ -75,7 +76,7 @@ object Main:
 
     val initialScreen =
       if args.nonEmpty then
-        Game.playerState = Some(PlayerState(
+        Game.player = Some(PlayerCharacter(
           name = "Testchar",
           level = 50,
           classId = 2, // Cleric

@@ -1,6 +1,7 @@
 package opennorrath.animation
 
-import opennorrath.{EqCoords, Mesh}
+import opennorrath.render.Mesh
+import opennorrath.world.EqCoords
 import opennorrath.wld.*
 import org.joml.{Matrix4f, Quaternionf, Vector3f}
 

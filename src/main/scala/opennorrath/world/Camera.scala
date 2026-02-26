@@ -1,5 +1,6 @@
-package opennorrath
+package opennorrath.world
 
+import opennorrath.InputManager
 import org.joml.{Matrix4f, Vector3f}
 import org.lwjgl.glfw.GLFW.*
 

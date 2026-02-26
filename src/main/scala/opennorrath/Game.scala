@@ -6,6 +6,7 @@ import org.lwjgl.glfw.GLFW.*
 
 import opennorrath.network.{LoginClient, NetworkThread, WorldClient, ZoneClient}
 import opennorrath.screen.{GameContext, Screen}
+import opennorrath.state.PlayerCharacter
 
 /** Shared login connection, owned by Game, outlives any individual screen. */
 class LoginSession(val client: LoginClient, val network: NetworkThread):
@@ -33,7 +34,7 @@ object Game:
   var zoneSession: Option[ZoneSession] = None
 
   /** Active player state — created when entering a zone, updated by networking. */
-  var playerState: Option[PlayerState] = None
+  var player: Option[PlayerCharacter] = None
 
   def run(ctx: GameContext, initialScreen: Screen): Unit =
     setScreen(initialScreen)
@@ -72,7 +73,7 @@ object Game:
     loginSession = None
     worldSession.foreach(_.stop())
     worldSession = None
-    playerState = None
+    player = None
 
   def setScreen(screen: Screen): Unit =
     currentScreen.foreach(_.dispose())

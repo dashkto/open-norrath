@@ -1,4 +1,4 @@
-package opennorrath
+package opennorrath.render
 
 import org.joml.Matrix4f
 import org.lwjgl.opengl.GL20.*

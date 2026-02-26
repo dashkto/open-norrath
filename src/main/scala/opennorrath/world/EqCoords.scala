@@ -1,4 +1,4 @@
-package opennorrath
+package opennorrath.world
 
 import org.joml.Vector3f
 

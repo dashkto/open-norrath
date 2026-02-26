@@ -3,10 +3,10 @@ package opennorrath.ui
 import imgui.ImGui
 import imgui.flag.{ImGuiCol, ImGuiWindowFlags}
 
-import opennorrath.PlayerState
+import opennorrath.state.PlayerCharacter
 
 /** Compact HUD panel: name + level/class on one line, then HP and mana bars. */
-class CharacterInfoPanel(player: PlayerState) extends Panel:
+class CharacterInfoPanel(player: PlayerCharacter) extends Panel:
 
   val title = "##charinfo"
   val defaultX = 10f

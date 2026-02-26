@@ -4,7 +4,7 @@ import opennorrath.Game
 import opennorrath.network.{ChatMessage, ZoneEvent}
 
 /** Processes ZoneClient events — routes messages to the text panel
-  * and updates PlayerState. Registers as a ZoneClient listener.
+  * and updates PlayerCharacter. Registers as a ZoneClient listener.
   */
 class ZoneEventHandler(chatPanel: TextPanel):
 
@@ -14,7 +14,7 @@ class ZoneEventHandler(chatPanel: TextPanel):
   /** Send a chat message from the input field. Parses /commands. */
   def submitChat(text: String): Unit =
     val session = Game.zoneSession
-    val ps = Game.playerState
+    val ps = Game.player
     if session.isDefined && ps.isDefined then
       val name = ps.get.name
       val (channel, target, msg) = parseCommand(text)
@@ -31,7 +31,7 @@ class ZoneEventHandler(chatPanel: TextPanel):
     case ZoneEvent.ChatReceived(msg) =>
       chatPanel.addLine(formatChat(msg), channelColor(msg.channel))
 
-    case ZoneEvent.DamageDealt(info) =>
+    case ZoneEvent.DamageDealt(info) if info.damage != 0 =>
       val src = spawnName(info.sourceId)
       val tgt = spawnName(info.targetId)
       if info.damage < 0 then
@@ -56,16 +56,6 @@ class ZoneEventHandler(chatPanel: TextPanel):
 
     case ZoneEvent.LevelChanged(lvl) =>
       chatPanel.addLine(s"You have reached level ${lvl.level}!", Colors.gold)
-      Game.playerState.foreach(_.level = lvl.level)
-
-    case ZoneEvent.HPChanged(hp) =>
-      Game.playerState.foreach { ps =>
-        ps.currentHp = hp.curHp
-        ps.maxHp = hp.maxHp
-      }
-
-    case ZoneEvent.ManaChanged(mana) =>
-      Game.playerState.foreach(_.currentMana = mana.curMana)
 
     case ZoneEvent.Error(msg) =>
       chatPanel.addLine(s"Error: $msg", Colors.danger)
@@ -139,7 +129,7 @@ class ZoneEventHandler(chatPanel: TextPanel):
     Game.zoneSession.flatMap(_.client.spawns.get(id).map(_.name)).getOrElse(s"#$id")
 
   private def conLevelColor(targetLevel: Int): (Float, Float, Float, Float) =
-    val myLevel = Game.playerState.map(_.level).getOrElse(1)
+    val myLevel = Game.player.map(_.level).getOrElse(1)
     val diff = targetLevel - myLevel
     if diff >= 3 then Colors.danger
     else if diff >= 1 then Colors.gold

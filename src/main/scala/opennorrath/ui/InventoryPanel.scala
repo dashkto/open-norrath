@@ -5,11 +5,9 @@ import imgui.`type`.ImBoolean
 import imgui.flag.{ImGuiCol, ImGuiCond, ImGuiDragDropFlags, ImGuiWindowFlags}
 
 import opennorrath.Game
-import opennorrath.network.{InventoryItem, ZoneEvent}
+import opennorrath.network.InventoryItem
 
-/** Inventory panel toggled with the "i" key. Shows equipment slots and general inventory.
-  * Registers as a ZoneClient listener to receive InventoryLoaded events.
-  */
+/** Inventory panel toggled with the "i" key. Shows equipment slots and general inventory. */
 class InventoryPanel extends Panel:
 
   val title = "Inventory"
@@ -22,19 +20,8 @@ class InventoryPanel extends Panel:
   visible = false
   private val pOpen = new ImBoolean(true)
 
-  // All items keyed by slot ID
-  private var itemsBySlot = Map.empty[Int, InventoryItem]
-
-  val listener: ZoneEvent => Unit = {
-    case ZoneEvent.InventoryLoaded(items) =>
-      itemsBySlot = items.filter(i => i.equipSlot >= 0 && i.equipSlot <= 29).map(i => i.equipSlot -> i).toMap
-    case ZoneEvent.InventoryItemUpdated(item) =>
-      if item.equipSlot >= 0 && item.equipSlot <= 29 then
-        itemsBySlot = itemsBySlot + (item.equipSlot -> item)
-    case ZoneEvent.InventoryMoved(from, to) =>
-      swapSlots(from, to)
-    case _ => ()
-  }
+  private def itemsBySlot: Map[Int, InventoryItem] =
+    Game.player.map(_.inventory.items).getOrElse(Map.empty)
 
   def toggle(): Unit =
     visible = !visible
@@ -177,21 +164,9 @@ class InventoryPanel extends Panel:
           val srcAllowed = sourceItem.forall(_.canEquipIn(slotId))
           val dstAllowed = destItem.forall(_.canEquipIn(sourceSlot))
           if srcAllowed && dstAllowed then
-            swapSlots(sourceSlot, slotId)
+            Game.player.foreach(_.inventory.swap(sourceSlot, slotId))
             Game.zoneSession.foreach(_.client.sendMoveItem(sourceSlot, slotId))
       ImGui.endDragDropTarget()
-
-  private def swapSlots(from: Int, to: Int): Unit =
-    if to == -1 || to == 0xFFFFFFFF then
-      // Server delete — remove item from slot
-      itemsBySlot = itemsBySlot - from
-    else
-      val fromItem = itemsBySlot.get(from)
-      val toItem = itemsBySlot.get(to)
-      var updated = itemsBySlot - from - to
-      fromItem.foreach(it => updated = updated + (to -> it.copy(equipSlot = to)))
-      toItem.foreach(it => updated = updated + (from -> it.copy(equipSlot = from)))
-      itemsBySlot = updated
 
   private def renderTooltip(item: InventoryItem): Unit =
     ImGui.beginTooltip()

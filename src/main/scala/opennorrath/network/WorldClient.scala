@@ -70,6 +70,7 @@ class WorldClient extends PacketHandler:
 
   /** Create a character. Called from game thread. */
   def createCharacter(
+    name: String,
     gender: Int, race: Int, classId: Int,
     str: Int, sta: Int, cha: Int, dex: Int, int_ : Int, agi: Int, wis: Int,
     startZone: Int, deity: Int,
@@ -78,7 +79,7 @@ class WorldClient extends PacketHandler:
     hairStyle: Int = 0, beard: Int = 0, face: Int = 0,
   ): Unit =
     queueAppPacket(WorldOpcodes.CharacterCreate, WorldCodec.encodeCharCreate(
-      gender, race, classId, str, sta, cha, dex, int_, agi, wis,
+      name, gender, race, classId, str, sta, cha, dex, int_, agi, wis,
       startZone, deity, hairColor, beardColor, eyeColor1, eyeColor2,
       hairStyle, beard, face,
     ))

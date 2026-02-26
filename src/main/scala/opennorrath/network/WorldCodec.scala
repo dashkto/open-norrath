@@ -152,6 +152,7 @@ object WorldCodec:
     *   5422-5428: haircolor/beardcolor/eyecolor1/eyecolor2/hairstyle/beard/face
     */
   def encodeCharCreate(
+    name: String,
     gender: Int,
     race: Int,
     classId: Int,
@@ -163,7 +164,9 @@ object WorldCodec:
     hairStyle: Int = 0, beard: Int = 0, face: Int = 0,
   ): Array[Byte] =
     val buf = ByteBuffer.allocate(8452).order(ByteOrder.LITTLE_ENDIAN)
-    // Fill with zeros (already done by allocate)
+    // Name at offset 0 (64 bytes, null-padded)
+    val nameBytes = name.getBytes(StandardCharsets.US_ASCII)
+    buf.put(nameBytes, 0, Math.min(nameBytes.length, 63))
     buf.position(136); buf.put(gender.toByte)
     buf.position(138); buf.putShort((race & 0xFFFF).toShort)
     buf.position(140); buf.putShort((classId & 0xFFFF).toShort)

@@ -12,7 +12,7 @@ import org.lwjgl.opengl.GL15.*
 import org.lwjgl.opengl.GL20.*
 import org.lwjgl.opengl.GL30.*
 
-import opennorrath.Shader
+import opennorrath.render.Shader
 
 /** Renders spawn names as billboarded 3D quads with depth testing.
   * Text is rendered to cached GL textures via Java2D.

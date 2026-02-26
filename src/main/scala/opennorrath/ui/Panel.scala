@@ -84,7 +84,7 @@ trait Panel:
     val pct = s"${(fraction * 100).toInt}%"
     val textW = ImGui.calcTextSize(pct).x
     val textH = ImGui.calcTextSize(pct).y
-    drawList.addText(cx + (availW - textW) / 2f, cy + (height - textH) / 2f,
+    drawList.addText(cx + (availW - textW) / 2f, cy + (height - textH) / 2f - 1f,
       ImGui.colorConvertFloat4ToU32(1f, 1f, 1f, 1f), pct)
 
     // Advance cursor past the bar

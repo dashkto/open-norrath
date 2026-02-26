@@ -1,5 +1,6 @@
-package opennorrath
+package opennorrath.world
 
+import opennorrath.render.{Mesh, Shader, Texture}
 import org.joml.{Matrix4f, Vector3f}
 import org.lwjgl.opengl.GL11.*
 import java.nio.file.{Path, Files}

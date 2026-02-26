@@ -13,7 +13,7 @@ import opennorrath.ui.Colors
 
 /** Multi-step character creation screen.
   *
-  * Steps: 1) Race & Class → 2) Details (gender, deity, city) → 3) Name → 4) Create
+  * Steps: 1) Race & Class → 2) Details (gender, deity) → 3) Name → 4) Create
   */
 class CharacterCreateScreen(
   ctx: GameContext,
@@ -32,7 +32,6 @@ class CharacterCreateScreen(
   // Step 2: Details
   private var selectedGender = 0
   private var selectedDeity = 0
-  private var selectedCity = 0
 
   // Step 3: Name
   private val nameInput = new ImString(64)
@@ -70,26 +69,102 @@ class CharacterCreateScreen(
 
   private val genders = Vector("Male", "Female")
 
-  // Deity data — filtered by race
-  private val deities = Vector(
-    DeityInfo(396, "Agnostic"),
-    DeityInfo(201, "Bertoxxulous"), DeityInfo(202, "Brell Serilis"),
-    DeityInfo(203, "Cazic Thule"), DeityInfo(205, "Erollisi Marr"),
-    DeityInfo(206, "Bristlebane"), DeityInfo(207, "Innoruuk"),
-    DeityInfo(208, "Karana"), DeityInfo(209, "Mithaniel Marr"),
-    DeityInfo(210, "Prexus"), DeityInfo(211, "Quellious"),
-    DeityInfo(212, "Rallos Zek"), DeityInfo(213, "Rodcet Nife"),
-    DeityInfo(214, "Solusek Ro"), DeityInfo(215, "The Tribunal"),
-    DeityInfo(216, "Tunare"), DeityInfo(217, "Veeshan"),
+  // All deities — filtered dynamically by valid combos for selected (race, class)
+  private val allDeities = Map(
+    396 -> "Agnostic", 201 -> "Bertoxxulous", 202 -> "Brell Serilis",
+    203 -> "Cazic Thule", 204 -> "Cazic Thule", 205 -> "Erollisi Marr",
+    206 -> "Bristlebane", 207 -> "Innoruuk", 208 -> "Karana",
+    209 -> "Mithaniel Marr", 210 -> "Prexus", 211 -> "Quellious",
+    212 -> "Rallos Zek", 213 -> "Rodcet Nife", 214 -> "Solusek Ro",
+    215 -> "The Tribunal", 216 -> "Tunare", 217 -> "Veeshan",
   )
 
-  // Start zones — indexed by ID
-  private val startZones = Vector(
-    StartZone(0, "Odus"), StartZone(1, "Qeynos"), StartZone(2, "Halas"),
-    StartZone(3, "Rivervale"), StartZone(4, "Freeport"), StartZone(5, "Neriak"),
-    StartZone(6, "Gukta/Grobb"), StartZone(7, "Ogguk"), StartZone(8, "Kaladim"),
-    StartZone(9, "Gfay"), StartZone(10, "Felwithe"), StartZone(11, "Akanon"),
-    StartZone(12, "Cabalis"), StartZone(13, "Shar Vahl"),
+  // Valid (race, class, deity) → start_zone from server's char_create_combinations table
+  private val charCreateCombos: Map[(Int,Int,Int), Int] = Map(
+    (1,1,201)->45, (1,1,204)->10, (1,1,206)->10, (1,1,207)->1, (1,1,208)->10,
+    (1,1,211)->1, (1,1,212)->1, (1,1,396)->1,
+    (1,2,201)->45, (1,2,204)->9, (1,2,206)->10, (1,2,207)->1, (1,2,208)->9, (1,2,212)->2,
+    (1,3,204)->9, (1,3,207)->1, (1,3,208)->9, (1,3,212)->2,
+    (1,4,207)->3, (1,4,215)->3,
+    (1,5,201)->45, (1,5,206)->10,
+    (1,6,207)->3, (1,6,215)->3,
+    (1,7,210)->9, (1,7,396)->2,
+    (1,8,202)->1, (1,8,204)->10, (1,8,205)->1, (1,8,207)->1, (1,8,208)->10,
+    (1,8,209)->1, (1,8,210)->1, (1,8,211)->1, (1,8,212)->1, (1,8,213)->1,
+    (1,8,214)->1, (1,8,215)->1, (1,8,216)->1, (1,8,396)->1,
+    (1,9,201)->2, (1,9,204)->10, (1,9,205)->10, (1,9,206)->10,
+    (1,9,207)->2, (1,9,212)->2, (1,9,396)->10,
+    (1,11,201)->45, (1,11,206)->10,
+    (1,12,201)->45, (1,12,204)->9, (1,12,206)->10, (1,12,207)->1,
+    (1,12,208)->9, (1,12,212)->1, (1,12,213)->1, (1,12,396)->1,
+    (1,13,201)->45, (1,13,204)->9, (1,13,206)->10, (1,13,207)->1,
+    (1,13,208)->9, (1,13,212)->1, (1,13,396)->1,
+    (1,14,201)->45, (1,14,204)->9, (1,14,206)->10, (1,14,207)->1,
+    (1,14,208)->9, (1,14,212)->1, (1,14,396)->1,
+    (2,1,211)->29, (2,1,214)->29, (2,1,396)->29,
+    (2,9,205)->29, (2,9,214)->29, (2,9,396)->29,
+    (2,10,214)->29,
+    (2,15,208)->29, (2,15,214)->29,
+    (3,2,203)->75, (3,2,209)->24, (3,2,210)->24,
+    (3,3,209)->24, (3,3,210)->24,
+    (3,5,203)->75, (3,11,203)->75,
+    (3,12,209)->23, (3,12,210)->23, (3,12,213)->23, (3,12,396)->23,
+    (3,13,209)->23, (3,13,210)->23, (3,13,396)->23,
+    (3,14,209)->23, (3,14,210)->23, (3,14,396)->23,
+    (4,1,207)->54, (4,1,211)->54, (4,1,215)->54, (4,1,396)->54,
+    (4,4,215)->54, (4,6,215)->54,
+    (4,8,202)->54, (4,8,204)->54, (4,8,205)->54, (4,8,207)->54, (4,8,208)->54,
+    (4,8,209)->54, (4,8,210)->54, (4,8,211)->54, (4,8,212)->54, (4,8,213)->54,
+    (4,8,214)->54, (4,8,215)->54, (4,8,216)->54, (4,8,396)->54,
+    (4,9,205)->54, (4,9,207)->54, (4,9,215)->54, (4,9,396)->54,
+    (5,2,215)->61, (5,3,215)->61,
+    (5,12,204)->62, (5,12,207)->62, (5,12,208)->62, (5,12,213)->62,
+    (5,12,215)->62, (5,12,396)->62,
+    (5,13,204)->62, (5,13,207)->62, (5,13,208)->62, (5,13,215)->62, (5,13,396)->62,
+    (5,14,204)->62, (5,14,207)->62, (5,14,208)->62, (5,14,215)->62, (5,14,396)->62,
+    (6,1,206)->41, (6,1,211)->41, (6,1,396)->41,
+    (6,2,206)->42, (6,5,206)->42,
+    (6,9,205)->42, (6,9,206)->42, (6,9,396)->42,
+    (6,11,206)->42,
+    (6,12,206)->41, (6,12,213)->41, (6,12,396)->41,
+    (6,13,206)->41, (6,13,396)->41,
+    (6,14,206)->41, (6,14,396)->41,
+    (7,1,201)->45, (7,1,204)->10, (7,1,206)->10, (7,1,207)->1, (7,1,208)->10,
+    (7,1,209)->1, (7,1,211)->1, (7,1,212)->1, (7,1,214)->1, (7,1,215)->54, (7,1,396)->1,
+    (7,3,204)->9, (7,3,207)->1, (7,3,208)->9, (7,3,212)->2, (7,3,215)->61,
+    (7,4,207)->3, (7,4,215)->3,
+    (7,6,207)->3, (7,6,215)->3,
+    (7,8,202)->1, (7,8,204)->10, (7,8,205)->1, (7,8,207)->1, (7,8,208)->10,
+    (7,8,209)->1, (7,8,210)->1, (7,8,211)->1, (7,8,212)->1, (7,8,213)->1,
+    (7,8,214)->1, (7,8,215)->1, (7,8,216)->1, (7,8,396)->1,
+    (7,9,201)->2, (7,9,204)->10, (7,9,205)->10, (7,9,207)->2,
+    (7,9,212)->2, (7,9,215)->54, (7,9,396)->10,
+    (8,1,202)->60, (8,1,396)->60,
+    (8,2,202)->67, (8,3,202)->67,
+    (8,9,202)->67, (8,9,205)->67, (8,9,396)->67,
+    (9,1,203)->52, (9,1,206)->52, (9,1,211)->52, (9,1,396)->52,
+    (9,5,203)->52, (9,5,206)->52,
+    (9,10,203)->52, (9,10,206)->52,
+    (9,15,203)->52, (9,15,206)->52,
+    (10,1,203)->49, (10,1,211)->49, (10,1,396)->49,
+    (10,5,203)->49, (10,5,211)->49,
+    (10,10,211)->49, (10,15,211)->49,
+    (11,1,202)->19, (11,1,211)->19, (11,1,396)->19,
+    (11,2,205)->19, (11,3,207)->19, (11,4,207)->19, (11,6,207)->19,
+    (11,9,202)->19, (11,9,205)->19, (11,9,396)->19,
+    (12,1,201)->55, (12,1,202)->55, (12,1,211)->55, (12,1,396)->55,
+    (12,2,201)->55, (12,2,202)->55, (12,2,205)->55,
+    (12,3,202)->55,
+    (12,5,201)->55,
+    (12,9,201)->55, (12,9,202)->55, (12,9,205)->55, (12,9,396)->55,
+    (12,11,201)->55,
+    (12,12,201)->55, (12,12,202)->55, (12,12,213)->55, (12,12,396)->55,
+    (12,13,201)->55, (12,13,202)->55, (12,13,396)->55,
+    (12,14,201)->55, (12,14,202)->55, (12,14,396)->55,
+    (128,1,203)->106, (128,5,203)->106, (128,7,203)->106,
+    (128,10,203)->106, (128,11,203)->394, (128,15,203)->106,
+    (130,1,396)->155, (130,8,396)->155, (130,9,396)->155,
+    (130,10,396)->155, (130,15,396)->155,
   )
 
   // Base stats per race: (STR, STA, CHA, DEX, INT, AGI, WIS)
@@ -227,6 +302,7 @@ class CharacterCreateScreen(
       if selected then pushColor(ImGuiCol.Text, Colors.gold)
       if ImGui.selectable(s"  ${race.name}", selected, 0, colW, 0f) then
         selectedRace = i
+        selectedDeity = 0
         // Reset class selection if current class not valid for new race
         val validClasses = races(i).classes
         if !validClasses.contains(availableClasses(selectedClass)._1) then
@@ -248,6 +324,7 @@ class CharacterCreateScreen(
       if selected then pushColor(ImGuiCol.Text, Colors.gold)
       if ImGui.selectable(s"  ${cls._2}", selected, 0, colW, 0f) then
         selectedClass = i
+        selectedDeity = 0
       if selected then ImGui.popStyleColor()
 
     // Stats preview
@@ -284,30 +361,17 @@ class CharacterCreateScreen(
       if selected then ImGui.popStyleColor()
 
     ImGui.spacing(); ImGui.spacing()
+    val validDeities = availableDeities
     ImGui.setCursorPosX(innerX)
     pushColor(ImGuiCol.Text, Colors.cream)
     ImGui.text("Deity")
     ImGui.popStyleColor()
-    for (deity, i) <- deities.zipWithIndex do
+    for ((deityId, deityName), i) <- validDeities.zipWithIndex do
       ImGui.setCursorPosX(innerX)
       val selected = i == selectedDeity
       if selected then pushColor(ImGuiCol.Text, Colors.gold)
-      if ImGui.selectable(s"  ${deity.name}##deity$i", selected, 0, fieldW, 0f) then
+      if ImGui.selectable(s"  $deityName##deity$i", selected, 0, fieldW, 0f) then
         selectedDeity = i
-      if selected then ImGui.popStyleColor()
-
-    ImGui.spacing(); ImGui.spacing()
-    val validCities = startZonesForRace
-    ImGui.setCursorPosX(innerX)
-    pushColor(ImGuiCol.Text, Colors.cream)
-    ImGui.text("Starting City")
-    ImGui.popStyleColor()
-    for (city, i) <- validCities.zipWithIndex do
-      ImGui.setCursorPosX(innerX)
-      val selected = i == selectedCity
-      if selected then pushColor(ImGuiCol.Text, Colors.gold)
-      if ImGui.selectable(s"  ${city.name}##city$i", selected, 0, fieldW, 0f) then
-        selectedCity = i
       if selected then ImGui.popStyleColor()
 
     ImGui.endChild()
@@ -388,8 +452,7 @@ class CharacterCreateScreen(
       s"Name: $name",
       s"Race: ${race.name}  Class: ${cls._2}",
       s"Gender: ${genders(selectedGender)}",
-      s"Deity: ${deities(selectedDeity).name}",
-      s"City: ${startZonesForRace.lift(selectedCity).map(_.name).getOrElse("Default")}",
+      s"Deity: ${availableDeities.lift(selectedDeity).map(_._2).getOrElse("Unknown")}",
       s"Stats: STR $str  STA $sta  CHA $cha  DEX $dex  INT $int_  AGI $agi  WIS $wis",
     )
     for line <- lines do
@@ -415,22 +478,28 @@ class CharacterCreateScreen(
       doCreate()
 
   private def doCreate(): Unit =
-    creating = true
-    statusText = "Creating character..."
-    statusColor = Colors.textDim
     val race = races(selectedRace)
     val cls = availableClasses(selectedClass)
-    val (str, sta, cha, dex, int_, agi, wis) = computeStats
-    val cities = startZonesForRace
-    val cityId = cities.lift(selectedCity).map(_.id).getOrElse(0)
-    worldClient.createCharacter(
-      gender = selectedGender,
-      race = race.id,
-      classId = cls._1,
-      str = str, sta = sta, cha = cha, dex = dex, int_ = int_, agi = agi, wis = wis,
-      startZone = cityId,
-      deity = deities(selectedDeity).id,
-    )
+    val deityList = availableDeities
+    val deityId = deityList.lift(selectedDeity).map(_._1).getOrElse(396)
+    charCreateCombos.get((race.id, cls._1, deityId)) match
+      case None =>
+        statusText = "Invalid race/class/deity combination"
+        statusColor = Colors.error
+      case Some(zoneId) =>
+        creating = true
+        statusText = "Creating character..."
+        statusColor = Colors.textDim
+        val (str, sta, cha, dex, int_, agi, wis) = computeStats
+        worldClient.createCharacter(
+          name = nameInput.get().trim,
+          gender = selectedGender,
+          race = race.id,
+          classId = cls._1,
+          str = str, sta = sta, cha = cha, dex = dex, int_ = int_, agi = agi, wis = wis,
+          startZone = zoneId,
+          deity = deityId,
+        )
 
   // --- Helpers ---
   private def availableClasses: Vector[(Int, String)] =
@@ -444,24 +513,14 @@ class CharacterCreateScreen(
     val (cs, ct, cc, cd, ci, ca, cw) = classStats.getOrElse(cls._1, (0,0,0,0,0,0,0))
     (rs+cs, rt+ct, rc+cc, rd+cd, ri+ci, ra+ca, rw+cw)
 
-  private def startZonesForRace: Vector[StartZone] =
-    val raceId = races(selectedRace).id
-    raceId match
-      case 1   => Vector(startZones(1), startZones(4))           // Human: Qeynos, Freeport
-      case 2   => Vector(startZones(2))                          // Barbarian: Halas
-      case 3   => Vector(startZones(0))                          // Erudite: Odus
-      case 4   => Vector(startZones(9))                          // Wood Elf: Gfay
-      case 5   => Vector(startZones(10))                         // High Elf: Felwithe
-      case 6   => Vector(startZones(5))                          // Dark Elf: Neriak
-      case 7   => Vector(startZones(1), startZones(9))           // Half Elf: Qeynos, Gfay
-      case 8   => Vector(startZones(8))                          // Dwarf: Kaladim
-      case 9   => Vector(startZones(6))                          // Troll: Gukta/Grobb
-      case 10  => Vector(startZones(7))                          // Ogre: Ogguk
-      case 11  => Vector(startZones(3))                          // Halfling: Rivervale
-      case 12  => Vector(startZones(11))                         // Gnome: Akanon
-      case 128 => Vector(startZones(12))                         // Iksar: Cabalis
-      case 130 => Vector(startZones(13))                         // Vah Shir: Shar Vahl
-      case _   => Vector(startZones(1))
+  private def availableDeities: Vector[(Int, String)] =
+    val race = races(selectedRace)
+    val cls = availableClasses(selectedClass)
+    val validDeityIds = charCreateCombos.keys
+      .filter(k => k._1 == race.id && k._2 == cls._1)
+      .map(_._3).toSet
+    allDeities.filter((id, _) => validDeityIds.contains(id))
+      .toVector.sortBy((id, _) => if id == 396 then 0 else id) // Agnostic first
 
   private def renderNextButton(w: Float, h: Float, label: String): Unit =
     val buttonW = 160f
@@ -478,7 +537,6 @@ class CharacterCreateScreen(
     step match
       case 1 =>
         step = 2
-        selectedCity = 0
         statusText = ""
       case 2 =>
         step = 3
@@ -494,5 +552,3 @@ class CharacterCreateScreen(
     ImGui.pushStyleColor(idx, c._1, c._2, c._3, c._4)
 
 private case class RaceInfo(id: Int, name: String, classes: Vector[Int])
-private case class DeityInfo(id: Int, name: String)
-private case class StartZone(id: Int, name: String)

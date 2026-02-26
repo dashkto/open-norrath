@@ -1,7 +1,9 @@
-package opennorrath
+package opennorrath.world
 
+import opennorrath.Settings
 import opennorrath.animation.{AnimCode, AnimatedCharacter}
 import opennorrath.archive.{PfsArchive, PfsEntry}
+import opennorrath.render.{Mesh, Shader, Texture}
 import opennorrath.wld.*
 import org.joml.{Matrix4f, Vector3f}
 import org.lwjgl.opengl.GL11.*
@@ -190,7 +192,9 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings()):
     // --- Pass 1: Opaque + masked geometry (depth write ON, blend OFF) ---
     shader.setMatrix4f("model", identity)
     for group <- zoneMesh.groups do
-      if isOpaque(effectiveMaterialType(group)) then
+      val emt = effectiveMaterialType(group)
+      if isOpaque(emt) then
+        shader.setInt("alphaTest", if emt == MaterialType.TransparentMasked then 1 else 0)
         glBindTexture(GL_TEXTURE_2D, resolveAnimatedTexture(group))
         mesh.drawRange(group.startIndex, group.indexCount)
 
@@ -199,7 +203,9 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings()):
     for obj <- objectInstances do
       shader.setMatrix4f("model", obj.modelMatrix)
       for group <- obj.zoneMesh.groups do
-        if isOpaque(effectiveMaterialType(group)) then
+        val emt = effectiveMaterialType(group)
+        if isOpaque(emt) then
+          shader.setInt("alphaTest", if emt == MaterialType.TransparentMasked then 1 else 0)
           glBindTexture(GL_TEXTURE_2D, resolveTexture(group.textureName))
           obj.glMesh.drawRange(group.startIndex, group.indexCount)
 
@@ -207,13 +213,16 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings()):
       inst.char.update(deltaTime)
       shader.setMatrix4f("model", inst.char.modelMatrix)
       for group <- inst.char.zoneMesh.groups do
-        if isOpaque(effectiveMaterialType(group)) then
+        val emt = effectiveMaterialType(group)
+        if isOpaque(emt) then
+          shader.setInt("alphaTest", if emt == MaterialType.TransparentMasked then 1 else 0)
           glBindTexture(GL_TEXTURE_2D, resolveTexture(group.textureName))
           inst.char.glMesh.drawRange(group.startIndex, group.indexCount)
 
     // --- Pass 2: Transparent geometry (depth write OFF, blend ON) ---
     glEnable(GL_BLEND)
     glDepthMask(false)
+    shader.setInt("alphaTest", 1)
 
     shader.setMatrix4f("model", identity)
     glVertexAttrib3f(2, 1f, 1f, 1f)
@@ -244,6 +253,7 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings()):
 
     glDepthMask(true)
     glDisable(GL_BLEND)
+    shader.setInt("alphaTest", 0)
     shader.setFloat("alphaMultiplier", 1.0f)
 
     // Update and draw particles (last, for correct additive blending)

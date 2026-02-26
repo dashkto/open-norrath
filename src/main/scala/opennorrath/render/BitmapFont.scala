@@ -1,4 +1,4 @@
-package opennorrath
+package opennorrath.render
 
 import org.lwjgl.stb.STBTruetype.*
 import org.lwjgl.stb.{STBTTAlignedQuad, STBTTBakedChar}

@@ -9,7 +9,9 @@ import org.joml.{Matrix4f, Vector3f}
 import org.lwjgl.glfw.GLFW.*
 import org.lwjgl.opengl.GL11.*
 
-import opennorrath.{BuildInfo, Camera, Game, Shader, ZoneRenderer}
+import opennorrath.{BuildInfo, Game}
+import opennorrath.render.Shader
+import opennorrath.world.{Camera, ZoneRenderer}
 import opennorrath.ui.{Colors, Fonts}
 
 class SplashScreen(ctx: GameContext, zonePath: String) extends Screen:

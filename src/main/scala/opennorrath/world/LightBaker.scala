@@ -1,4 +1,4 @@
-package opennorrath
+package opennorrath.world
 
 object LightBaker:
 

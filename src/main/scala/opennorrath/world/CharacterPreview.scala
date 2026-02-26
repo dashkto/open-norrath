@@ -1,7 +1,8 @@
-package opennorrath
+package opennorrath.world
 
 import opennorrath.animation.{AnimCode, AnimatedCharacter}
 import opennorrath.archive.PfsArchive
+import opennorrath.render.{Mesh, Shader, Texture}
 import opennorrath.wld.*
 import org.joml.{Matrix4f, Vector3f}
 import org.lwjgl.opengl.GL11.*
