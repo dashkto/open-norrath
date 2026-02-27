@@ -157,18 +157,34 @@ class ZoneCharacter(
   def hpFraction: Float =
     if maxHp > 0 then curHp.toFloat / maxHp.toFloat else 1f
 
-  /** Called when a server position update arrives. Uses server-provided velocity
-    * if available, falls back to computing from position deltas.
+  /** Called when a server position update arrives.
+    *
+    * NOTE: The server's delta_yzx velocity field is only populated for player characters.
+    * For NPCs, m_Delta is never set by the server (always zero) — the server moves NPCs
+    * via waypoint/pathfinding updates and only sends positions. The animType field
+    * (pRunAnimSpeed = speed * 10) is the reliable indicator of NPC movement. We compute
+    * velocity client-side from consecutive position updates for interpolation.
     */
   def onServerPositionUpdate(newPos: Vector3f, serverVel: Vector3f, newHeading: Int, anim: Int): Unit =
     val hasServerVel = serverVel.x != 0f || serverVel.y != 0f || serverVel.z != 0f
-    velocity.set(serverVel)
+    val now = System.nanoTime()
+    val dtSec = (now - lastUpdateNanos) / 1e9f
+    if hasServerVel then
+      velocity.set(serverVel)
+    else if dtSec > 0.01f && anim > 0 then
+      // NPC: compute velocity from position delta
+      velocity.set(
+        (newPos.x - serverPos.x) / dtSec,
+        (newPos.y - serverPos.y) / dtSec,
+        (newPos.z - serverPos.z) / dtSec,
+      )
+    else
+      velocity.set(0f, 0f, 0f)
     serverPos.set(newPos)
-    position.set(newPos)
     prevServerPos.set(newPos)
-    lastUpdateNanos = System.nanoTime()
+    lastUpdateNanos = now
     heading = newHeading
-    moving = hasServerVel
+    moving = hasServerVel || anim > 0
     animation = anim
 
   /** Heading derived from velocity direction (0-255 EQ format, 0=east, CCW).
@@ -182,26 +198,21 @@ class ZoneCharacter(
       ((h % 256) + 256) % 256
     else heading
 
-  /** Advance position along velocity and correct toward server position.
-    * Called each frame. When moving, extrapolates along velocity and blends
-    * toward the authoritative server position to avoid drift. When stopped,
-    * smoothly slides to the final server position.
+  /** Advance position along velocity or correct toward server position.
+    * When moving, purely extrapolates along velocity — correcting toward serverPos
+    * while moving causes convergence then snap, because serverPos is already stale
+    * by the time we receive it. When stopped, smoothly slides to the final position.
     */
   def interpolate(dt: Float): Unit =
     if moving then
       position.x += velocity.x * dt
       position.y += velocity.y * dt
       position.z += velocity.z * dt
-      // Also advance serverPos along velocity so correction doesn't fight extrapolation
-      serverPos.x += velocity.x * dt
-      serverPos.y += velocity.y * dt
-      serverPos.z += velocity.z * dt
-    // Smooth correction toward server position (works for both moving and stopped)
-    val correctionRate = if moving then 5f else 10f  // faster snap when stopped
-    val t = Math.min(correctionRate * dt, 1f)
-    position.x += (serverPos.x - position.x) * t
-    position.y += (serverPos.y - position.y) * t
-    position.z += (serverPos.z - position.z) * t
+    else
+      val t = Math.min(10f * dt, 1f)
+      position.x += (serverPos.x - position.x) * t
+      position.y += (serverPos.y - position.y) * t
+      position.z += (serverPos.z - position.z) * t
 
 object ZoneCharacter:
   /** Speed threshold (GL units/sec) — above this, run; at or below, walk. */

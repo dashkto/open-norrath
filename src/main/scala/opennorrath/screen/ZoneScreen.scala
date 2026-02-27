@@ -489,7 +489,7 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
     glDepthMask(true)
     glDisable(GL_BLEND)
 
-    hud.render()
+    hud.render(dt)
 
   /** Stand up and cancel camping if active. */
   private def standUp(zc: ZoneCharacter): Unit =

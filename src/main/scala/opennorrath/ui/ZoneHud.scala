@@ -1,5 +1,8 @@
 package opennorrath.ui
 
+import imgui.{ImGui, ImVec2}
+import imgui.flag.{ImGuiCond, ImGuiWindowFlags}
+
 import opennorrath.{Game, GameAction, InputManager}
 import opennorrath.network.ZoneEvent
 import opennorrath.screen.GameContext
@@ -18,6 +21,13 @@ class ZoneHud(ctx: GameContext, characters: scala.collection.Map[Int, ZoneCharac
   private val groupPanel = GroupPanel(characters)
   private var chatPanel: TextPanel = null
   private var eventHandler: ZoneEventHandler = null
+
+  // FPS counter — smoothed with a running average to avoid jitter
+  private var fpsAccum = 0f
+  private var fpsFrames = 0
+  private var fpsDisplay = 0f
+  private var msDisplay = 0f
+  private val FpsUpdateInterval = 0.5f // refresh the counter twice per second
 
   def target: Option[ZoneCharacter] = targetPanel.target
   def target_=(s: Option[ZoneCharacter]): Unit = targetPanel.target = s
@@ -115,7 +125,8 @@ class ZoneHud(ctx: GameContext, characters: scala.collection.Map[Int, ZoneCharac
         Game.zoneSession.foreach(_.client.autoAttack(false))
     }
 
-  def render(): Unit =
+  /** Call each frame with the current delta time to keep the FPS counter updated. */
+  def render(dt: Float = 0f): Unit =
     charInfoPanel.foreach(_.render())
     buffPanel.foreach(_.render())
     targetPanel.render()
@@ -124,6 +135,31 @@ class ZoneHud(ctx: GameContext, characters: scala.collection.Map[Int, ZoneCharac
     spellBookPanel.foreach(_.render())
     chatPanel.render()
     escapeMenu.render()
+    renderFpsCounter(dt)
+
+  private def renderFpsCounter(dt: Float): Unit =
+    fpsAccum += dt
+    fpsFrames += 1
+    if fpsAccum >= FpsUpdateInterval then
+      fpsDisplay = fpsFrames.toFloat / fpsAccum
+      msDisplay = (fpsAccum / fpsFrames) * 1000f
+      fpsAccum = 0f
+      fpsFrames = 0
+
+    val label = f"${fpsDisplay.toInt} fps  $msDisplay%.1f ms"
+    val padding = 8f
+    val flags = ImGuiWindowFlags.NoDecoration | ImGuiWindowFlags.NoInputs |
+      ImGuiWindowFlags.NoBackground | ImGuiWindowFlags.AlwaysAutoResize |
+      ImGuiWindowFlags.NoSavedSettings | ImGuiWindowFlags.NoFocusOnAppearing |
+      ImGuiWindowFlags.NoNav
+
+    // Pin to top-right corner
+    val textSize = ImGui.calcTextSize(label)
+    val x = ctx.windowWidth - textSize.x - padding * 2
+    ImGui.setNextWindowPos(x, padding, ImGuiCond.Always)
+    ImGui.begin("##fps", flags)
+    ImGui.textColored(1f, 1f, 1f, 0.6f, label)
+    ImGui.end()
 
   def dispose(): Unit =
     Game.zoneSession.foreach { session =>

@@ -46,6 +46,10 @@ object Game:
     var lastTime = glfwGetTime()
 
     while !glfwWindowShouldClose(ctx.window) do
+      // Poll events first so input is available this frame (not delayed to next).
+      // Standard ImGui loop order — avoids an extra frame of input latency.
+      glfwPollEvents()
+
       val now = glfwGetTime()
       val dt = (now - lastTime).toFloat
       lastTime = now
@@ -67,7 +71,6 @@ object Game:
       ctx.imGuiGl3.renderDrawData(ImGui.getDrawData())
 
       glfwSwapBuffers(ctx.window)
-      glfwPollEvents()
 
     currentScreen.foreach(_.dispose())
     currentScreen = None
