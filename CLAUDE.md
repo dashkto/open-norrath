@@ -10,6 +10,10 @@
 
 - All original EverQuest client assets (models, textures, zones, sounds, etc.) are located at `/assets/EverQuest`
 
+## Logging
+
+- All stdout is written to log files in `/logs`
+
 ## Code Style
 
 - Use liberal code comments, especially for surprising behavior, hard-won lessons, and non-obvious gotchas (e.g., "the server never sends X for NPCs"). Don't shy away from explaining *why* something is the way it is.

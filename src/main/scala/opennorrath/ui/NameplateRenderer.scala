@@ -1,10 +1,9 @@
 package opennorrath.ui
 
-import java.awt.{Color, RenderingHints}
+import java.awt.RenderingHints
 import java.awt.image.BufferedImage
-import java.nio.ByteBuffer
 
-import org.joml.{Matrix4f, Vector3f}
+import org.joml.Matrix4f
 import org.lwjgl.BufferUtils
 import org.lwjgl.opengl.GL11.*
 import org.lwjgl.opengl.GL12.GL_CLAMP_TO_EDGE
@@ -16,6 +15,11 @@ import opennorrath.render.Shader
 
 /** Renders spawn names as billboarded 3D quads with depth testing.
   * Text is rendered to cached GL textures via Java2D.
+  *
+  * Batched rendering: all quads are built into one vertex buffer, sorted by
+  * texture ID, and drawn with one glBufferSubData + one draw call per unique
+  * texture. This avoids the massive overhead of per-nameplate buffer uploads
+  * and draw calls (which dominated frame time at 107+ characters).
   */
 class NameplateRenderer:
 
@@ -36,7 +40,13 @@ class NameplateRenderer:
   private val IndicesPerQuad = 6
   private val vertexData = new Array[Float](MaxQuads * VertsPerQuad * FloatsPerVert)
   private val indexData = new Array[Int](MaxQuads * IndicesPerQuad)
-  private val uploadBuf = BufferUtils.createFloatBuffer(VertsPerQuad * FloatsPerVert)
+  // Reusable upload buffer sized for all quads (not just one)
+  private val uploadBuf = BufferUtils.createFloatBuffer(MaxQuads * VertsPerQuad * FloatsPerVert)
+
+  // Per-quad texture tracking for batched draw: quadTexIds(i) = GL texture for quad i
+  private val quadTexIds = new Array[Int](MaxQuads)
+  // Sorted draw order: indices into quadTexIds, sorted by texture ID for minimal binds
+  private val drawOrder = new Array[Int](MaxQuads)
 
   // Pre-fill index data (0,1,2, 2,3,0 pattern per quad)
   for i <- 0 until MaxQuads do
@@ -93,6 +103,7 @@ class NameplateRenderer:
     val upY = viewMatrix.m11()
     val upZ = viewMatrix.m21()
 
+    // --- Phase 1: Build all quads into vertexData, track texture per quad ---
     var quadCount = 0
     val identity = Matrix4f()
 
@@ -143,20 +154,61 @@ class NameplateRenderer:
           vertexData(vi + 18) = 0f
           vertexData(vi + 19) = 0f
 
-          // Draw this quad immediately with its own texture
-          uploadBuf.clear()
-          uploadBuf.put(vertexData, vi, VertsPerQuad * FloatsPerVert).flip()
-          glBindBuffer(GL_ARRAY_BUFFER, vbo)
-          glBufferSubData(GL_ARRAY_BUFFER, 0, uploadBuf)
-
-          shader.setMatrix4f("model", identity)
-          glBindTexture(GL_TEXTURE_2D, tex.texId)
-          glBindVertexArray(vao)
-          glDrawElements(GL_TRIANGLES, IndicesPerQuad, GL_UNSIGNED_INT, 0)
-          glBindVertexArray(0)
-
+          quadTexIds(quadCount) = tex.texId
           quadCount += 1
       }
+
+    if quadCount == 0 then return
+
+    // --- Phase 2: Sort quad indices by texture ID for batched drawing ---
+    for i <- 0 until quadCount do drawOrder(i) = i
+    java.util.Arrays.sort(drawOrder, 0, quadCount)
+    // Sort by texture ID using a simple insertion sort (stable, fast for small N)
+    var i = 1
+    while i < quadCount do
+      val key = drawOrder(i)
+      val keyTex = quadTexIds(key)
+      var j = i - 1
+      while j >= 0 && quadTexIds(drawOrder(j)) > keyTex do
+        drawOrder(j + 1) = drawOrder(j)
+        j -= 1
+      drawOrder(j + 1) = key
+      i += 1
+
+    // --- Phase 3: Reorder vertex data by draw order and upload once ---
+    // Build a contiguous vertex buffer sorted by texture so each texture's
+    // quads are adjacent, enabling one draw call per unique texture.
+    uploadBuf.clear()
+    for idx <- 0 until quadCount do
+      val qi = drawOrder(idx)
+      uploadBuf.put(vertexData, qi * VertsPerQuad * FloatsPerVert, VertsPerQuad * FloatsPerVert)
+    uploadBuf.flip()
+
+    glBindBuffer(GL_ARRAY_BUFFER, vbo)
+    glBufferSubData(GL_ARRAY_BUFFER, 0, uploadBuf)
+
+    // --- Phase 4: Draw batched — one draw call per contiguous texture run ---
+    shader.setMatrix4f("model", identity)
+    glBindVertexArray(vao)
+
+    var curTex = -1
+    var runStart = 0
+    for idx <- 0 until quadCount do
+      val tex = quadTexIds(drawOrder(idx))
+      if tex != curTex then
+        // Flush previous run
+        if curTex != -1 then
+          glDrawElements(GL_TRIANGLES, (idx - runStart) * IndicesPerQuad,
+            GL_UNSIGNED_INT, (runStart * IndicesPerQuad).toLong * 4)
+        curTex = tex
+        glBindTexture(GL_TEXTURE_2D, tex)
+        runStart = idx
+    // Flush final run
+    if curTex != -1 then
+      glDrawElements(GL_TRIANGLES, (quadCount - runStart) * IndicesPerQuad,
+        GL_UNSIGNED_INT, (runStart * IndicesPerQuad).toLong * 4)
+
+    glBindVertexArray(0)
 
   private def getTexture(name: String, color: (Float, Float, Float, Float)): NameTexture =
     val key = (name, color.hashCode())

@@ -133,10 +133,11 @@ class AnimatedCharacter(
 
   def play(code: String, playReverse: Boolean = false): Unit =
     clips.get(code).foreach { clip =>
-      // Snapshot current raw bone transforms for cross-fade blending
-      if currentClip.isDefined && transitionTime < 0f then
-        if cachedRawTransforms != null then
-          transitionFromRawTransforms = cachedRawTransforms.map(m => Matrix4f(m))
+      // Snapshot current raw bone transforms for cross-fade blending.
+      // Always snapshot when we have cached transforms, even if a transition is
+      // already in progress — use the current blended pose as the new "from" state.
+      if currentClip.isDefined && cachedRawTransforms != null then
+        transitionFromRawTransforms = cachedRawTransforms.map(m => Matrix4f(m))
         transitionTime = 0f
       currentClip = Some(clip)
       reverse = playReverse
@@ -187,14 +188,21 @@ class AnimatedCharacter(
               if transitionFromRawTransforms != null && idx < transitionFromRawTransforms.length then
                 val from = transitionFromRawTransforms(idx)
                 val to = rawTransforms(idx)
-                // Decompose, lerp, recompose for smooth blending
+                // Decompose into translation, rotation, and scale separately.
+                // getScale extracts column lengths; normalizing the quaternion removes
+                // scale from the rotation so slerp works correctly. Without this,
+                // any non-unity scale (from bone hierarchy composition) would be lost
+                // during recompose, causing visible squashing.
                 val fromT = from.getTranslation(Vector3f())
                 val toT = to.getTranslation(Vector3f())
-                val fromR = from.getUnnormalizedRotation(Quaternionf())
-                val toR = to.getUnnormalizedRotation(Quaternionf())
+                val fromS = from.getScale(Vector3f())
+                val toS = to.getScale(Vector3f())
+                val fromR = from.getUnnormalizedRotation(Quaternionf()).normalize()
+                val toR = to.getUnnormalizedRotation(Quaternionf()).normalize()
                 fromT.lerp(toT, blend)
                 fromR.slerp(toR, blend)
-                rawTransforms(idx) = Matrix4f().translate(fromT).rotate(fromR)
+                fromS.lerp(toS, blend)
+                rawTransforms(idx) = Matrix4f().translate(fromT).rotate(fromR).scale(fromS)
 
         // Cache raw transforms for cross-fade snapshots, then bake in S3D→GL
         // conversion so the shader just does boneTransform * vertex.
