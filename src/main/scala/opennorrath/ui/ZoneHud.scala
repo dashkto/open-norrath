@@ -3,16 +3,17 @@ package opennorrath.ui
 import opennorrath.{Game, GameAction, InputManager}
 import opennorrath.network.ZoneEvent
 import opennorrath.screen.GameContext
-import opennorrath.state.ZoneCharacter
+import opennorrath.state.{PlayerCharacter, ZoneCharacter}
 
 /** Owns all ImGui panels and event wiring for the zone screen. */
 class ZoneHud(ctx: GameContext, characters: scala.collection.Map[Int, ZoneCharacter]):
 
-  private val charInfoPanel = Game.player.map(CharacterInfoPanel(_))
-  private val buffPanel = Game.player.map(BuffPanel(_))
-  private val spellBookPanel = Game.player.map(SpellBookPanel(_))
+  private var player: Option[PlayerCharacter] = None
+  private var charInfoPanel: Option[CharacterInfoPanel] = None
+  private var buffPanel: Option[BuffPanel] = None
+  private var spellBookPanel: Option[SpellBookPanel] = None
   private val escapeMenu = EscapeMenu(ctx)
-  private val inventoryPanel = InventoryPanel()
+  private var inventoryPanel: InventoryPanel = InventoryPanel()
   val targetPanel = TargetPanel()
   private val groupPanel = GroupPanel(characters)
   private var chatPanel: TextPanel = null
@@ -38,11 +39,17 @@ class ZoneHud(ctx: GameContext, characters: scala.collection.Map[Int, ZoneCharac
       groupPanel.leader = leader
     case _ => ()
 
-  def init(): Unit =
+  def init(pc: Option[PlayerCharacter]): Unit =
+    player = pc
+    charInfoPanel = pc.map(CharacterInfoPanel(_))
+    buffPanel = pc.map(BuffPanel(_))
+    spellBookPanel = pc.map(SpellBookPanel(_))
+    inventoryPanel = InventoryPanel(pc)
+    targetPanel.player = pc
     chatPanel = TextPanel("Main", onSubmit = text => {
       eventHandler.submitChat(text)
     })
-    eventHandler = ZoneEventHandler(chatPanel, characters)
+    eventHandler = ZoneEventHandler(chatPanel, characters, pc)
     Game.zoneSession.foreach { session =>
       session.client.addListener(eventHandler.listener)
       session.client.addListener(spawnRemovedListener)
@@ -55,12 +62,12 @@ class ZoneHud(ctx: GameContext, characters: scala.collection.Map[Int, ZoneCharac
     }
 
   /** The player's ZoneCharacter, used for self-targeting. */
-  private def selfCharacter: Option[ZoneCharacter] = Game.player.flatMap(_.zoneChar)
+  private def selfCharacter: Option[ZoneCharacter] = player.flatMap(_.zoneChar)
 
   def update(input: InputManager): Unit =
     // Keep self-target HP/level in sync (PC is source of truth for stats)
     selfCharacter.foreach { sc =>
-      Game.player.foreach { pc =>
+      player.foreach { pc =>
         sc.curHp = pc.currentHp
         sc.maxHp = pc.maxHp
         sc.level = pc.level
@@ -93,7 +100,7 @@ class ZoneHud(ctx: GameContext, characters: scala.collection.Map[Int, ZoneCharac
     }
 
   private def toggleAutoAttack(): Unit =
-    Game.player.foreach { pc =>
+    player.foreach { pc =>
       if pc.autoAttacking then
         disableAutoAttack()
       else if targetPanel.target.isDefined then
@@ -102,7 +109,7 @@ class ZoneHud(ctx: GameContext, characters: scala.collection.Map[Int, ZoneCharac
     }
 
   private def disableAutoAttack(): Unit =
-    Game.player.foreach { pc =>
+    player.foreach { pc =>
       if pc.autoAttacking then
         pc.autoAttacking = false
         Game.zoneSession.foreach(_.client.autoAttack(false))

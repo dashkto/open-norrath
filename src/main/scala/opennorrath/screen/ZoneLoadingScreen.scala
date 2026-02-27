@@ -7,7 +7,6 @@ import org.lwjgl.glfw.GLFW.*
 import org.lwjgl.opengl.GL11.*
 
 import opennorrath.{Game, ZoneSession}
-import opennorrath.state.PlayerCharacter
 import opennorrath.network.*
 import opennorrath.ui.Colors
 
@@ -54,25 +53,9 @@ class ZoneLoadingScreen(
       val zc = session.client
       val st = zc.state
 
-      // Create PlayerCharacter when profile arrives
-      if zc.profile.isDefined && Game.player.isEmpty then
-        val pp = zc.profile.get
-        statusText = s"Loading ${pp.name}..."
-        val pc = PlayerCharacter(
-          name = pp.name,
-          level = pp.level,
-          race = pp.race,
-          classId = pp.classId,
-          currentHp = pp.curHp,
-          maxHp = pp.curHp,
-          currentMana = pp.mana,
-          maxMana = pp.mana,
-          str = pp.str, sta = pp.sta, agi = pp.agi, dex = pp.dex,
-          wis = pp.wis, int = pp.int_, cha = pp.cha,
-        )
-        pc.loadBuffs(pp.buffs)
-        pc.spellBook ++= pp.spellBook
-        Game.player = Some(pc)
+      // Update status text from profile/zone info
+      if zc.profile.isDefined then
+        statusText = s"Loading ${zc.profile.get.name}..."
 
       // Update status text from zone info
       if zc.zoneInfo.isDefined && st != lastState then

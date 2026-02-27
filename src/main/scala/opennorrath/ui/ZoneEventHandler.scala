@@ -2,13 +2,13 @@ package opennorrath.ui
 
 import opennorrath.Game
 import opennorrath.network.{ChatMessage, PlayerPosition, SpawnAppearanceChange, ZoneEvent}
-import opennorrath.state.ZoneCharacter
+import opennorrath.state.{PlayerCharacter, ZoneCharacter}
 import opennorrath.world.EqCoords
 
 /** Processes ZoneClient events — routes messages to the text panel
   * and updates PlayerCharacter. Registers as a ZoneClient listener.
   */
-class ZoneEventHandler(chatPanel: TextPanel, characters: scala.collection.Map[Int, ZoneCharacter]):
+class ZoneEventHandler(chatPanel: TextPanel, characters: scala.collection.Map[Int, ZoneCharacter], player: Option[PlayerCharacter] = None):
 
   private var seenFirstExp = false
   val listener: ZoneEvent => Unit = handle
@@ -17,9 +17,8 @@ class ZoneEventHandler(chatPanel: TextPanel, characters: scala.collection.Map[In
   def submitChat(text: String): Unit =
     if tryClientCommand(text) then return
     val session = Game.zoneSession
-    val ps = Game.player
-    if session.isDefined && ps.isDefined then
-      val name = ps.get.name
+    if session.isDefined && player.isDefined then
+      val name = player.get.name
       val (channel, target, msg) = parseCommand(text)
       session.get.client.sendChat(name, target, channel, 0, msg)
       chatPanel.addLine(formatOutgoing(channel, target, msg), channelColor(channel))
@@ -183,7 +182,7 @@ class ZoneEventHandler(chatPanel: TextPanel, characters: scala.collection.Map[In
         true
 
   private def handleLoc(): Unit =
-    Game.player match
+    player match
       case Some(pc) =>
         pc.zoneChar match
           case Some(zc) =>
@@ -204,7 +203,7 @@ class ZoneEventHandler(chatPanel: TextPanel, characters: scala.collection.Map[In
       val sx = args(0).toFloat
       val sy = args(1).toFloat
       val sz = args(2).toFloat
-      Game.player.foreach { pc =>
+      player.foreach { pc =>
         pc.teleportTo(EqCoords.serverToGl(sy, sx, sz))
       }
       Game.zoneSession.foreach { session =>
@@ -221,19 +220,19 @@ class ZoneEventHandler(chatPanel: TextPanel, characters: scala.collection.Map[In
       chatPanel.addLine("Usage: /tp x y z (numbers required)", Colors.danger)
 
   private def handleSpeedUp(): Unit =
-    Game.player.foreach { pc =>
+    player.foreach { pc =>
       pc.runSpeed = 100f
       chatPanel.addLine("Speed set to 100", Colors.gold)
     }
 
   private def handleSlowDown(): Unit =
-    Game.player.foreach { pc =>
+    player.foreach { pc =>
       pc.runSpeed = 25f
       chatPanel.addLine("Speed set to 25 (default)", Colors.gold)
     }
 
   private def handleAttackToggle(): Unit =
-    Game.player.foreach { pc =>
+    player.foreach { pc =>
       val enable = !pc.autoAttacking
       pc.autoAttacking = enable
       Game.zoneSession.foreach(_.client.autoAttack(enable))
@@ -259,12 +258,12 @@ class ZoneEventHandler(chatPanel: TextPanel, characters: scala.collection.Map[In
 
   private def spawnName(id: Int): String =
     characters.get(id).map(_.displayName)
-      .orElse(Game.player.filter(_ => Game.zoneSession.exists(_.client.mySpawnId == id)).map(_.name))
+      .orElse(player.filter(_ => Game.zoneSession.exists(_.client.mySpawnId == id)).map(_.name))
       .orElse(Game.zoneSession.flatMap(_.client.spawns.get(id)).map(s => ZoneCharacter.cleanName(s.name)))
       .getOrElse(s"#$id")
 
   private def conLevelColor(targetLevel: Int): (Float, Float, Float, Float) =
-    val myLevel = Game.player.map(_.level).getOrElse(1)
+    val myLevel = player.map(_.level).getOrElse(1)
     val diff = targetLevel - myLevel
     if diff >= 3 then Colors.danger
     else if diff >= 1 then Colors.gold

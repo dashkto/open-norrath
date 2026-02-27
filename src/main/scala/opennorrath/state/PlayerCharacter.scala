@@ -3,7 +3,7 @@ package opennorrath.state
 import org.joml.Vector3f
 import opennorrath.Game
 import opennorrath.animation.AnimCode
-import opennorrath.network.{SpellBuff, ZoneEvent}
+import opennorrath.network.{PlayerProfileData, SpellBuff, ZoneEvent}
 import opennorrath.world.{Physics, ZoneCollision}
 
 /** Runtime state for the player's character while in a zone.
@@ -219,3 +219,15 @@ class PlayerCharacter(
       else buffs(slot) = buff
     case _ => ()
   }
+
+object PlayerCharacter:
+  def fromProfile(pp: PlayerProfileData): PlayerCharacter =
+    val pc = PlayerCharacter(
+      name = pp.name, level = pp.level, race = pp.race, classId = pp.classId,
+      currentHp = pp.curHp, maxHp = pp.curHp, currentMana = pp.mana, maxMana = pp.mana,
+      str = pp.str, sta = pp.sta, agi = pp.agi, dex = pp.dex,
+      wis = pp.wis, int = pp.int_, cha = pp.cha,
+    )
+    pc.loadBuffs(pp.buffs)
+    pc.spellBook ++= pp.spellBook
+    pc

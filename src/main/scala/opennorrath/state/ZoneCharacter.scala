@@ -1,36 +1,44 @@
 package opennorrath.state
 
-import org.joml.Vector3f
+import scala.compiletime.uninitialized
 
-import opennorrath.animation.AnimCode
+import org.joml.{Matrix4f, Vector3f}
+
+import opennorrath.animation.{AnimCode, AnimatedCharacter}
 import opennorrath.network.{SpawnData, TintColor, TintProfile}
 import opennorrath.ui.EqData
-import opennorrath.world.EqCoords
+import opennorrath.world.{EqCoords, ZoneRenderer}
 
-/** Mutable game-logic representation of a non-player entity in the zone.
-  * Network events update it. UI and game systems read from it.
-  * The player's own spawn is tracked by PlayerCharacter, not here.
+/** Mutable representation of an entity in the zone. Holds both game-logic state
+  * (position, HP, equipment, animation) and rendering state (GPU mesh, texture
+  * overrides, weapon models). Network events update it; the renderer reads from it.
+  *
+  * Constructed via `ZoneCharacter.fromSpawn`. Rendering fields (`animChar`, `build`)
+  * are initialized later by `ZoneRenderer.addSpawn` via `initRendering`.
   */
 class ZoneCharacter(
-  val spawnId: Int,
-  val name: String,
-  val lastName: String,
-  val race: Int,
-  val classId: Int,
-  val gender: Int,
-  var level: Int,
-  val npcType: Int,
-  val modelCode: String,
-  val size: Float,
+  val spawn: SpawnData,
   val position: Vector3f,
   var heading: Int,
-  val bodyTexture: Int = 0,
   var curHp: Int = -1,
   var maxHp: Int = -1,
   var moving: Boolean = false,
   var animation: Int = 0,
-  val flying: Boolean = false,
 ):
+  // --- Spawn delegates ---
+  def spawnId: Int = spawn.spawnId
+  def name: String = spawn.name
+  def lastName: String = spawn.lastName
+  def race: Int = spawn.race
+  def classId: Int = spawn.classId
+  def gender: Int = spawn.gender
+  def npcType: Int = spawn.npcType
+  def size: Float = spawn.size
+  def bodyTexture: Int = spawn.bodyTexture
+  def flying: Boolean = spawn.flyMode == 1
+  var level: Int = spawn.level
+
+  val modelCode: String = EqData.raceModelCode(spawn.race, spawn.gender).get
   val displayName: String = ZoneCharacter.cleanName(name)
 
   /** Per-slot equipment material IDs (9 slots: head/chest/arms/wrist/hands/legs/feet/primary/secondary). */
@@ -44,6 +52,36 @@ class ZoneCharacter(
     if slot >= 0 && slot < 9 then
       equipment(slot) = material
       equipColors(slot) = color
+
+  // --- Rendering state (initialized by ZoneRenderer.addSpawn via initRendering) ---
+
+  /** GPU mesh and skeletal animation instance. Null until initRendering is called. */
+  var animChar: AnimatedCharacter = uninitialized
+
+  /** Model template (skeleton, clips, metrics). Null until initRendering is called. */
+  var build: ZoneRenderer.CharBuild = uninitialized
+
+  /** Effective display size (server size / 6). */
+  var effectiveSize: Float = if size > 0f then size / 6f else 1f
+
+  /** Flying creatures hover above their server position by half their model height. */
+  var flyOffset: Float = 0f
+
+  /** Equipment texture variant overrides (base texture name → variant name). */
+  var textureOverrides: Map[String, String] = Map.empty
+
+  /** IT codes for equipped weapon models. */
+  var weaponPrimary: Int = 0
+  var weaponSecondary: Int = 0
+
+  /** True if rendering state has been initialized. */
+  def hasRendering: Boolean = animChar != null
+
+  /** Initialize rendering state. Called by ZoneRenderer after GPU resources are created. */
+  def initRendering(b: ZoneRenderer.CharBuild, ac: AnimatedCharacter): Unit =
+    build = b
+    animChar = ac
+    flyOffset = if flying then b.glHeight * effectiveSize * 0.5f else 0f
 
   // --- Animation state ---
 
@@ -176,22 +214,11 @@ object ZoneCharacter:
     raw.replaceAll("\\d+$", "").replace('_', ' ').trim
 
   def fromSpawn(s: SpawnData): Option[ZoneCharacter] =
-    EqData.raceModelCode(s.race, s.gender).map { code =>
+    EqData.raceModelCode(s.race, s.gender).map { _ =>
       val zc = ZoneCharacter(
-        spawnId = s.spawnId,
-        name = s.name,
-        lastName = s.lastName,
-        race = s.race,
-        classId = s.classId,
-        gender = s.gender,
-        level = s.level,
-        npcType = s.npcType,
-        modelCode = code,
-        size = s.size,
+        spawn = s,
         position = EqCoords.serverToGl(s.y, s.x, s.z),
         heading = s.heading,
-        bodyTexture = s.bodyTexture,
-        flying = s.flyMode == 1,
       )
       Array.copy(s.equipment, 0, zc.equipment, 0, math.min(s.equipment.length, 9))
       for i <- 0 until math.min(s.equipColors.slots.length, 9) do

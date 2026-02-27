@@ -13,7 +13,6 @@ import org.lwjgl.system.MemoryUtil.NULL
 
 import opennorrath.screen.{GameContext, SplashScreen, ZoneScreen}
 import opennorrath.ui.{Fonts, ImGuiTheme, ItemIcons, SpellData}
-import opennorrath.state.PlayerCharacter
 
 object Main:
 
@@ -76,19 +75,7 @@ object Main:
     val ctx = GameContext(window, input, settings, WindowWidth, WindowHeight, imGuiGlfw, imGuiGl3)
 
     val initialScreen =
-      if args.nonEmpty then
-        Game.player = Some(PlayerCharacter(
-          name = "Testchar",
-          level = 50,
-          race = 1, // Human
-          classId = 2, // Cleric
-          currentHp = 3200,
-          maxHp = 4000,
-          currentMana = 1800,
-          maxMana = 3000,
-          str = 80, sta = 85, agi = 70, dex = 75, wis = 105, int = 85, cha = 60,
-        ))
-        ZoneScreen(ctx, zonePath)
+      if args.nonEmpty then ZoneScreen(ctx, zonePath)
       else SplashScreen(ctx, zonePath)
     Game.run(ctx, initialScreen)
 

@@ -11,7 +11,7 @@ import opennorrath.state.PlayerCharacter
 /** Inventory panel toggled with the "i" key.
   * Three-column layout: equipment (left), general inventory (middle), stats (right).
   */
-class InventoryPanel extends Panel:
+class InventoryPanel(player: Option[PlayerCharacter] = None) extends Panel:
 
   val title = "Inventory"
   val defaultX = 200f
@@ -24,7 +24,7 @@ class InventoryPanel extends Panel:
   private val pOpen = new ImBoolean(true)
 
   private def itemsBySlot: Map[Int, InventoryItem] =
-    Game.player.map(_.inventory.items).getOrElse(Map.empty)
+    player.map(_.inventory.items).getOrElse(Map.empty)
 
   def toggle(): Unit =
     visible = !visible
@@ -122,7 +122,7 @@ class InventoryPanel extends Panel:
 
     // Right column — stats & resists
     ImGui.beginChild("##stats", statsW, availH, false, childFlags)
-    Game.player.foreach(renderStats)
+    player.foreach(renderStats)
     ImGui.endChild()
 
   private def renderStats(pc: PlayerCharacter): Unit =

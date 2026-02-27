@@ -12,7 +12,7 @@ import imgui.ImGui
 import opennorrath.{Game, GameAction}
 import opennorrath.animation.AnimCode
 import opennorrath.render.Shader
-import opennorrath.state.ZoneCharacter
+import opennorrath.state.{PlayerCharacter, ZoneCharacter}
 import opennorrath.world.{CameraController, EqCoords, SpellEffectSystem, TargetingSystem, ZoneRenderer}
 import opennorrath.network.{InventoryItem, PlayerPosition, PlayerProfileData, SpawnData, WorldEvent, ZoneEvent, ZonePointData}
 import opennorrath.ui.{NameplateRenderer, ZoneHud}
@@ -28,6 +28,7 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
   private val targeting = TargetingSystem()
   private val hud = ZoneHud(ctx, zoneCharacters)
   private val spellEffects = SpellEffectSystem()
+  private var player: Option[PlayerCharacter] = None
   private var posUpdateTimer = 0f
   private val PosUpdateInterval = 0.4f   // ~2.5Hz while moving
   private var lastSentHeading = -1f       // track heading changes for idle sends
@@ -50,12 +51,10 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
         ZoneCharacter.fromSpawn(s) match
           case Some(zc) =>
             zoneCharacters(s.spawnId) = zc
-            if zone.addSpawn(s.spawnId, zc.modelCode, zc.position, zc.heading, zc.size, flying = zc.flying) then
-              zone.updateSpawnEquipment(s.spawnId, zc.equipment, zc.bodyTexture)
+            zone.initSpawnRendering(zc)
           case None => ()
     case ZoneEvent.SpawnRemoved(id) =>
-      zoneCharacters.remove(id)
-      zone.removeSpawn(id)
+      zoneCharacters.remove(id).foreach(zone.cleanupSpawn)
     case ZoneEvent.SpawnMoved(upd) =>
       val pos = EqCoords.serverToGl(upd.y, upd.x, upd.z)
       val serverVel = EqCoords.serverToGl(upd.deltaY, upd.deltaX, upd.deltaZ)
@@ -70,7 +69,7 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
     case ZoneEvent.EquipmentChanged(wc) =>
       zoneCharacters.get(wc.spawnId).foreach { zc =>
         zc.updateEquipment(wc.wearSlot, wc.material, wc.color)
-        zone.updateSpawnEquipment(wc.spawnId, zc.equipment, zc.bodyTexture)
+        zone.updateSpawnEquipment(zc)
       }
     case ZoneEvent.ZoneChangeRequested(req) =>
       println(s"[Zone] Zone change requested → zoneId=${req.zoneId}")
@@ -115,7 +114,7 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
               zc.equipment(7) = inv.find(_.equipSlot == InventoryItem.Primary).map(_.idFileNum).getOrElse(0)
             if isSecondary then
               zc.equipment(8) = inv.find(_.equipSlot == InventoryItem.Secondary).map(_.idFileNum).getOrElse(0)
-            zone.updateSpawnEquipment(myId, zc.equipment, zc.bodyTexture)
+            zone.updateSpawnEquipment(zc)
           }
         }
     case _ => ()
@@ -190,12 +189,13 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
     glfwSetInputMode(ctx.window, GLFW_CURSOR, GLFW_CURSOR_NORMAL)
     glClearColor(0.3f, 0.5f, 0.7f, 1.0f)
 
-    hud.init()
+    player = Game.zoneSession.flatMap(_.client.profile).map(PlayerCharacter.fromProfile)
+    hud.init(player)
     shader = Shader.fromResources("/shaders/default.vert", "/shaders/default.frag")
-    zone = ZoneRenderer(zonePath, ctx.settings)
+    zone = ZoneRenderer(zonePath, ctx.settings, zoneCharacters)
     camCtrl = CameraController(ctx.window, ctx.windowWidth, ctx.windowHeight)
-    camCtrl.player = Game.player
-    Game.player.foreach(_.collision = Some(zone.collision))
+    camCtrl.player = player
+    player.foreach(_.collision = Some(zone.collision))
     camCtrl.initFromSpawn(selfSpawn, profile)
     println(s"Loading zone: $zonePath")
 
@@ -206,7 +206,7 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
       val zc = session.client
       zc.addListener(spawnListener)
       zc.addListener(spellListener)
-      Game.player.foreach(pc => zc.addListener(pc.listener))
+      player.foreach(pc => zc.addListener(pc.listener))
 
       // Self-spawn needs special handling: it's registered under mySpawnId (assigned by
       // SpawnAppearance), not the spawnId from OP_ZoneEntry. The SpawnAdded event for
@@ -215,10 +215,9 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
       selfSpawn.foreach { s =>
         ZoneCharacter.fromSpawn(s).foreach { playerZc =>
           zoneCharacters(myId) = playerZc
-          if zone.addSpawn(myId, playerZc.modelCode, playerZc.position, playerZc.heading, playerZc.size) then
-            zone.updateSpawnEquipment(myId, playerZc.equipment, playerZc.bodyTexture)
+          zone.initSpawnRendering(playerZc)
           val (fo, mh) = zone.modelMetrics(playerZc.modelCode, playerZc.size)
-          Game.player.foreach { pc => pc.feetOffset = fo; pc.modelHeight = mh; pc.zoneChar = Some(playerZc) }
+          player.foreach { pc => pc.feetOffset = fo; pc.modelHeight = mh; pc.zoneChar = Some(playerZc) }
           println(f"  Player model ${playerZc.modelCode}: feetOffset=$fo%.2f modelHeight=$mh%.2f (size=${playerZc.size}%.1f)")
         }
       }
@@ -234,7 +233,7 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
         while event.isDefined do
           event.get match
             case WorldEvent.ZoneInfo(addr) =>
-              val charName = Game.player.map(_.name).getOrElse("")
+              val charName = player.map(_.name).getOrElse("")
               Game.setScreen(ZoneLoadingScreen(ctx, addr, charName))
               return
             case WorldEvent.Error(msg) =>
@@ -252,9 +251,9 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
         // NPC: compute speed from velocity for walk/run threshold
         zc.speed = Math.sqrt(zc.velocity.x * zc.velocity.x + zc.velocity.z * zc.velocity.z).toFloat
         zc.interpolate(dt)
-        zone.updateSpawnPosition(zc.spawnId, zc.position, zc.facingHeading)
+        zone.updateSpawnPosition(zc)
         if zc.updateAnimation(dt) then
-          zone.playSpawnAnimation(id, zc.currentAnimCode)
+          zone.playSpawnAnimation(zc, zc.currentAnimCode)
 
     spellEffects.update(dt, camCtrl.viewMatrix, zoneCharacters)
 
@@ -267,14 +266,19 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
     if camCtrl.attached then
       Game.zoneSession.foreach { session =>
         val pid = session.client.mySpawnId
-        Game.player match
+        player match
           case Some(pc) =>
             pc.zoneChar.foreach { zc =>
-              zone.updateSpawnPosition(pid, zc.position, zc.facingHeading)
+              zone.updateSpawnPosition(zc)
               if zc.updateAnimation(dt) then
-                zone.playSpawnAnimation(pid, zc.currentAnimCode)
+                zone.playSpawnAnimation(zc, zc.currentAnimCode)
             }
-          case None => zone.updateSpawnPosition(pid, camCtrl.playerPos, camCtrl.playerHeading)
+          case None =>
+            zoneCharacters.get(pid).foreach { zc =>
+              zc.position.set(camCtrl.playerPos)
+              zc.heading = camCtrl.playerHeading
+              zone.updateSpawnPosition(zc)
+            }
       }
 
     // Send player position to server when attached — only if something changed
@@ -354,7 +358,7 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
 
     // Show zone point debug overlay — distance to nearest server zone point
     if zonePoints.nonEmpty then
-      Game.player.foreach { pc => pc.zoneChar.foreach { zc =>
+      player.foreach { pc => pc.zoneChar.foreach { zc =>
         val pos = zc.position
         val (sy, sx, sz) = EqCoords.glToServer(pos.x, pos.y - pc.feetOffset, pos.z)
         val drawList = ImGui.getForegroundDrawList()
@@ -374,11 +378,11 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
 
   override def dispose(): Unit =
     hud.dispose()
-    Game.player.foreach(_.zoneChar = None)
+    player.foreach(_.zoneChar = None)
     Game.zoneSession.foreach { session =>
       session.client.removeListener(spawnListener)
       session.client.removeListener(spellListener)
-      Game.player.foreach(pc => session.client.removeListener(pc.listener))
+      player.foreach(pc => session.client.removeListener(pc.listener))
     }
     spellEffects.cleanup()
     nameplateRenderer.cleanup()

@@ -4,6 +4,7 @@ import opennorrath.Settings
 import opennorrath.animation.{AnimCode, AnimatedCharacter}
 import opennorrath.archive.{PfsArchive, PfsEntry}
 import opennorrath.render.{Mesh, Shader, Texture}
+import opennorrath.state.ZoneCharacter
 import opennorrath.wld.*
 import org.joml.{Matrix4f, Vector3f}
 import org.lwjgl.BufferUtils
@@ -13,7 +14,8 @@ import org.lwjgl.opengl.GL20.{glEnableVertexAttribArray, glVertexAttrib3f, glVer
 import org.lwjgl.opengl.GL30.{glBindVertexArray, glDeleteVertexArrays, glGenVertexArrays}
 import java.nio.file.{Path, Files}
 
-class ZoneRenderer(s3dPath: String, settings: Settings = Settings()):
+class ZoneRenderer(s3dPath: String, settings: Settings = Settings(),
+    zoneCharacters: scala.collection.Map[Int, ZoneCharacter] = Map.empty):
 
   private val entries = PfsArchive.load(Path.of(s3dPath))
   private val zoneWld = entries.find(e => e.extension == "wld" && !e.name.contains("objects") && !e.name.contains("lights"))
@@ -65,39 +67,30 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings()):
   // Equipment models from gequip*.s3d (IT number → mesh data)
   private val equipmentModels: Map[Int, ZoneRenderer.EquipModel] = loadEquipmentModels()
 
-  // Live spawn characters — managed by addSpawn/removeSpawn/updateSpawnPosition
-  private case class SpawnInstance(char: AnimatedCharacter, build: ZoneRenderer.CharBuild, size: Float, var moving: Boolean = false,
-    var textureOverrides: Map[String, String] = Map.empty,
-    var weaponPrimary: Int = 0, var weaponSecondary: Int = 0,
-    flying: Boolean = false):
-    /** Flying creatures hover above their server position by half their model height. */
-    val flyOffset: Float = if flying then build.glHeight * size * 0.5f else 0f
-  private val _spawnCharacters = scala.collection.mutable.Map[Int, SpawnInstance]()
-
   /** Return (spawnId, modelMatrix, headHeight) for each live spawn — used for nameplates. */
   def spawnNameplateData: Iterable[(Int, Matrix4f, Float)] =
-    _spawnCharacters.map { (id, inst) => (id, inst.char.modelMatrix, inst.build.glHeight * inst.size) }
+    zoneCharacters.collect { case (id, zc) if zc.hasRendering => (id, zc.animChar.modelMatrix, zc.build.glHeight * zc.effectiveSize) }
 
   /** Return (spawnId, modelMatrix, height, width, depth) for each live spawn — used for click targeting. */
   def spawnHitData: Iterable[(Int, Matrix4f, Float, Float, Float)] =
-    _spawnCharacters.map { (id, inst) =>
-      val s = inst.size
-      (id, inst.char.modelMatrix, inst.build.glHeight * s, inst.build.glWidth * s, inst.build.glDepth * s)
+    zoneCharacters.collect { case (id, zc) if zc.hasRendering =>
+      val s = zc.effectiveSize
+      (id, zc.animChar.modelMatrix, zc.build.glHeight * s, zc.build.glWidth * s, zc.build.glDepth * s)
     }
 
-  /** Create a spawn character from a CharBuild template. Returns false if model not found. */
-  def addSpawn(spawnId: Int, modelCode: String, position: Vector3f, heading: Int, size: Float, flying: Boolean = false): Boolean =
-    characterBuilds.get(modelCode) match
+  /** Initialize rendering on a ZoneCharacter. Returns false if model not found. */
+  def initSpawnRendering(zc: ZoneCharacter): Boolean =
+    characterBuilds.get(zc.modelCode) match
       case None => false
       case Some(build) =>
         val interleaved = ZoneRenderer.buildInterleaved(build.zm)
         val glMesh = Mesh(interleaved, build.zm.indices, dynamic = build.clips.nonEmpty)
-        val effectiveSize = if size > 0f then size / 6f else 1f
-        val inst = SpawnInstance(null, build, effectiveSize, flying = flying)
-        val flyPos = if inst.flyOffset != 0f then Vector3f(position.x, position.y + inst.flyOffset, position.z) else position
-        val modelMatrix = buildSpawnMatrix(build, flyPos, heading, effectiveSize)
+        zc.initRendering(build, null) // sets effectiveSize/flyOffset, animChar filled below
+        val flyPos = if zc.flyOffset != 0f then Vector3f(zc.position.x, zc.position.y + zc.flyOffset, zc.position.z) else zc.position
+        val modelMatrix = buildSpawnMatrix(build, flyPos, zc.heading, zc.effectiveSize)
         val char = AnimatedCharacter(build.skeleton, build.meshFragments, build.zm, glMesh, modelMatrix, build.clips, interleaved.clone(), build.attachBoneIndices)
-        _spawnCharacters(spawnId) = inst.copy(char = char)
+        zc.animChar = char
+        updateSpawnEquipment(zc)
         true
 
   /** Get the vertical offset from model origin to feet for a given model code and size.
@@ -111,101 +104,36 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings()):
         (-build.glMinY * effectiveSize, build.glHeight * effectiveSize)
       case None => (0f, 0f)
 
-  /** Remove a spawn character and clean up its GPU resources. */
-  def removeSpawn(spawnId: Int): Unit =
-    _spawnCharacters.remove(spawnId).foreach(_.char.glMesh.cleanup())
+  /** Clean up GPU resources for a spawn character. */
+  def cleanupSpawn(zc: ZoneCharacter): Unit =
+    if zc.hasRendering then zc.animChar.glMesh.cleanup()
 
   /** Update a spawn's position (feet-level GL space) and heading. */
-  def updateSpawnPosition(spawnId: Int, position: Vector3f, heading: Int): Unit =
-    _spawnCharacters.get(spawnId).foreach { inst =>
-      if inst.flyOffset != 0f then
-        val flyPos = Vector3f(position.x, position.y + inst.flyOffset, position.z)
-        buildSpawnMatrix(inst.build, flyPos, heading, inst.size, inst.char.modelMatrix)
+  def updateSpawnPosition(zc: ZoneCharacter): Unit =
+    if zc.hasRendering then
+      if zc.flyOffset != 0f then
+        val flyPos = Vector3f(zc.position.x, zc.position.y + zc.flyOffset, zc.position.z)
+        buildSpawnMatrix(zc.build, flyPos, zc.facingHeading, zc.effectiveSize, zc.animChar.modelMatrix)
       else
-        buildSpawnMatrix(inst.build, position, heading, inst.size, inst.char.modelMatrix)
-    }
-
-  /** Switch a spawn's animation based on movement state. */
-  def updateSpawnAnimation(spawnId: Int, moving: Boolean, animType: Int = 0): Unit =
-    _spawnCharacters.get(spawnId).foreach { inst =>
-      if inst.moving != moving then
-        inst.moving = moving
-        val code = if moving then
-          if inst.char.clips.contains(AnimCode.Run.code) then AnimCode.Run.code else AnimCode.Walk.code
-        else
-          if inst.char.clips.contains(AnimCode.Idle.code) then AnimCode.Idle.code else AnimCode.Passive.code
-        inst.char.play(code)
-    }
+        buildSpawnMatrix(zc.build, zc.position, zc.facingHeading, zc.effectiveSize, zc.animChar.modelMatrix)
 
   /** Force a specific animation clip on a spawn, ignoring movement state. */
-  def playSpawnAnimation(spawnId: Int, animCode: String, reverse: Boolean = false): Unit =
-    _spawnCharacters.get(spawnId).foreach { inst =>
-      if inst.char.clips.contains(animCode) then
-        inst.char.play(animCode, playReverse = reverse)
-    }
+  def playSpawnAnimation(zc: ZoneCharacter, animCode: String, reverse: Boolean = false): Unit =
+    if zc.hasRendering && zc.animChar.clips.contains(animCode) then
+      zc.animChar.play(animCode, playReverse = reverse)
 
   /** Update a spawn's equipment texture overrides.
     * Parses base texture names to determine body part, then constructs variant names
     * using the equipment material IDs.
     * Texture naming: {race:3}{bodyPart:2}{material:02d}{index:02d}.bmp
     */
-  def updateSpawnEquipment(spawnId: Int, equipment: Array[Int], bodyTexture: Int = 0): Unit =
-    _spawnCharacters.get(spawnId).foreach { inst =>
-      inst.textureOverrides = ZoneRenderer.computeTextureOverrides(
-        inst.char.zoneMesh.groups, inst.build.key, equipment, textureMap, bodyTexture)
-      // Store weapon model IDs (IT codes) for attachment rendering
-      if equipment.length > 8 then
-        inst.weaponPrimary = equipment(7)
-        inst.weaponSecondary = equipment(8)
-    }
-
-  /** Spawn a line of models using a given race's mesh, each with a different race/gender's walk animation.
-    * Returns list of (spawnId, label) for nameplate display.
-    */
-  def spawnAnimationTestLine(modelCode: String, basePosition: Vector3f, spacing: Float = 15f): List[(Int, String)] =
-    val globalWld = cachedGlobalWld.getOrElse { println("[AnimTest] No global WLD cached"); return Nil }
-    val build = characterBuilds.get(modelCode).getOrElse {
-      println(s"[AnimTest] No $modelCode model (available: ${characterBuilds.keys.toSeq.sorted.mkString(", ")})")
-      return Nil
-    }
-
-    val trackDefsByName: Map[String, Fragment12_TrackDef] = cachedGlobalTrackDefs.map(td => td.cleanName -> td).toMap
-    val animCodes: Set[String] = trackDefsByName.keysIterator.filter(_.length > 3).map(_.take(3)).toSet
-
-    // All playable race/gender combos (uppercase model prefix)
-    val candidates = List(
-      "HUM", "HUF", "BAM", "BAF", "ERM", "ERF", "ELM", "ELF",
-      "EHM", "EHF", "DEM", "DEF", "HAM", "HAF", "DWM", "DWF",
-      "TRM", "TRF", "OGM", "OGF", "GNM", "GNF", "IKM", "IKF",
-      "KEM", "KEF",
-    )
-
-    val results = List.newBuilder[(Int, String)]
-    var spawnId = 90000 // high IDs to avoid collision with real spawns
-    var col = 0
-
-    for prefix <- candidates do
-      val clips = AnimatedCharacter.discoverAnimationsWithPrefix(
-        globalWld, build.skeleton, trackDefsByName, animCodes, prefix)
-      val walkClip = clips.get(AnimCode.Walk.code).orElse(clips.get(AnimCode.Run.code))
-      if walkClip.isDefined then
-        val pos = Vector3f(basePosition.x + col * spacing, basePosition.y, basePosition.z)
-        val interleaved = ZoneRenderer.buildInterleaved(build.zm)
-        val glMesh = Mesh(interleaved, build.zm.indices, dynamic = true)
-        val modelMatrix = buildSpawnMatrix(build, pos, 0, 1f)
-        val char = AnimatedCharacter(build.skeleton, build.meshFragments, build.zm,
-          glMesh, modelMatrix, clips, interleaved.clone(), build.attachBoneIndices)
-        char.play(walkClip.get.code)
-        _spawnCharacters(spawnId) = SpawnInstance(char, build, 1f, moving = true)
-        val label = prefix.toLowerCase
-        println(s"[AnimTest] Spawned $modelCode with $label walk at col $col (${clips.size} clips)")
-        results += ((spawnId, label))
-        spawnId += 1
-        col += 1
-      else
-        println(s"[AnimTest] $prefix: no walk animation for $modelCode")
-
-    results.result()
+  def updateSpawnEquipment(zc: ZoneCharacter): Unit =
+    if zc.hasRendering then
+      zc.textureOverrides = ZoneRenderer.computeTextureOverrides(
+        zc.animChar.zoneMesh.groups, zc.build.key, zc.equipment, textureMap, zc.bodyTexture)
+      if zc.equipment.length > 8 then
+        zc.weaponPrimary = zc.equipment(7)
+        zc.weaponSecondary = zc.equipment(8)
 
   // No recenter needed here — character mesh vertices are already in local space with
   // origin near feet. CharacterPreview uses recenter to frame the model in its viewport.
@@ -277,8 +205,8 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings()):
   private val eqToGl = ZoneRenderer.eqToGl
   private val glToEq = ZoneRenderer.glToEq
 
-  private def findAttachKey(inst: SpawnInstance, suffixTarget: String): Option[String] =
-    ZoneRenderer.findAttachKey(inst.char.attachBoneIndices, suffixTarget)
+  private def findAttachKey(zc: ZoneCharacter, suffixTarget: String): Option[String] =
+    ZoneRenderer.findAttachKey(zc.animChar.attachBoneIndices, suffixTarget)
 
   /** Draw an equipment model at a bone attachment point.
     *
@@ -288,13 +216,13 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings()):
     * which converts GL vertices → EQ space, applies bone, converts back to GL,
     * then applies the spawn's world position/heading/scale.
     */
-  private def drawEquipment(shader: Shader, inst: SpawnInstance, weaponId: Int, suffixTarget: String,
+  private def drawEquipment(shader: Shader, zc: ZoneCharacter, weaponId: Int, suffixTarget: String,
       opaquePass: Boolean): Unit =
     if weaponId == 0 then return
     equipmentModels.get(weaponId).foreach { equip =>
-      val attachKey = findAttachKey(inst, suffixTarget)
-      attachKey.flatMap(inst.char.attachmentTransform).foreach { boneTransform =>
-        ZoneRenderer.composeEquipmentMatrix(equipMatrix, inst.char.modelMatrix, boneTransform, equip)
+      val attachKey = findAttachKey(zc, suffixTarget)
+      attachKey.flatMap(zc.animChar.attachmentTransform).foreach { boneTransform =>
+        ZoneRenderer.composeEquipmentMatrix(equipMatrix, zc.animChar.modelMatrix, boneTransform, equip)
         shader.setMatrix4f("model", equipMatrix)
         for group <- equip.zm.groups do
           val emt = effectiveMaterialType(group)
@@ -337,19 +265,19 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings()):
           glBindTexture(GL_TEXTURE_2D, resolveTexture(group.textureName))
           obj.glMesh.drawRange(group.startIndex, group.indexCount)
 
-    for inst <- _spawnCharacters.values do
-      inst.char.update(deltaTime)
-      shader.setMatrix4f("model", inst.char.modelMatrix)
-      for group <- inst.char.zoneMesh.groups do
+    for zc <- zoneCharacters.values if zc.hasRendering do
+      zc.animChar.update(deltaTime)
+      shader.setMatrix4f("model", zc.animChar.modelMatrix)
+      for group <- zc.animChar.zoneMesh.groups do
         val emt = effectiveMaterialType(group)
         if isOpaque(emt) then
           shader.setInt("alphaTest", if emt == MaterialType.TransparentMasked then 1 else 0)
-          val texName = inst.textureOverrides.getOrElse(group.textureName.toLowerCase, group.textureName)
+          val texName = zc.textureOverrides.getOrElse(group.textureName.toLowerCase, group.textureName)
           glBindTexture(GL_TEXTURE_2D, resolveTexture(texName))
-          inst.char.glMesh.drawRange(group.startIndex, group.indexCount)
+          zc.animChar.glMesh.drawRange(group.startIndex, group.indexCount)
       // Draw weapons at attachment points
-      drawEquipment(shader, inst, inst.weaponPrimary, "R_POINT", opaquePass = true)
-      drawEquipment(shader, inst, inst.weaponSecondary, "L_POINT", opaquePass = true)
+      drawEquipment(shader, zc, zc.weaponPrimary, "R_POINT", opaquePass = true)
+      drawEquipment(shader, zc, zc.weaponSecondary, "L_POINT", opaquePass = true)
 
     // --- Pass 2: Transparent geometry (depth write OFF, blend ON) ---
     glEnable(GL_BLEND)
@@ -374,17 +302,17 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings()):
           glBindTexture(GL_TEXTURE_2D, resolveTexture(group.textureName))
           obj.glMesh.drawRange(group.startIndex, group.indexCount)
 
-    for inst <- _spawnCharacters.values do
-      shader.setMatrix4f("model", inst.char.modelMatrix)
-      for group <- inst.char.zoneMesh.groups do
+    for zc <- zoneCharacters.values if zc.hasRendering do
+      shader.setMatrix4f("model", zc.animChar.modelMatrix)
+      for group <- zc.animChar.zoneMesh.groups do
         val emt = effectiveMaterialType(group)
         if isTransparent(emt) then
           setBlendMode(shader, emt)
-          val texName = inst.textureOverrides.getOrElse(group.textureName.toLowerCase, group.textureName)
+          val texName = zc.textureOverrides.getOrElse(group.textureName.toLowerCase, group.textureName)
           glBindTexture(GL_TEXTURE_2D, resolveTexture(texName))
-          inst.char.glMesh.drawRange(group.startIndex, group.indexCount)
-      drawEquipment(shader, inst, inst.weaponPrimary, "R_POINT", opaquePass = false)
-      drawEquipment(shader, inst, inst.weaponSecondary, "L_POINT", opaquePass = false)
+          zc.animChar.glMesh.drawRange(group.startIndex, group.indexCount)
+      drawEquipment(shader, zc, zc.weaponPrimary, "R_POINT", opaquePass = false)
+      drawEquipment(shader, zc, zc.weaponSecondary, "L_POINT", opaquePass = false)
 
     glDepthMask(true)
     glDisable(GL_BLEND)
@@ -465,8 +393,7 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings()):
   def cleanup(): Unit =
     mesh.cleanup()
     objectInstances.foreach(_.glMesh.cleanup())
-    _spawnCharacters.values.foreach(_.char.glMesh.cleanup())
-    _spawnCharacters.clear()
+    zoneCharacters.values.foreach(zc => if zc.hasRendering then zc.animChar.glMesh.cleanup())
     equipmentModels.values.foreach(_.glMesh.cleanup())
     particleSystem.foreach(_.cleanup())
     if sphereInited then

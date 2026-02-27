@@ -3,8 +3,7 @@ package opennorrath.ui
 import imgui.ImGui
 import imgui.flag.{ImGuiCol, ImGuiWindowFlags}
 
-import opennorrath.Game
-import opennorrath.state.ZoneCharacter
+import opennorrath.state.{PlayerCharacter, ZoneCharacter}
 
 /** Displays the currently targeted spawn's name, level, class, and HP. */
 class TargetPanel extends Panel:
@@ -18,9 +17,10 @@ class TargetPanel extends Panel:
     ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoScrollbar
 
   var target: Option[ZoneCharacter] = None
+  var player: Option[PlayerCharacter] = None
 
   private def isAutoAttacking: Boolean =
-    Game.player.exists(_.autoAttacking)
+    player.exists(_.autoAttacking)
 
   override def render(): Unit =
     if isAutoAttacking && target.isDefined then
