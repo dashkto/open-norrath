@@ -31,6 +31,8 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
   private var player: Option[PlayerCharacter] = None
   private var posUpdateTimer = 0f
   private val PosUpdateInterval = 0.4f   // ~2.5Hz while moving
+  private var saveTimer = 0f
+  private val SaveInterval = 60f         // auto-save every 60 seconds
   private var lastSentHeading = -1f       // track heading changes for idle sends
   private val lastSentPos = Vector3f()    // track position changes
   private var wasAirborne = false          // track airborne state for fall animation
@@ -428,6 +430,12 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
             posUpdateTimer = PosUpdateInterval
         }
 
+    // Periodic save — ask server to persist character state
+    saveTimer += dt
+    if saveTimer >= SaveInterval then
+      saveTimer = 0f
+      Game.zoneSession.foreach(_.client.save())
+
     // Zone line detection — check if player is inside a BSP zone line region
     if camCtrl.attached && !zone.zoneLineBsp.isEmpty && System.currentTimeMillis() >= zoneDeniedUntil then
       player.foreach { pc => pc.zoneChar.foreach { zc =>
@@ -455,6 +463,14 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
     // Tab target — raycast against zone collision mesh for LOS
     if ctx.input.isActionPressed(GameAction.TabTarget) && !ImGui.getIO().getWantTextInput() then
       resolveTabTarget()
+
+    // Consider current target
+    if ctx.input.isActionPressed(GameAction.Consider) && !ImGui.getIO().getWantTextInput() then
+      hud.target.foreach { zc =>
+        Game.zoneSession.foreach { s =>
+          s.client.consider(s.client.mySpawnId, zc.spawnId)
+        }
+      }
 
   override def render(dt: Float): Unit =
     glEnable(GL_DEPTH_TEST)

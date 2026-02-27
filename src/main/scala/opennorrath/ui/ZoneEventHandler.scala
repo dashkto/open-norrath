@@ -48,7 +48,8 @@ class ZoneEventHandler(chatPanel: TextPanel, characters: scala.collection.Map[In
 
     case ZoneEvent.ConsiderResult(result) =>
       val tgt = spawnName(result.targetId)
-      chatPanel.addLine(s"$tgt [${result.level}]", conLevelColor(result.level))
+      val factionStr = factionName(result.faction)
+      chatPanel.addLine(s"$tgt $factionStr", conColor(result.conLevel))
 
     case ZoneEvent.ExpChanged(_) =>
       if seenFirstExp then
@@ -61,7 +62,7 @@ class ZoneEventHandler(chatPanel: TextPanel, characters: scala.collection.Map[In
 
     case ZoneEvent.SkillChanged(sk) =>
       val name = EqData.skillName(sk.skillId)
-      chatPanel.addLine(s"You have become better at $name! (${ sk.value })", Colors.gold)
+      chatPanel.addLine(s"You have become better at $name! (${ sk.value })", Colors.secondary)
 
     case ZoneEvent.SpellActionTriggered(action) =>
       if action.spellId > 0 then
@@ -267,11 +268,27 @@ class ZoneEventHandler(chatPanel: TextPanel, characters: scala.collection.Map[In
       .orElse(Game.zoneSession.flatMap(_.client.spawns.get(id)).map(s => ZoneCharacter.cleanName(s.name)))
       .getOrElse(s"#$id")
 
-  private def conLevelColor(targetLevel: Int): (Float, Float, Float, Float) =
-    val myLevel = player.map(_.level).getOrElse(1)
-    val diff = targetLevel - myLevel
-    if diff >= 3 then Colors.danger
-    else if diff >= 1 then Colors.gold
-    else if diff >= -2 then Colors.text
-    else if diff >= -5 then Colors.secondary
-    else Colors.textDim
+  /** Map con color code from GetLevelCon() to display color.
+    * Green=2, Blue=4, Red=13, Yellow=15, LightBlue=18, White=20.
+    */
+  private def conColor(conLevel: Int): (Float, Float, Float, Float) = conLevel match
+    case 2  => Colors.heal       // Green
+    case 4  => Colors.secondary  // Blue
+    case 13 => Colors.danger     // Red
+    case 15 => Colors.gold       // Yellow
+    case 18 => Colors.secondary2 // Light blue
+    case 20 => Colors.text       // White (even con)
+    case _  => Colors.text
+
+  /** Map faction standing code to EQ-style text. */
+  private def factionName(faction: Int): String = faction match
+    case 1 => "regards you as an ally"
+    case 2 => "looks upon you warmly"
+    case 3 => "kindly considers you"
+    case 4 => "judges you amiably"
+    case 5 => "regards you indifferently"
+    case 6 => "looks upon you apprehensively"
+    case 7 => "scowls at you dubiously"
+    case 8 => "glares at you threateningly"
+    case 9 => "scowls at you, ready to attack"
+    case _ => ""

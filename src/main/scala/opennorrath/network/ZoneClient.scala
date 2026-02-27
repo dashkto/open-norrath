@@ -235,6 +235,10 @@ class ZoneClient extends PacketHandler:
   def save(): Unit =
     queueAppPacket(ZoneOpcodes.Save, ZoneCodec.encodeSave)
 
+  /** Notify server the player jumped. Called from game thread. */
+  def sendJump(): Unit =
+    queueAppPacket(ZoneOpcodes.Jump, ZoneCodec.encodeJump)
+
   // ===========================================================================
   // PacketHandler implementation — called from network thread
   // ===========================================================================

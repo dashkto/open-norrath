@@ -120,6 +120,9 @@ object ZoneCodec:
   /** OP_Save: empty payload. */
   def encodeSave: Array[Byte] = Array.emptyByteArray
 
+  /** OP_Jump: empty payload — tells server the player jumped. */
+  def encodeJump: Array[Byte] = Array.emptyByteArray
+
   /** OP_SetServerFilter: 36 bytes of filter flags (all zeros = accept all). */
   def encodeServerFilter: Array[Byte] = new Array[Byte](36)
 
@@ -706,7 +709,7 @@ object ZoneCodec:
       playerId = buf.getShort() & 0xFFFF,
       targetId = buf.getShort() & 0xFFFF,
       faction = buf.getInt(),
-      level = buf.getInt(),
+      conLevel = buf.getInt(),
       curHp = buf.getInt(),
       maxHp = buf.getInt(),
       pvpCon = buf.get() != 0,

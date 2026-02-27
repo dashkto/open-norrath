@@ -5,7 +5,7 @@ import org.lwjgl.glfw.GLFW.*
 
 import imgui.ImGui
 
-import opennorrath.{GameAction, InputManager}
+import opennorrath.{Game, GameAction, InputManager}
 import opennorrath.network.{PlayerProfileData, SpawnData}
 import opennorrath.state.PlayerCharacter
 
@@ -124,7 +124,13 @@ class CameraController(window: Long, screenW: Int, screenH: Int):
               pos.z += dz
               moved = true
         if input.isActionPressed(GameAction.Jump) then
-          player.foreach(_.jump())
+          player.foreach { pc =>
+            val wasOnGround = !pc.airborne
+            pc.jump()
+            // Notify server about the jump (only if we actually left the ground)
+            if wasOnGround && pc.airborne then
+              Game.zoneSession.foreach(_.client.sendJump())
+          }
       // Gravity (feet-level space)
       player.foreach(_.applyGravity(pos, dt))
 

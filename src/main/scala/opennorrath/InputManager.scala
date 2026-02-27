@@ -6,7 +6,7 @@ enum GameAction:
   case MoveForward, MoveBackward, StrafeLeft, StrafeRight, MoveUp, MoveDown, Jump
   case FreeLook, Target
   case TargetSelf, TabTarget
-  case AutoAttack
+  case AutoAttack, Consider
   case Sit
   case ToggleInventory, ToggleSpellBook, DumpDebug, DetachCamera, Escape
 
@@ -30,6 +30,7 @@ object KeyBindings:
     GameAction.TargetSelf      -> Seq(KeyBind(GLFW_KEY_F1)),
     GameAction.TabTarget       -> Seq(KeyBind(GLFW_KEY_TAB)),
     GameAction.AutoAttack       -> Seq(KeyBind(GLFW_KEY_GRAVE_ACCENT)),
+    GameAction.Consider        -> Seq(KeyBind(GLFW_KEY_C)),
     GameAction.Sit             -> Seq(KeyBind(GLFW_KEY_Q)),
     GameAction.ToggleInventory -> Seq(KeyBind(GLFW_KEY_I)),
     GameAction.ToggleSpellBook -> Seq(KeyBind(GLFW_KEY_B)),

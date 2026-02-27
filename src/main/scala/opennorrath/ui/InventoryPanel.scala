@@ -138,6 +138,19 @@ class InventoryPanel(player: Option[PlayerCharacter] = None) extends Panel:
       ImGui.text(s"Mana: ${pc.currentMana} / ${pc.maxMana}")
       ImGui.popStyleColor()
 
+    // Equipped items (slots 0-21) — reused for AC, resists, and weight
+    val equipItems = items.filter((slot, _) => slot >= 0 && slot <= 21).values.toVector
+    val totalAc = equipItems.map(_.ac).sum
+    pushColor(ImGuiCol.Text, Colors.text)
+    ImGui.text(s"AC: $totalAc")
+    ImGui.popStyleColor()
+
+    // Experience — displayed as percentage within current level (0-330 scale from server)
+    val expPct = pc.exp * 100f / 330f
+    pushColor(ImGuiCol.Text, Colors.text)
+    ImGui.text(f"Exp: $expPct%.1f%%")
+    ImGui.popStyleColor()
+
     ImGui.spacing()
 
     // Attributes
@@ -155,7 +168,6 @@ class InventoryPanel(player: Option[PlayerCharacter] = None) extends Panel:
     sectionHeader("Resists")
 
     val (baseMr, baseFr, baseCr, baseDr, basePr) = EqData.raceBaseResists(pc.race)
-    val equipItems = items.filter((slot, _) => slot >= 0 && slot <= 21).values
     val gearMr = equipItems.map(_.mr).sum
     val gearFr = equipItems.map(_.fr).sum
     val gearCr = equipItems.map(_.cr).sum
@@ -167,6 +179,15 @@ class InventoryPanel(player: Option[PlayerCharacter] = None) extends Panel:
     statLine("CR", baseCr + gearCr)
     statLine("DR", baseDr + gearDr)
     statLine("PR", basePr + gearPr)
+
+    // Money
+    ImGui.spacing()
+    ImGui.separator()
+    sectionHeader("Money")
+    statLine("PP", pc.platinum)
+    statLine("GP", pc.gold)
+    statLine("SP", pc.silver)
+    statLine("CP", pc.copper)
 
   private def sectionHeader(text: String): Unit =
     ImGui.pushFont(Fonts.defaultBold)

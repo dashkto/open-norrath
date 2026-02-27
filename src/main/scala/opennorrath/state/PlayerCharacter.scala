@@ -28,6 +28,13 @@ class PlayerCharacter(
   var wis: Int = 0,
   var int: Int = 0,
   var cha: Int = 0,
+  // Money
+  var platinum: Int = 0,
+  var gold: Int = 0,
+  var silver: Int = 0,
+  var copper: Int = 0,
+  // Experience
+  var exp: Int = 0,
 ):
   def hpPercent: Float = if maxHp > 0 then currentHp.toFloat / maxHp else 0f
   def manaPercent: Float = if maxMana > 0 then currentMana.toFloat / maxMana else 0f
@@ -241,6 +248,8 @@ class PlayerCharacter(
       maxHp = hp.maxHp
     case ZoneEvent.ManaChanged(mana) =>
       currentMana = mana.curMana
+    case ZoneEvent.ExpChanged(e) =>
+      exp = e.exp
     case ZoneEvent.InventoryLoaded(items) =>
       inventory.load(items)
     case ZoneEvent.InventoryItemUpdated(item) =>
@@ -262,6 +271,8 @@ object PlayerCharacter:
       currentHp = pp.curHp, maxHp = pp.curHp, currentMana = pp.mana, maxMana = pp.mana,
       str = pp.str, sta = pp.sta, agi = pp.agi, dex = pp.dex,
       wis = pp.wis, int = pp.int_, cha = pp.cha,
+      platinum = pp.platinum, gold = pp.gold, silver = pp.silver, copper = pp.copper,
+      exp = pp.exp,
     )
     pc.loadBuffs(pp.buffs)
     pc.spellBook ++= pp.spellBook

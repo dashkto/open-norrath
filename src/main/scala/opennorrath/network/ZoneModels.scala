@@ -318,12 +318,21 @@ case class DeathInfo(
   isPC: Boolean,          // Was it a player?
 )
 
-/** Consider result from OP_Consider. */
+/** Consider result from OP_Consider.
+  *
+  * The `conLevel` field is NOT the target's actual level — it's a con color code
+  * from GetLevelCon(): Green=2, Blue=4, Red=13, Yellow=15, LightBlue=18, White=20.
+  *
+  * The `faction` field is the faction standing (1=Ally, 2=Warmly, 3=Kindly,
+  * 4=Amiably, 5=Indifferent, 6=Apprehensive, 7=Dubious, 8=Threatening, 9=Scowls).
+  * NOTE: the server swaps Apprehensive<->Scowls and Dubious<->Threatening on the wire,
+  * so the values arrive pre-swapped and can be used directly.
+  */
 case class ConsiderResult(
   playerId: Int,          // Who considered
   targetId: Int,          // Who was considered
-  faction: Int,           // Faction standing
-  level: Int,             // Target level
+  faction: Int,           // Faction standing (wire-swapped, use directly)
+  conLevel: Int,          // Con color code (NOT actual level)
   curHp: Int,
   maxHp: Int,
   pvpCon: Boolean,        // PvP flagged?
