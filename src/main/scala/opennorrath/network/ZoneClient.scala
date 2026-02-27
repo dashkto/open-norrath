@@ -147,6 +147,7 @@ class ZoneClient extends PacketHandler:
   var selfSpawn: Option[SpawnData] = None // From ServerZoneEntry — authoritative position
   var spawns: scala.collection.mutable.Map[Int, SpawnData] = scala.collection.mutable.Map.empty
   var inventory: Vector[InventoryItem] = Vector.empty
+  var zonePoints: Vector[ZonePointData] = Vector.empty
   var mySpawnId: Int = 0
 
   // Pending connection info
@@ -212,6 +213,11 @@ class ZoneClient extends PacketHandler:
       fromItem.foreach(i => inventory = inventory :+ i.copy(equipSlot = toSlot))
       toItem.foreach(i => inventory = inventory :+ i.copy(equipSlot = fromSlot))
       emit(ZoneEvent.InventoryMoved(fromSlot, toSlot))
+
+  /** Request zone change (client-initiated, e.g. zone line). Called from game thread. */
+  def sendZoneChange(zoneId: Int): Unit =
+    val charName = profile.map(_.name).getOrElse(pendingCharName)
+    queueAppPacket(ZoneOpcodes.ZoneChange, ZoneCodec.encodeZoneChange(charName, zoneId))
 
   /** Save character. Called from game thread. */
   def save(): Unit =
@@ -392,6 +398,7 @@ class ZoneClient extends PacketHandler:
 
       case ZoneOpcodes.SendZonepoints =>
         val points = ZoneCodec.decodeZonePoints(pkt.payload)
+        zonePoints = points
         emit(ZoneEvent.ZonePointsLoaded(points))
 
       // --- Group ---
@@ -403,7 +410,18 @@ class ZoneClient extends PacketHandler:
       // --- Zone Change ---
 
       case ZoneOpcodes.RequestClientZoneChange =>
-        ZoneCodec.decodeRequestClientZoneChange(pkt.payload).foreach(req => emit(ZoneEvent.ZoneChangeRequested(req)))
+        ZoneCodec.decodeRequestClientZoneChange(pkt.payload).foreach { req =>
+          // Respond to server — it won't process the zone change without this
+          val charName = profile.map(_.name).getOrElse(pendingCharName)
+          queueAppPacket(ZoneOpcodes.ZoneChange, ZoneCodec.encodeZoneChange(charName, req.zoneId))
+          emit(ZoneEvent.ZoneChangeRequested(req))
+        }
+
+      case ZoneOpcodes.ZoneChange =>
+        ZoneCodec.decodeZoneChange(pkt.payload).foreach { result =>
+          if result.success != 1 then
+            emit(ZoneEvent.Error(s"Zone change denied"))
+        }
 
       // --- Misc (log but don't emit events) ---
 

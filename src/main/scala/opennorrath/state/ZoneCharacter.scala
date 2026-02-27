@@ -29,6 +29,7 @@ class ZoneCharacter(
   var maxHp: Int = -1,
   var moving: Boolean = false,
   var animation: Int = 0,
+  val flying: Boolean = false,
 ):
   val displayName: String = ZoneCharacter.cleanName(name)
 
@@ -121,34 +122,15 @@ class ZoneCharacter(
   /** Called when a server position update arrives. Uses server-provided velocity
     * if available, falls back to computing from position deltas.
     */
-  def onServerPositionUpdate(newPos: Vector3f, serverVel: Vector3f, newHeading: Int, isMoving: Boolean, anim: Int): Unit =
-    val stateChanged = isMoving != moving
-
-    if isMoving then
-      val hasServerVel = serverVel.x != 0f || serverVel.y != 0f || serverVel.z != 0f
-      if hasServerVel then
-        velocity.set(serverVel)
-      else
-        // Fallback: compute velocity from position delta
-        val now = System.nanoTime()
-        val dtSec = (now - lastUpdateNanos) / 1_000_000_000.0f
-        if dtSec > 0.01f then
-          velocity.set(
-            (newPos.x - prevServerPos.x) / dtSec,
-            (newPos.y - prevServerPos.y) / dtSec,
-            (newPos.z - prevServerPos.z) / dtSec,
-          )
-    else
-      velocity.set(0f, 0f, 0f)
-
+  def onServerPositionUpdate(newPos: Vector3f, serverVel: Vector3f, newHeading: Int, anim: Int): Unit =
+    val hasServerVel = serverVel.x != 0f || serverVel.y != 0f || serverVel.z != 0f
+    velocity.set(serverVel)
     serverPos.set(newPos)
-    // Snap position on state transitions (idle↔moving) — no drift to correct
-    if stateChanged then
-      position.set(newPos)
+    position.set(newPos)
     prevServerPos.set(newPos)
     lastUpdateNanos = System.nanoTime()
     heading = newHeading
-    moving = isMoving
+    moving = hasServerVel
     animation = anim
 
   /** Heading derived from velocity direction (0-255 EQ format, 0=east, CCW).
@@ -209,6 +191,7 @@ object ZoneCharacter:
         position = EqCoords.serverToGl(s.y, s.x, s.z),
         heading = s.heading,
         bodyTexture = s.bodyTexture,
+        flying = s.flyMode == 1,
       )
       Array.copy(s.equipment, 0, zc.equipment, 0, math.min(s.equipment.length, 9))
       for i <- 0 until math.min(s.equipColors.slots.length, 9) do

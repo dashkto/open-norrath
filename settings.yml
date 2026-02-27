@@ -11,6 +11,6 @@ debug:
 
 # Login server connection
 login:
-  host: loginserver.takproject.net
+  host: localhost
   port: 6000
   world_port: 9000

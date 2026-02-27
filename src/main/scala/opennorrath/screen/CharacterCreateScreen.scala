@@ -167,41 +167,95 @@ class CharacterCreateScreen(
     (130,10,396)->155, (130,15,396)->155,
   )
 
-  // Base stats per race: (STR, STA, CHA, DEX, INT, AGI, WIS)
-  private val raceStats: Map[Int, (Int,Int,Int,Int,Int,Int,Int)] = Map(
-    1   -> (75, 75, 75, 75, 75, 75, 75),  // Human
-    2   -> (113, 80, 55, 70, 60, 82, 70), // Barbarian
-    3   -> (60, 70, 70, 70, 107, 70, 83), // Erudite
-    4   -> (65, 65, 75, 80, 75, 95, 80),  // Wood Elf
-    5   -> (55, 65, 80, 70, 92, 85, 95),  // High Elf
-    6   -> (60, 65, 60, 75, 99, 90, 83),  // Dark Elf
-    7   -> (70, 70, 75, 85, 75, 90, 60),  // Half Elf
-    8   -> (90, 90, 45, 90, 60, 70, 83),  // Dwarf
-    9   -> (108, 109, 40, 75, 52, 83, 60),// Troll
-    10  -> (130, 122, 37, 70, 60, 70, 67),// Ogre
-    11  -> (70, 75, 50, 90, 67, 95, 80),  // Halfling
-    12  -> (60, 70, 60, 85, 98, 85, 67),  // Gnome
-    128 -> (70, 70, 55, 70, 75, 90, 80),  // Iksar
-    130 -> (90, 75, 65, 70, 65, 90, 70),  // Vah Shir
-  )
-
-  // Class stat bonuses: (STR, STA, CHA, DEX, INT, AGI, WIS)
-  private val classStats: Map[Int, (Int,Int,Int,Int,Int,Int,Int)] = Map(
-    1  -> (10, 10, 0, 0, 0, 5, 0),   // Warrior
-    2  -> (5, 5, 0, 0, 0, 0, 10),    // Cleric
-    3  -> (10, 5, 10, 0, 0, 0, 5),   // Paladin
-    4  -> (5, 10, 0, 0, 0, 10, 5),   // Ranger
-    5  -> (10, 10, 5, 0, 10, 0, 0),  // Shadow Knight
-    6  -> (0, 5, 0, 0, 0, 0, 10),    // Druid
-    7  -> (5, 5, 0, 10, 0, 10, 0),   // Monk
-    8  -> (5, 0, 10, 0, 0, 0, 0),    // Bard
-    9  -> (0, 0, 0, 10, 0, 10, 0),   // Rogue
-    10 -> (0, 5, 0, 0, 0, 0, 10),    // Shaman
-    11 -> (0, 0, 0, 10, 10, 0, 0),   // Necromancer
-    12 -> (0, 10, 0, 0, 10, 0, 0),   // Wizard
-    13 -> (0, 10, 0, 0, 10, 0, 0),   // Magician
-    14 -> (0, 0, 10, 0, 10, 0, 0),   // Enchanter
-    15 -> (0, 10, 0, 0, 0, 5, 10),   // Beastlord
+  // Base stats per (race, class) from server's char_create_point_allocations table.
+  // Values: (STR, STA, CHA, DEX, INT, AGI, WIS)
+  private val baseStats: Map[(Int,Int), (Int,Int,Int,Int,Int,Int,Int)] = Map(
+    (1,1)   -> (85,85,75,75,75,80,75),    // Human Warrior
+    (1,2)   -> (80,80,75,75,75,75,85),    // Human Cleric
+    (1,3)   -> (85,80,85,75,75,75,80),    // Human Paladin
+    (1,4)   -> (80,85,75,75,75,85,80),    // Human Ranger
+    (1,5)   -> (85,80,80,75,85,75,75),    // Human Shadow Knight
+    (1,6)   -> (75,85,75,75,75,75,85),    // Human Druid
+    (1,7)   -> (80,80,75,85,75,85,75),    // Human Monk
+    (1,8)   -> (80,75,85,85,75,75,75),    // Human Bard
+    (1,9)   -> (75,75,75,85,75,85,75),    // Human Rogue
+    (1,11)  -> (75,75,75,85,85,75,75),    // Human Necromancer
+    (1,12)  -> (75,85,75,75,85,75,75),    // Human Wizard
+    (1,13)  -> (75,85,75,75,85,75,75),    // Human Magician
+    (1,14)  -> (75,75,85,75,85,75,75),    // Human Enchanter
+    (2,1)   -> (113,105,55,70,60,87,70),  // Barbarian Warrior
+    (2,9)   -> (103,95,55,80,60,92,70),   // Barbarian Rogue
+    (2,10)  -> (103,100,60,70,60,82,80),  // Barbarian Shaman
+    (2,15)  -> (103,105,60,70,60,87,80),  // Barbarian Beastlord
+    (3,2)   -> (65,75,70,70,107,70,93),   // Erudite Cleric
+    (3,3)   -> (70,75,80,70,107,70,88),   // Erudite Paladin
+    (3,5)   -> (70,75,75,70,117,70,83),   // Erudite Shadow Knight
+    (3,11)  -> (60,70,70,80,117,70,83),   // Erudite Necromancer
+    (3,12)  -> (60,80,70,70,117,70,83),   // Erudite Wizard
+    (3,13)  -> (60,80,70,70,117,70,83),   // Erudite Magician
+    (3,14)  -> (60,70,80,70,117,70,83),   // Erudite Enchanter
+    (4,1)   -> (75,75,75,80,75,100,80),   // Wood Elf Warrior
+    (4,4)   -> (70,75,75,80,75,105,85),   // Wood Elf Ranger
+    (4,6)   -> (65,75,75,80,75,95,90),    // Wood Elf Druid
+    (4,8)   -> (70,65,85,90,75,95,80),    // Wood Elf Bard
+    (4,9)   -> (65,65,75,90,75,105,80),   // Wood Elf Rogue
+    (5,2)   -> (60,70,80,70,92,85,105),   // High Elf Cleric
+    (5,3)   -> (65,70,90,70,92,85,100),   // High Elf Paladin
+    (5,12)  -> (55,75,80,70,102,85,95),   // High Elf Wizard
+    (5,13)  -> (55,75,80,70,102,85,95),   // High Elf Magician
+    (5,14)  -> (55,65,90,70,102,85,95),   // High Elf Enchanter
+    (6,1)   -> (70,75,60,75,99,95,83),    // Dark Elf Warrior
+    (6,2)   -> (65,70,60,75,99,90,93),    // Dark Elf Cleric
+    (6,5)   -> (70,70,65,75,109,90,83),   // Dark Elf Shadow Knight
+    (6,9)   -> (60,65,60,85,99,100,83),   // Dark Elf Rogue
+    (6,11)  -> (60,65,60,85,109,90,83),   // Dark Elf Necromancer
+    (6,12)  -> (60,75,60,75,109,90,83),   // Dark Elf Wizard
+    (6,13)  -> (60,75,60,75,109,90,83),   // Dark Elf Magician
+    (6,14)  -> (60,65,70,75,109,90,83),   // Dark Elf Enchanter
+    (7,1)   -> (80,80,75,85,75,95,60),    // Half Elf Warrior
+    (7,3)   -> (80,75,85,85,75,90,65),    // Half Elf Paladin
+    (7,4)   -> (75,80,75,85,75,100,65),   // Half Elf Ranger
+    (7,6)   -> (70,80,75,85,75,90,70),    // Half Elf Druid
+    (7,8)   -> (75,70,85,95,75,90,60),    // Half Elf Bard
+    (7,9)   -> (70,70,75,95,75,100,60),   // Half Elf Rogue
+    (8,1)   -> (100,100,45,90,60,75,83),  // Dwarf Warrior
+    (8,2)   -> (95,95,45,90,60,70,93),    // Dwarf Cleric
+    (8,3)   -> (100,95,55,90,60,70,88),   // Dwarf Paladin
+    (8,9)   -> (90,90,45,100,60,80,83),   // Dwarf Rogue
+    (9,1)   -> (118,119,40,75,52,88,60),  // Troll Warrior
+    (9,5)   -> (118,114,45,75,62,83,60),  // Troll Shadow Knight
+    (9,10)  -> (108,114,45,75,52,83,70),  // Troll Shaman
+    (9,15)  -> (108,119,45,75,52,88,70),  // Troll Beastlord
+    (10,1)  -> (140,132,37,70,60,75,67),  // Ogre Warrior
+    (10,5)  -> (140,127,42,70,70,70,67),  // Ogre Shadow Knight
+    (10,10) -> (130,127,42,70,60,70,77),  // Ogre Shaman
+    (10,15) -> (130,132,42,70,60,75,77),  // Ogre Beastlord
+    (11,1)  -> (80,85,50,90,67,100,80),   // Halfling Warrior
+    (11,2)  -> (75,80,50,90,67,95,90),    // Halfling Cleric
+    (11,3)  -> (80,80,60,90,67,95,85),    // Halfling Paladin
+    (11,4)  -> (75,85,50,90,67,105,85),   // Halfling Ranger
+    (11,6)  -> (70,85,50,90,67,95,90),    // Halfling Druid
+    (11,9)  -> (70,75,50,100,67,105,80),  // Halfling Rogue
+    (12,1)  -> (70,80,60,85,98,90,67),    // Gnome Warrior
+    (12,2)  -> (65,75,60,85,98,85,77),    // Gnome Cleric
+    (12,3)  -> (70,75,70,85,98,85,72),    // Gnome Paladin
+    (12,5)  -> (70,75,65,85,108,85,67),   // Gnome Shadow Knight
+    (12,9)  -> (60,70,60,95,98,95,67),    // Gnome Rogue
+    (12,11) -> (60,70,60,95,108,85,67),   // Gnome Necromancer
+    (12,12) -> (60,80,60,85,108,85,67),   // Gnome Wizard
+    (12,13) -> (60,80,60,85,108,85,67),   // Gnome Magician
+    (12,14) -> (60,70,70,85,108,85,67),   // Gnome Enchanter
+    (128,1) -> (80,80,55,85,75,95,80),    // Iksar Warrior
+    (128,5) -> (80,75,60,85,85,90,80),    // Iksar Shadow Knight
+    (128,7) -> (75,75,55,95,75,100,80),   // Iksar Monk
+    (128,10)-> (70,75,60,85,75,90,90),    // Iksar Shaman
+    (128,11)-> (70,70,55,95,85,90,80),    // Iksar Necromancer
+    (128,15)-> (70,80,60,85,75,95,90),    // Iksar Beastlord
+    (130,1) -> (100,85,65,70,65,95,70),   // Vah Shir Warrior
+    (130,8) -> (95,75,75,80,65,90,70),    // Vah Shir Bard
+    (130,9) -> (90,75,65,80,65,100,70),   // Vah Shir Rogue
+    (130,10)-> (90,80,70,70,65,90,80),    // Vah Shir Shaman
+    (130,15)-> (90,85,70,70,65,95,80),    // Vah Shir Beastlord
   )
 
   override def show(): Unit =
@@ -509,9 +563,7 @@ class CharacterCreateScreen(
   private def computeStats: (Int, Int, Int, Int, Int, Int, Int) =
     val race = races(selectedRace)
     val cls = availableClasses(selectedClass)
-    val (rs, rt, rc, rd, ri, ra, rw) = raceStats.getOrElse(race.id, (75,75,75,75,75,75,75))
-    val (cs, ct, cc, cd, ci, ca, cw) = classStats.getOrElse(cls._1, (0,0,0,0,0,0,0))
-    (rs+cs, rt+ct, rc+cc, rd+cd, ri+ci, ra+ca, rw+cw)
+    baseStats.getOrElse((race.id, cls._1), (75,75,75,75,75,75,75))
 
   private def availableDeities: Vector[(Int, String)] =
     val race = races(selectedRace)

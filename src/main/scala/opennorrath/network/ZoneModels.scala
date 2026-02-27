@@ -300,7 +300,7 @@ case class DamageInfo(
   sourceId: Int,          // Entity dealing damage
   damageType: Int,        // Type of damage (skill type)
   spellId: Int,           // Spell ID if spell damage (0xFFFF if melee)
-  damage: Int,            // Damage amount (-1 = miss)
+  damage: Int,            // Damage amount (0 = miss)
   force: Float,           // Knockback force
   pushHeading: Float,     // Knockback direction
   pushUpAngle: Float,     // Knockback vertical angle

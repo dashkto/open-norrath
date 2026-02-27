@@ -148,6 +148,104 @@ case class Fragment12_TrackDef(name: String, frames: Array[BoneTransform]) exten
 // 0x13 - Track reference
 case class Fragment13_TrackRef(name: String, trackDefRef: Int) extends WldFragment
 
+// 0x21 - BSP tree: flat array of nodes partitioning the zone into regions.
+// See ZoneGeometry.scala for how 0x21, 0x22, and 0x29 work together for zone line detection.
+case class Fragment21_BspTree(
+    name: String,
+    nodes: Array[BspNode],
+) extends WldFragment
+
+// 28 bytes per node. Internal nodes split space with a plane; leaves identify a region.
+case class BspNode(
+    normalX: Float, normalY: Float, normalZ: Float, // split plane normal (S3D coords)
+    splitDistance: Float,                             // dot(normal, point) >= this → left
+    regionId: Int,     // 0 = internal node; >0 = leaf, 1-based index into 0x22 list
+    leftNode: Int,     // 1-based index into node array (for internal nodes)
+    rightNode: Int,    // 1-based index into node array (for internal nodes)
+)
+
+// 0x22 - BSP region: one per leaf. The Nth 0x22 fragment = BSP regionId N+1.
+case class Fragment22_BspRegion(
+    name: String,
+    flags: Int,
+    sphereX: Float = 0, sphereY: Float = 0, sphereZ: Float = 0, sphereRadius: Float = 0,
+) extends WldFragment
+
+// 0x29 - BSP region type: tags groups of 0x22 regions with a type string.
+// Known prefixes (from EQEmu azone2/wld.cpp, checked in this order):
+//   WT    = Water        LA    = Lava         DRNTP = ZoneLine
+//   DRP_  = PVP          SL    = Slippery     DRN   = Ice
+//   VWN   = VWater
+// Zone line strings follow the pattern: DRNTP{5-digit}{6-digit}_ZONE
+//   e.g. "DRNTP00255000001_ZONE" — the meaning of the digit groups is unverified.
+case class Fragment29_BspRegionType(
+    name: String,
+    regionIndices: Array[Int],   // 0-based indices into 0x22 list (= BSP regionId - 1)
+    regionString: String,        // decoded type string from fragment body, or name if empty
+) extends WldFragment:
+
+  /** Region type derived from the type string prefix, matching azone2 priority order. */
+  def regionType: BspRegionKind =
+    val s = regionString.toUpperCase
+    if s.startsWith("DRNTP") then BspRegionKind.ZoneLine
+    else if s.startsWith("DRP_") then BspRegionKind.PVP
+    else if s.startsWith("DRN") then BspRegionKind.Ice
+    else if s.startsWith("WT") then BspRegionKind.Water
+    else if s.startsWith("LA") then BspRegionKind.Lava
+    else if s.startsWith("SL") then BspRegionKind.Slippery
+    else if s.startsWith("VWN") then BspRegionKind.VWater
+    else BspRegionKind.Unknown
+
+  /** For zone line regions: the 5-digit group after "DRNTP" (e.g. 255 from "DRNTP00255000001_ZONE"). */
+  def zoneLineParam1: Int =
+    val s = regionString.toUpperCase
+    if !s.startsWith("DRNTP") || s.length < 10 then -1
+    else try s.substring(5, 10).trim.toInt catch case _: NumberFormatException => -1
+
+  /** For zone line regions: the 6-digit group (e.g. 1 from "DRNTP00255000001_ZONE"). */
+  def zoneLineParam2: Int =
+    val s = regionString.toUpperCase
+    if !s.startsWith("DRNTP") || s.length < 16 then -1
+    else try s.substring(10, 16).trim.toInt catch case _: NumberFormatException => -1
+
+enum BspRegionKind:
+  case Water, Lava, ZoneLine, PVP, Slippery, Ice, VWater, Unknown
+
+// 0x08 - Camera (unknown purpose, found in zone files)
+case class Fragment08_Camera(name: String) extends WldFragment
+
+// 0x09 - Camera reference
+case class Fragment09_CameraRef(name: String, cameraRef: Int) extends WldFragment
+
+// 0x16 - Unknown (single float parameter, typically 0.1)
+case class Fragment16_Unknown(name: String, value: Float) extends WldFragment
+
+// 0x1B - Light source definition
+case class Fragment1B_LightSource(
+    name: String,
+    flags: Int,
+    isPlaced: Boolean,
+    isColored: Boolean,
+    attenuation: Int,
+    red: Float, green: Float, blue: Float, alpha: Float,
+) extends WldFragment
+
+// 0x1C - Light source reference
+case class Fragment1C_LightSourceRef(name: String, lightSourceRef: Int) extends WldFragment
+
+// 0x2A - Ambient light (references light source + region list, unused in Trilogy)
+case class Fragment2A_AmbientLight(
+    name: String,
+    lightRef: Int,
+    regionIds: Array[Int],
+) extends WldFragment
+
+// 0x35 - Global ambient light color (BGRA)
+case class Fragment35_GlobalAmbientLight(
+    name: String,
+    red: Float, green: Float, blue: Float, alpha: Float,
+) extends WldFragment
+
 // 0x2D - Mesh reference
 case class Fragment2D_MeshReference(name: String, meshRef: Int) extends WldFragment
 

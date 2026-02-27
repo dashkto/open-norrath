@@ -13,11 +13,9 @@ import opennorrath.ui.Colors
 
 /** Loading screen shown during zone entry handshake.
   *
-  * Handles:
-  *   - Creating the ZoneSession and connecting to the zone server
-  *   - Listening for ZoneEvents until zone entry is complete (InZone)
-  *   - Populating PlayerCharacter from the player profile
-  *   - Transitioning to ZoneScreen with zone path and camera position
+  * Polls ZoneClient state directly instead of consuming events, so that
+  * all ZoneEvents remain buffered in the queue for ZoneScreen to drain
+  * on its first dispatchEvents() call. This prevents late-listener bugs.
   *
   * Used from:
   *   - CharacterSelectScreen (initial zone-in after login)
@@ -32,53 +30,18 @@ class ZoneLoadingScreen(
   private var statusText = s"Connecting to zone..."
   private var statusColor = Colors.text
   private var transitioned = false
-
-  private val listener: ZoneEvent => Unit = {
-    case ZoneEvent.ProfileReceived(pp) =>
-      statusText = s"Loading ${pp.name}..."
-      val pc = PlayerCharacter(
-        name = pp.name,
-        level = pp.level,
-        race = pp.race,
-        classId = pp.classId,
-        currentHp = pp.curHp,
-        maxHp = pp.curHp,
-        currentMana = pp.mana,
-        maxMana = pp.mana,
-        str = pp.str, sta = pp.sta, agi = pp.agi, dex = pp.dex,
-        wis = pp.wis, int = pp.int_, cha = pp.cha,
-      )
-      pc.loadBuffs(pp.buffs)
-      pc.spellBook ++= pp.spellBook
-      Game.player = Some(pc)
-    case ZoneEvent.ZoneDataReceived(nz) =>
-      statusText = s"Entering ${nz.zoneLongName}..."
-    case ZoneEvent.StateChanged(ZoneState.InZone) =>
-      Game.zoneSession.foreach { session =>
-        val zc = session.client
-        val shortName = zc.zoneInfo.map(_.zoneShortName).getOrElse("arena")
-        val zonePath = s"assets/EverQuest/$shortName.s3d"
-        transitioned = true
-        Game.setScreen(ZoneScreen(ctx, zonePath, zc.selfSpawn, zc.profile))
-      }
-    case ZoneEvent.StateChanged(ZoneState.Failed) =>
-      statusText = "Zone connection failed"
-      statusColor = Colors.error
-      Game.zoneSession.foreach(_.stop())
-      Game.zoneSession = None
-    case ZoneEvent.Error(msg) =>
-      statusText = s"Zone: $msg"
-      statusColor = Colors.error
-    case _ => ()
-  }
+  private var lastState: ZoneState = ZoneState.Disconnected
 
   override def show(): Unit =
     glfwSetInputMode(ctx.window, GLFW_CURSOR, GLFW_CURSOR_NORMAL)
     glClearColor(0.08f, 0.08f, 0.12f, 1f)
 
+    // Stop old zone session if zoning between zones
+    Game.zoneSession.foreach(_.stop())
+    Game.zoneSession = None
+
     // Create zone session and connect
     val zc = ZoneClient()
-    zc.addListener(listener)
     val znt = NetworkThread(zc)
     Game.zoneSession = Some(ZoneSession(zc, znt))
     znt.start()
@@ -87,7 +50,56 @@ class ZoneLoadingScreen(
 
   override def update(dt: Float): Unit =
     if transitioned then return
-    Game.zoneSession.foreach(_.client.dispatchEvents())
+    Game.zoneSession.foreach { session =>
+      val zc = session.client
+      val st = zc.state
+
+      // Create PlayerCharacter when profile arrives
+      if zc.profile.isDefined && Game.player.isEmpty then
+        val pp = zc.profile.get
+        statusText = s"Loading ${pp.name}..."
+        val pc = PlayerCharacter(
+          name = pp.name,
+          level = pp.level,
+          race = pp.race,
+          classId = pp.classId,
+          currentHp = pp.curHp,
+          maxHp = pp.curHp,
+          currentMana = pp.mana,
+          maxMana = pp.mana,
+          str = pp.str, sta = pp.sta, agi = pp.agi, dex = pp.dex,
+          wis = pp.wis, int = pp.int_, cha = pp.cha,
+        )
+        pc.loadBuffs(pp.buffs)
+        pc.spellBook ++= pp.spellBook
+        Game.player = Some(pc)
+
+      // Update status text from zone info
+      if zc.zoneInfo.isDefined && st != lastState then
+        statusText = s"Entering ${zc.zoneInfo.get.zoneLongName}..."
+
+      lastState = st
+
+      st match
+        case ZoneState.InZone =>
+          val shortName = zc.zoneInfo.map(_.zoneShortName).getOrElse("arena")
+          val zonePath = s"assets/EverQuest/$shortName.s3d"
+          transitioned = true
+          Game.setScreen(ZoneScreen(ctx, zonePath, zc.selfSpawn, zc.profile))
+        case ZoneState.Failed =>
+          statusText = "Zone connection failed"
+          statusColor = Colors.error
+          Game.zoneSession.foreach(_.stop())
+          Game.zoneSession = None
+        case _ => ()
+
+      // Check for network errors (peek without consuming — they'll become ZoneEvent.Error)
+      val err = Option(zc.errors.peek())
+      err.foreach { msg =>
+        statusText = s"Zone: $msg"
+        statusColor = Colors.error
+      }
+    }
 
   override def render(dt: Float): Unit =
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
@@ -116,5 +128,4 @@ class ZoneLoadingScreen(
 
     ImGui.end()
 
-  override def dispose(): Unit =
-    Game.zoneSession.foreach(_.client.removeListener(listener))
+  override def dispose(): Unit = ()

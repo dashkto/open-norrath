@@ -14,7 +14,7 @@ import opennorrath.animation.AnimCode
 import opennorrath.render.Shader
 import opennorrath.state.ZoneCharacter
 import opennorrath.world.{CameraController, EqCoords, SpellEffectSystem, TargetingSystem, ZoneRenderer}
-import opennorrath.network.{InventoryItem, PlayerPosition, PlayerProfileData, SpawnData, ZoneEvent}
+import opennorrath.network.{InventoryItem, PlayerPosition, PlayerProfileData, SpawnData, WorldEvent, ZoneEvent, ZonePointData}
 import opennorrath.ui.{NameplateRenderer, ZoneHud}
 
 class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData] = None, profile: Option[PlayerProfileData] = None) extends Screen:
@@ -34,17 +34,23 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
   private val lastSentPos = Vector3f()    // track position changes
   private var wasAirborne = false          // track airborne state for fall animation
   private var jumpAnimTimer = 0f          // countdown for crouch animation on jump
+  private var zoning = false              // true after server requests zone change
+  private var zonePoints = Vector.empty[ZonePointData]
+  private val ZoneLineRadius = 30f       // trigger radius in EQ units (~30 feet)
 
   // --- Spawn rendering ---
 
   private val spawnListener: ZoneEvent => Unit =
+    case ZoneEvent.SpawnsLoaded(spawns) =>
+      for s <- spawns do spawnListener(ZoneEvent.SpawnAdded(s))
     case ZoneEvent.SpawnAdded(s) =>
       val myId = Game.zoneSession.map(_.client.mySpawnId).getOrElse(0)
-      if s.spawnId != myId then
+      val selfId = Game.zoneSession.flatMap(_.client.selfSpawn.map(_.spawnId)).getOrElse(0)
+      if s.spawnId != myId && s.spawnId != selfId then
         ZoneCharacter.fromSpawn(s) match
           case Some(zc) =>
             zoneCharacters(s.spawnId) = zc
-            if zone.addSpawn(s.spawnId, zc.modelCode, zc.position, zc.heading, zc.size) then
+            if zone.addSpawn(s.spawnId, zc.modelCode, zc.position, zc.heading, zc.size, flying = zc.flying) then
               zone.updateSpawnEquipment(s.spawnId, zc.equipment, zc.bodyTexture)
           case None => ()
     case ZoneEvent.SpawnRemoved(id) =>
@@ -53,9 +59,8 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
     case ZoneEvent.SpawnMoved(upd) =>
       val pos = EqCoords.serverToGl(upd.y, upd.x, upd.z)
       val serverVel = EqCoords.serverToGl(upd.deltaY, upd.deltaX, upd.deltaZ)
-      val isMoving = upd.animType != 0
       zoneCharacters.get(upd.spawnId).foreach { zc =>
-        zc.onServerPositionUpdate(pos, serverVel, upd.heading, isMoving, upd.animType)
+        zc.onServerPositionUpdate(pos, serverVel, upd.heading, upd.animType)
       }
     case ZoneEvent.HPChanged(hp) =>
       zoneCharacters.get(hp.spawnId).foreach { zc =>
@@ -66,6 +71,34 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
       zoneCharacters.get(wc.spawnId).foreach { zc =>
         zc.updateEquipment(wc.wearSlot, wc.material, wc.color)
         zone.updateSpawnEquipment(wc.spawnId, zc.equipment, zc.bodyTexture)
+      }
+    case ZoneEvent.ZoneChangeRequested(req) =>
+      println(s"[Zone] Zone change requested → zoneId=${req.zoneId}")
+      zoning = true
+    case ZoneEvent.Error(msg) if zoning =>
+      println(s"[Zone] Zone change aborted: $msg")
+      zoning = false
+    case ZoneEvent.ZonePointsLoaded(points) =>
+      // OP_SendZonePoints contains only destination coords (target_x/y/z from the
+      // zone_points DB table), NOT trigger locations. The trigger coords (y/x/z) stay
+      // server-side for validation only. The client detects zone lines via S3D BSP
+      // region data (0x29 drntp/wtntp/lantp regions) and sends OP_ZoneChange with
+      // the target zone ID. The server then validates using GetClosestZonePoint
+      // against the trigger coords the client never sees.
+      zonePoints = points
+      for p <- points do
+        println(f"[Zone] Zone point #${p.iterator}: target=${p.targetZoneId} dest=(${p.x}%.1f,${p.y}%.1f,${p.z}%.1f)")
+    case ZoneEvent.DamageDealt(info) if info.damage != 0 =>
+      // Attacker plays attack animation, target plays get-hit animation
+      val attackAnim = if java.util.concurrent.ThreadLocalRandom.current().nextBoolean()
+        then AnimCode.Attack1.code else AnimCode.Attack2.code
+      zoneCharacters.get(info.sourceId).foreach(_.playTimedAnimation(attackAnim, 0.5f))
+      zoneCharacters.get(info.targetId).foreach { zc =>
+        if info.damage > 0 then zc.playTimedAnimation(AnimCode.GetHit.code, 0.4f)
+      }
+    case ZoneEvent.EntityDied(info) =>
+      zoneCharacters.get(info.spawnId).foreach { zc =>
+        zc.dead = true
       }
     case ZoneEvent.InventoryMoved(from, to) =>
       // When items move to/from weapon slots, update the player's visual equipment.
@@ -151,15 +184,7 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
     val currentId = hud.target.map(_.spawnId)
     val curIdx = currentId.flatMap(id => visible.indexOf(id) match { case -1 => None; case i => Some(i) })
     val nextIdx = curIdx.map(i => (i + 1) % visible.size).getOrElse(0)
-    hud.target = zoneCharacters.get(visible(nextIdx))
-
-  private def dumpPositions(): Unit =
-    val cp = camCtrl.camera.position
-    println(f"[F9 Debug] Camera: gl(${cp.x}%.2f, ${cp.y}%.2f, ${cp.z}%.2f) yaw=${camCtrl.camera.yaw}%.1f")
-    for (id, mat, height) <- zone.spawnNameplateData.take(10) do
-      val wx = mat.m30(); val wy = mat.m31(); val wz = mat.m32()
-      val dist = Math.sqrt((cp.x - wx) * (cp.x - wx) + (cp.y - wy) * (cp.y - wy) + (cp.z - wz) * (cp.z - wz))
-      println(f"  Spawn $id: gl($wx%.2f, $wy%.2f, $wz%.2f) dist=${dist}%.1f height=$height%.1f")
+    hud.setTarget(zoneCharacters.get(visible(nextIdx)))
 
   override def show(): Unit =
     glfwSetInputMode(ctx.window, GLFW_CURSOR, GLFW_CURSOR_NORMAL)
@@ -174,52 +199,51 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
     camCtrl.initFromSpawn(selfSpawn, profile)
     println(s"Loading zone: $zonePath")
 
-    // Load initial spawns (SpawnsLoaded was consumed by ZoneLoadingScreen)
+    // Register listeners — events are buffered in ZoneClient's queue (ZoneLoadingScreen
+    // polls state directly instead of consuming events). First dispatchEvents() call in
+    // update() will drain the full backlog: SpawnsLoaded, ZonePointsLoaded, InventoryLoaded, etc.
     Game.zoneSession.foreach { session =>
       val zc = session.client
       zc.addListener(spawnListener)
       zc.addListener(spellListener)
-      Game.player.foreach { pc =>
-        zc.addListener(pc.listener)
-        if zc.inventory.nonEmpty then
-          pc.listener(ZoneEvent.InventoryLoaded(zc.inventory))
-      }
-      for s <- zc.spawns.values do spawnListener(ZoneEvent.SpawnAdded(s))
-      // Add the player's own character model using the real spawn ID
+      Game.player.foreach(pc => zc.addListener(pc.listener))
+
+      // Self-spawn needs special handling: it's registered under mySpawnId (assigned by
+      // SpawnAppearance), not the spawnId from OP_ZoneEntry. The SpawnAdded event for
+      // self-spawn is skipped by spawnListener (mySpawnId check), so we add it manually.
       val myId = zc.mySpawnId
       selfSpawn.foreach { s =>
         ZoneCharacter.fromSpawn(s).foreach { playerZc =>
           zoneCharacters(myId) = playerZc
           if zone.addSpawn(myId, playerZc.modelCode, playerZc.position, playerZc.heading, playerZc.size) then
             zone.updateSpawnEquipment(myId, playerZc.equipment, playerZc.bodyTexture)
-          // Set feet offset and model height so gravity and camera scale with the model
           val (fo, mh) = zone.modelMetrics(playerZc.modelCode, playerZc.size)
-          Game.player.foreach { pc => pc.feetOffset = fo; pc.modelHeight = mh }
+          Game.player.foreach { pc => pc.feetOffset = fo; pc.modelHeight = mh; pc.zoneChar = Some(playerZc) }
           println(f"  Player model ${playerZc.modelCode}: feetOffset=$fo%.2f modelHeight=$mh%.2f (size=${playerZc.size}%.1f)")
         }
       }
-      println(s"  Loaded ${zoneCharacters.size} / ${zc.spawns.size} initial spawns")
     }
-
-    // Animation test: spawn fallback races in a line to verify animation matches
-    if zonePath.toLowerCase.contains("arena") then
-      val testPos = camCtrl.camera.position
-      import opennorrath.animation.AnimatedCharacter
-      val fallbackModels = AnimatedCharacter.animFallbacks.toList.sortBy(_._1).map(_._1.toLowerCase)
-      for (model, idx) <- fallbackModels.zipWithIndex do
-        val spawnId = 900000 + idx
-        val pos = org.joml.Vector3f(testPos.x + idx * 15f, testPos.y, testPos.z + 20f)
-        if zone.addSpawn(spawnId, model, pos, 0, 6f) then
-          zone.updateSpawnAnimation(spawnId, moving = true, animType = 1)
-          val fb = AnimatedCharacter.animFallbacks.getOrElse(model.toUpperCase, "?")
-          zoneCharacters(spawnId) = ZoneCharacter(
-            spawnId = spawnId, name = s"$model→$fb", lastName = "", race = 1, classId = 1,
-            gender = 0, level = 1, npcType = 1, modelCode = model, size = 6f,
-            position = pos, heading = 0,
-          )
 
   override def update(dt: Float): Unit =
     Game.zoneSession.foreach(_.client.dispatchEvents())
+
+    // When zoning, poll world server for new zone address instead of normal updates
+    if zoning then
+      Game.worldSession.foreach { ws =>
+        var event = ws.client.pollEvent()
+        while event.isDefined do
+          event.get match
+            case WorldEvent.ZoneInfo(addr) =>
+              val charName = Game.player.map(_.name).getOrElse("")
+              Game.setScreen(ZoneLoadingScreen(ctx, addr, charName))
+              return
+            case WorldEvent.Error(msg) =>
+              println(s"[Zone] World error during zone change: $msg")
+              zoning = false
+            case _ => ()
+          event = ws.client.pollEvent()
+      }
+      return // skip normal zone update while zoning
 
     // Client-side interpolation and NPC animation
     val myId = Game.zoneSession.map(_.client.mySpawnId).getOrElse(-1)
@@ -244,21 +268,13 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
       Game.zoneSession.foreach { session =>
         val pid = session.client.mySpawnId
         Game.player match
-          case Some(pc) => zone.updateSpawnPosition(pid, pc.position, camCtrl.playerHeading)
+          case Some(pc) =>
+            pc.zoneChar.foreach { zc =>
+              zone.updateSpawnPosition(pid, zc.position, zc.facingHeading)
+              if zc.updateAnimation(dt) then
+                zone.playSpawnAnimation(pid, zc.currentAnimCode)
+            }
           case None => zone.updateSpawnPosition(pid, camCtrl.playerPos, camCtrl.playerHeading)
-        // Sync player state into their ZoneCharacter for animation resolution
-        zoneCharacters.get(pid).foreach { zc =>
-          Game.player.foreach { pc =>
-            if pc.jumped then
-              pc.jumped = false
-              zc.playTimedAnimation(AnimCode.Crouch.code, 0.3f)
-            zc.airborne = pc.airborne
-          }
-          zc.moving = camCtrl.playerMoving
-          zc.speed = if camCtrl.playerMoving then 30f else 0f  // PlayerSpeed
-          if zc.updateAnimation(dt) then
-            zone.playSpawnAnimation(pid, zc.currentAnimCode)
-        }
       }
 
     // Send player position to server when attached — only if something changed
@@ -286,21 +302,20 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
         else
           posUpdateTimer = PosUpdateInterval
 
+    // TODO: Client must detect zone lines and initiate OP_ZoneChange.
+    // The server does NOT auto-detect zone line crossings from position updates.
+
     // Left-click targeting — only change target if we hit something
     if ctx.input.isActionPressed(GameAction.Target) && !camCtrl.freeLook && !ImGui.getIO().getWantCaptureMouse() then
       val (mx, my) = ctx.input.mousePos
       targeting.pickSpawn(mx, my, ctx.windowWidth.toFloat, ctx.windowHeight.toFloat,
         camCtrl.projection, camCtrl.viewMatrix, zone.spawnHitData).foreach { id =>
-        hud.target = zoneCharacters.get(id)
+        hud.setTarget(zoneCharacters.get(id))
       }
 
     // Tab target — raycast against zone collision mesh for LOS
     if ctx.input.isActionPressed(GameAction.TabTarget) && !ImGui.getIO().getWantTextInput() then
       resolveTabTarget()
-
-    if !ImGui.getIO().getWantCaptureKeyboard() then
-      if ctx.input.isActionPressed(GameAction.DumpDebug) then
-        dumpPositions()
 
   override def render(dt: Float): Unit =
     glEnable(GL_DEPTH_TEST)
@@ -313,6 +328,9 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
     shader.setMatrix4f("model", model)
 
     zone.draw(shader, dt, camCtrl.viewMatrix)
+
+    // Zone line sphere debug wireframes
+    zone.drawZoneLineSpheres(shader)
 
     // Target hitbox wireframe
     hud.target.foreach { zc =>
@@ -334,8 +352,29 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
 
     hud.render()
 
+    // Show zone point debug overlay — distance to nearest server zone point
+    if zonePoints.nonEmpty then
+      Game.player.foreach { pc => pc.zoneChar.foreach { zc =>
+        val pos = zc.position
+        val (sy, sx, sz) = EqCoords.glToServer(pos.x, pos.y - pc.feetOffset, pos.z)
+        val drawList = ImGui.getForegroundDrawList()
+        var minDist = Float.MaxValue
+        var nearest: ZonePointData = null
+        for zp <- zonePoints do
+          val dx = sx - zp.x; val dy = sy - zp.y; val dz = sz - zp.z
+          val dist = Math.sqrt(dx * dx + dy * dy + dz * dz).toFloat
+          if dist < minDist then { minDist = dist; nearest = zp }
+        val inside = minDist <= ZoneLineRadius
+        val col = if inside then ImGui.colorConvertFloat4ToU32(0.2f, 1f, 0.2f, 0.9f)
+                  else ImGui.colorConvertFloat4ToU32(0.7f, 0.7f, 0.7f, 0.6f)
+        drawList.addText(10f, 40f, col, f"ZP #${nearest.iterator} dist=${minDist}%.0f/${ZoneLineRadius}%.0f → zone${nearest.targetZoneId}  loc=($sx%.0f,$sy%.0f,$sz%.0f)")
+        if inside then
+          drawList.addText(10f, 55f, col, f"ZONE LINE → zone ${nearest.targetZoneId}")
+      }}
+
   override def dispose(): Unit =
     hud.dispose()
+    Game.player.foreach(_.zoneChar = None)
     Game.zoneSession.foreach { session =>
       session.client.removeListener(spawnListener)
       session.client.removeListener(spellListener)

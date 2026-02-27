@@ -84,18 +84,23 @@ object EqData:
       case 128 => if gender == 1 then "ikf" else "ikm"  // Iksar
       case 130 => if gender == 1 then "kef" else "kem"  // Vah Shir
       // Common NPC races (gender-neutral)
+      // Note: EQMacEmu uses different race IDs than standard EQEmu for some NPCs.
+      // Multiple IDs map to the same model (e.g., 26|34 → bat, 40|56 → gob).
+      // Mappings verified against actual server spawn data in Misty Thicket.
       case 14  => "wer"  // Werewolf
       case 15  => "ske"  // Skeleton (tall)
       case 19  => "ten"  // Tentacle Terror
       case 21  => "gua"  // Guard
-      case 26  => "bat"  // Bat
+      case 22  => "bet"  // Beetle
+      case 26 | 34 => "bat"  // Bat
       case 27  => "eel"  // Eel (Ghoul variant)
       case 28  => "rat"  // Rat
-      case 29  => "sna"  // Snake
+      case 29 | 37 => "sna"  // Snake
       case 33  => "spi"  // Spider
       case 36  => "min"  // Minotaur
       case 38  => "ali"  // Alligator
-      case 42  => "orc"  // Orc
+      case 40 | 56 => "gob"  // Goblin
+      case 42 | 54 => "orc"  // Orc
       case 43  => "ske"  // Skeleton
       case 44  => "bro"  // Brownie
       case 45  => "dri"  // Drixie
@@ -106,22 +111,24 @@ object EqData:
       case 51  => "gar"  // Gargoyle
       case 52  => "gal"  // Gasbag
       case 55  => "gno"  // Gnoll
-      case 56  => "gob"  // Goblin
       case 60  => "gor"  // Gorilla
       case 62  => "cor"  // Cornsnake
       case 63  => "pix"  // Pixie
       case 67  => "imp"  // Imp
-      case 69  => "bix"  // Bixie
+      case 69 | 79 => "bix"  // Bixie
+      case 70  => "ske"  // Mummy (uses skeleton model)
       case 71  => "sca"  // Scarecrow
       case 72  => "dra"  // Drake
       case 73  => "dra"  // Drake (variant)
       case 75  => "wil"  // Will-o-wisp
       case 77  => "ele"  // Elemental
+      case 81  => if gender == 1 then "hof" else "hom"  // Halfling NPC
       case 85  => "spe"  // Spectre
       case 88  => "ban"  // Banshee
       case 89  => "lic"  // Basilisk
       case 93  => "gho"  // Ghost
       case 94  => "gho"  // Ghoul
+      case 109 => "was"  // Wasp
       case 120 => "lio"  // Lion
       case 145 => "eye"  // Eye of Zomm
       case _   => null

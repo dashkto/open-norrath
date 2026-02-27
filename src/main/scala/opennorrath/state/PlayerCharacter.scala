@@ -1,8 +1,10 @@
 package opennorrath.state
 
 import org.joml.Vector3f
+import opennorrath.Game
+import opennorrath.animation.AnimCode
 import opennorrath.network.{SpellBuff, ZoneEvent}
-import opennorrath.world.ZoneCollision
+import opennorrath.world.{Physics, ZoneCollision}
 
 /** Runtime state for the player's character while in a zone.
   *
@@ -30,21 +32,22 @@ class PlayerCharacter(
   def hpPercent: Float = if maxHp > 0 then currentHp.toFloat / maxHp else 0f
   def manaPercent: Float = if maxMana > 0 then currentMana.toFloat / maxMana else 0f
 
-  /** Player foot position in GL space. Updated by CameraController when attached. */
-  val position: Vector3f = Vector3f()
+  /** The ZoneCharacter representing this player in the zone.
+    * None before zone entry; set when the player spawn is created.
+    */
+  var zoneChar: Option[ZoneCharacter] = None
 
-  /** Player heading in degrees (0-360, CW from east). Updated when camera yaw changes. */
-  var headingDeg: Float = 0f
+  /** Whether auto-attack is currently active. */
+  var autoAttacking: Boolean = false
 
-  /** Player heading as EQ byte (0-255, CCW from east) for model rotation. */
-  def headingByte: Int =
-    val h = ((headingDeg * 256f / 360f).toInt % 256 + 256) % 256
-    h
+  /** Teleport to the given GL-space position (server/feet-level). Stored as model-origin in ZC. */
+  def teleportTo(glPos: Vector3f): Unit =
+    zoneChar.foreach(_.position.set(glPos.x, glPos.y + feetOffset, glPos.z))
 
-  /** Whether the player is currently moving. */
-  var moving: Boolean = false
-
-  /** Base run speed in GL units/sec. Can be modified by buffs (SoW etc). */
+  /** Base run speed in GL units/sec. Can be modified by buffs (SoW etc).
+    * EQEmu speed hack detection (Project Speedie, disabled by default) thresholds:
+    * 125 units/sec normal, 140 speed-buffed, 160 bard. Only logs, doesn't reject.
+    */
   var runSpeed: Float = 25f
 
   /** Zone collision mesh for ground detection. */
@@ -59,51 +62,97 @@ class PlayerCharacter(
   /** Full model height in GL units (scaled). Used to derive eye height. */
   var modelHeight: Float = 0f
 
-  private val Gravity = 80f       // GL units/sec² downward acceleration
-  private val MaxFallSpeed = Gravity * 4f // terminal velocity
   private val JumpSpeed = 30f     // initial upward velocity when jumping
   private val GroundProbe = 200f  // max raycast distance below player
   private val SnapThreshold = 0.5f
   private val FootRadius = 1.5f   // half-width of foot hitbox for multi-ray ground detection
   private val ProbeUp = 2f        // probe starts this far above feet
+  private val WallMargin = 0.5f   // stop this far from walls
   private var fallSpeed = 0f
   private var onGround = true
 
   /** Whether the character has significant vertical momentum (for fall animation). */
-  def airborne: Boolean = fallSpeed > Gravity
-
-  /** Set to true when a jump is initiated; ZoneScreen reads and clears it for animation. */
-  var jumped: Boolean = false
+  def airborne: Boolean = fallSpeed > Physics.Gravity
 
   def jump(): Unit =
     if onGround then
       fallSpeed = -JumpSpeed  // negative = upward
       onGround = false
-      jumped = true
+      zoneChar.foreach(_.playTimedAnimation(AnimCode.Crouch.code, 0.3f))
+
   private val probeOrigin = Vector3f() // reusable to avoid allocation
+  private val probeTarget = Vector3f()
+
+  /** Try to move horizontally by (dx, dz) in GL space.
+    * Raycasts at knee and chest height to detect walls.
+    * Axes are tested independently so the player can slide along walls.
+    * @param pos feet-level position to mutate
+    * Returns true if any movement occurred.
+    */
+  def tryMove(pos: Vector3f, dx: Float, dz: Float): Boolean =
+    collision match
+      case None =>
+        pos.x += dx; pos.z += dz
+        dx != 0f || dz != 0f
+      case Some(col) =>
+        val feetY = pos.y - feetOffset
+        // Probe at two heights: knee (~30% up) and chest (~70% up)
+        val heights = Array(feetY + modelHeight * 0.3f, feetY + modelHeight * 0.7f)
+        var movedX = dx
+        var movedZ = dz
+        // Test X axis
+        if dx != 0f then
+          val dist = Math.abs(dx) + WallMargin
+          var blocked = false
+          var h = 0
+          while h < heights.length && !blocked do
+            probeOrigin.set(pos.x, heights(h), pos.z)
+            probeTarget.set(pos.x + dx + WallMargin * Math.signum(dx), heights(h), pos.z)
+            val hitDist = col.raycast(probeOrigin, probeTarget)
+            if hitDist >= 0f && hitDist < dist then
+              blocked = true
+            h += 1
+          if blocked then movedX = 0f
+        // Test Z axis
+        if dz != 0f then
+          val dist = Math.abs(dz) + WallMargin
+          val testX = pos.x + movedX // use adjusted X
+          var blocked = false
+          var h = 0
+          while h < heights.length && !blocked do
+            probeOrigin.set(testX, heights(h), pos.z)
+            probeTarget.set(testX, heights(h), pos.z + dz + WallMargin * Math.signum(dz))
+            val hitDist = col.raycast(probeOrigin, probeTarget)
+            if hitDist >= 0f && hitDist < dist then
+              blocked = true
+            h += 1
+          if blocked then movedZ = 0f
+        pos.x += movedX
+        pos.z += movedZ
+        movedX != 0f || movedZ != 0f
 
   /** Apply gravity using multi-ray ground detection.
     * Casts 5 rays (center + 4 corners of foot hitbox) to find the highest ground.
     * This prevents falling through ramps and narrow geometry.
+    * @param pos feet-level position to mutate
     */
-  def applyGravity(dt: Float): Unit =
+  def applyGravity(pos: Vector3f, dt: Float): Unit =
     collision.foreach { col =>
-      // Feet are below model origin by feetOffset
-      val feetY = position.y - feetOffset
+      val feetY = pos.y - feetOffset
       val py = feetY + ProbeUp
       // Cast center + 4 corner rays, take the highest ground hit
       var bestGroundY = Float.MinValue
       var hits = 0
       var i = 0
       while i < 5 do
-        val px = position.x + (i match
+        val px = pos.x + (i match
           case 1 => -FootRadius
           case 2 => FootRadius
           case 3 => 0f
           case 4 => 0f
           case _ => 0f
         )
-        val pz = position.z + (i match
+        val pz = pos.z + (i match
           case 1 => 0f
           case 2 => 0f
           case 3 => -FootRadius
@@ -119,15 +168,14 @@ class PlayerCharacter(
         i += 1
 
       // Apply velocity (negative = upward from jump, positive = falling)
-      fallSpeed = Math.min(fallSpeed + Gravity * dt, MaxFallSpeed)
-      position.y -= fallSpeed * dt
-      val newFeetY = position.y - feetOffset
+      fallSpeed = Math.min(fallSpeed + Physics.Gravity * dt, Physics.MaxFallSpeed)
+      pos.y -= fallSpeed * dt
 
+      val newFeetY = pos.y - feetOffset
       if hits > 0 then
-        val targetY = bestGroundY + feetOffset
         if newFeetY <= bestGroundY then
           // Landed on ground
-          position.y = targetY
+          pos.y = bestGroundY + feetOffset
           fallSpeed = 0f
           onGround = true
         else
@@ -153,7 +201,7 @@ class PlayerCharacter(
   val listener: ZoneEvent => Unit = {
     case ZoneEvent.LevelChanged(lvl) =>
       level = lvl.level
-    case ZoneEvent.HPChanged(hp) =>
+    case ZoneEvent.HPChanged(hp) if hp.spawnId == Game.zoneSession.map(_.client.mySpawnId).getOrElse(-1) =>
       currentHp = hp.curHp
       maxHp = hp.maxHp
     case ZoneEvent.ManaChanged(mana) =>

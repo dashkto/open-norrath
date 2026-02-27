@@ -10,6 +10,11 @@ class WldFile(data: Array[Byte]):
 
   private val buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
 
+  private val XorKey = Array[Byte](
+    0x95.toByte, 0x3A.toByte, 0xC5.toByte, 0x2A.toByte,
+    0x95.toByte, 0x7A.toByte, 0x95.toByte, 0x6A.toByte,
+  )
+
   val (isOldFormat: Boolean, stringHash: WldStringHash, fragments: Array[WldFragment]) = parse()
 
   def fragment(index: Int): WldFragment = fragments(index - 1) // 1-based
@@ -55,17 +60,77 @@ class WldFile(data: Array[Byte]):
       case 0x03 => parseFragment03(name)
       case 0x04 => parseFragment04(name)
       case 0x05 => parseFragment05(name)
+      case 0x08 => parseFragment08(name)
+      case 0x09 => parseFragment09(name)
       case 0x10 => parseFragment10(name)
       case 0x11 => parseFragment11(name)
       case 0x12 => parseFragment12(name)
       case 0x13 => parseFragment13(name)
       case 0x14 => parseFragment14(name)
       case 0x15 => parseFragment15(name, hash)
+      case 0x16 => parseFragment16(name)
+      case 0x1B => parseFragment1B(name)
+      case 0x1C => parseFragment1C(name)
+      case 0x21 => parseFragment21(name)
+      case 0x22 => parseFragment22(name)
+      case 0x29 => parseFragment29(name)
+      case 0x2A => parseFragment2A(name)
       case 0x2D => parseFragment2D(name)
       case 0x30 => parseFragment30(name)
       case 0x31 => parseFragment31(name)
+      case 0x35 => parseFragment35(name)
       case 0x36 => parseFragment36(name, oldFormat)
       case _    => UnknownFragment(name, fragType, size)
+
+  private def parseFragment08(name: String): Fragment08_Camera =
+    // 26 mixed int32/float parameters, purpose unknown. Data skipped by outer loop.
+    Fragment08_Camera(name)
+
+  private def parseFragment09(name: String): Fragment09_CameraRef =
+    val cameraRef = buf.getInt()
+    val _flags = buf.getInt()
+    Fragment09_CameraRef(name, cameraRef)
+
+  private def parseFragment16(name: String): Fragment16_Unknown =
+    val value = buf.getFloat()
+    Fragment16_Unknown(name, value)
+
+  private def parseFragment1B(name: String): Fragment1B_LightSource =
+    val flags = buf.getInt()
+    val frameCount = buf.getInt()
+    val isPlaced = (flags & 0x02) != 0
+    val isColored = (flags & 0x10) != 0
+    if (flags & 0x01) != 0 then buf.position(buf.position() + 12)
+    if isPlaced then buf.position(buf.position() + 4)
+    var (r, g, b, a) = (1f, 1f, 1f, 1f)
+    var attenuation = 0
+    if isColored && frameCount > 0 then
+      attenuation = buf.getInt()
+      r = buf.getFloat()
+      g = buf.getFloat()
+      b = buf.getFloat()
+      a = buf.getFloat()
+    Fragment1B_LightSource(name, flags, isPlaced, isColored, attenuation, r, g, b, a)
+
+  private def parseFragment1C(name: String): Fragment1C_LightSourceRef =
+    val lightRef = buf.getInt()
+    val _flags = buf.getInt()
+    Fragment1C_LightSourceRef(name, lightRef)
+
+  private def parseFragment2A(name: String): Fragment2A_AmbientLight =
+    val lightRef = buf.getInt()
+    val _flags = buf.getInt()
+    val regionCount = buf.getInt()
+    val regionIds = (0 until regionCount).map(_ => buf.getInt()).toArray
+    Fragment2A_AmbientLight(name, lightRef, regionIds)
+
+  private def parseFragment35(name: String): Fragment35_GlobalAmbientLight =
+    val color = buf.getInt()
+    val b = ((color >> 0) & 0xFF) / 255f
+    val g = ((color >> 8) & 0xFF) / 255f
+    val r = ((color >> 16) & 0xFF) / 255f
+    val a = ((color >> 24) & 0xFF) / 255f
+    Fragment35_GlobalAmbientLight(name, r, g, b, a)
 
   private def parseFragment03(name: String): Fragment03_BitmapName =
     val count = buf.getInt()
@@ -246,6 +311,68 @@ class WldFile(data: Array[Byte]):
       Vector3f(rotX, rotY, rotZ),
       Vector3f(scaleX, scaleY, scaleZ),
     )
+
+  private def parseFragment21(name: String): Fragment21_BspTree =
+    val nodeCount = buf.getInt()
+    val nodes = (0 until nodeCount).map { _ =>
+      val nx = buf.getFloat()
+      val ny = buf.getFloat()
+      val nz = buf.getFloat()
+      val dist = buf.getFloat()
+      val regionId = buf.getInt()
+      val left = buf.getInt()
+      val right = buf.getInt()
+      BspNode(nx, ny, nz, dist, regionId, left, right)
+    }.toArray
+    Fragment21_BspTree(name, nodes)
+
+  private def parseFragment22(name: String): Fragment22_BspRegion =
+    // Walk forward through struct_Data22 like azone2/wld.cpp Data22 handler.
+    // Fixed header: flags, fragment1, size1..size6 = 10 x int32 = 40 bytes
+    val flags = buf.getInt()
+    val _fragment1 = buf.getInt()
+    val size1 = buf.getInt()
+    val size2 = buf.getInt()
+    val _params1 = buf.getInt()
+    val size3 = buf.getInt()
+    val size4 = buf.getInt()
+    val _params2 = buf.getInt()
+    val size5 = buf.getInt()
+    val _size6 = buf.getInt()
+
+    // Skip variable-length arrays
+    buf.position(buf.position() + 12 * size1)  // array1: 12 bytes per entry
+    buf.position(buf.position() + 8 * size2)   // array2: 8 bytes per entry
+    // azone2 bails if size3 or size4 != 0; skip them if present
+    buf.position(buf.position() + size3 * 4)
+    buf.position(buf.position() + size4 * 4)
+    buf.position(buf.position() + size5 * 7 * 4)  // array5: 28 bytes per entry
+    // size6 data: uint16 length + that many bytes of RLE data
+    val d6size = java.lang.Short.toUnsignedInt(buf.getShort())
+    buf.position(buf.position() + d6size)
+
+    // Sphere: 4 floats (x, y, z, radius) immediately after the RLE data
+    val sx = buf.getFloat()
+    val sy = buf.getFloat()
+    val sz = buf.getFloat()
+    val sr = buf.getFloat()
+    Fragment22_BspRegion(name, flags, sx, sy, sz, sr)
+
+  private def parseFragment29(name: String): Fragment29_BspRegionType =
+    val _flags = buf.getInt()
+    val regionCount = buf.getInt()
+    val regionIndices = (0 until regionCount).map(_ => buf.getInt()).toArray
+    val stringSize = buf.getInt()
+    val regionString = if stringSize > 0 then
+      val encoded = new Array[Byte](stringSize)
+      buf.get(encoded)
+      val decoded = encoded.zipWithIndex.map { (b, i) => (b ^ XorKey(i % XorKey.length)).toByte }
+      val end = decoded.indexOf(0.toByte)
+      val len = if end < 0 then decoded.length else end
+      String(decoded, 0, len, "US-ASCII")
+    else name
+
+    Fragment29_BspRegionType(name, regionIndices, regionString)
 
   private def parseFragment2D(name: String): Fragment2D_MeshReference =
     val meshRef = buf.getInt()

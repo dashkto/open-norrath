@@ -6,6 +6,7 @@ enum GameAction:
   case MoveForward, MoveBackward, StrafeLeft, StrafeRight, MoveUp, MoveDown, Jump
   case FreeLook, Target
   case TargetSelf, TabTarget
+  case AutoAttack
   case ToggleInventory, ToggleSpellBook, DumpDebug, DetachCamera, Escape
 
 sealed trait InputBinding
@@ -27,6 +28,7 @@ object KeyBindings:
     GameAction.Target       -> Seq(MouseBind(GLFW_MOUSE_BUTTON_LEFT)),
     GameAction.TargetSelf      -> Seq(KeyBind(GLFW_KEY_F1)),
     GameAction.TabTarget       -> Seq(KeyBind(GLFW_KEY_TAB)),
+    GameAction.AutoAttack       -> Seq(KeyBind(GLFW_KEY_GRAVE_ACCENT)),
     GameAction.ToggleInventory -> Seq(KeyBind(GLFW_KEY_I)),
     GameAction.ToggleSpellBook -> Seq(KeyBind(GLFW_KEY_B)),
     GameAction.DumpDebug    -> Seq(KeyBind(GLFW_KEY_T)),

@@ -132,9 +132,6 @@ object WorldCodec:
             face = faces(i),
             equipment = merged,
           )
-          val nonZeroEquip = info.equipment.zipWithIndex.filter(_._1 != 0).map((v, s) => s"s$s=$v").mkString(",")
-          if nonZeroEquip.nonEmpty then
-            println(s"[CharSelect] ${info.name}: equip[$nonZeroEquip]")
           chars += info
     catch
       case e: Exception =>
@@ -155,9 +152,9 @@ object WorldCodec:
       Some(ZoneAddress(ip, port))
 
   /** Encode OP_ApproveName.
-    * NameApproval_Struct (78 bytes):
-    *   name[64] + race(u16) + unknown(u16) + class(u16) + unknown(u32×2)
-    * Server: app->Size() = opcode(2) + payload. Check: Size() == 78 → payload = 76.
+    * NameApproval_Struct: name[64] + race(u16) + unknown066(u16) + class_(u16) + unknown070(u32×2)
+    * Server checks app->Size() == sizeof(NameApproval_Struct) where Size() = payload + 2 (opcode).
+    * sizeof(NameApproval_Struct) = 78, so payload must be 76.
     */
   def encodeApproveName(name: String, race: Int, classId: Int): Array[Byte] =
     val buf = ByteBuffer.allocate(76).order(ByteOrder.LITTLE_ENDIAN)
@@ -168,7 +165,8 @@ object WorldCodec:
     buf.putShort((race & 0xFFFF).toShort)
     buf.putShort(0.toShort) // unknown066
     buf.putShort((classId & 0xFFFF).toShort)
-    buf.putInt(0) // unknown070
+    buf.putInt(0) // unknown070[0]
+    // unknown070[1] covered by remaining zero-initialized bytes
     buf.array()
 
   /** Decode OP_ApproveName reply (1 byte): 1=approved, 0=rejected. */

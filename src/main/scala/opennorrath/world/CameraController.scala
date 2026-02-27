@@ -71,11 +71,9 @@ class CameraController(window: Long, screenW: Int, screenH: Int):
       pitch = -5f,
       speed = 100f,
     )
-    // Sync initial position/heading to PlayerCharacter (model-origin space)
-    val hdeg = { val h = -startYaw % 360f; if h < 0 then h + 360f else h }
+    // Sync initial position to ZoneCharacter (model-origin space)
     player.foreach { pc =>
-      pc.position.set(footPos.x, footPos.y + pc.feetOffset, footPos.z)
-      pc.headingDeg = hdeg
+      pc.zoneChar.foreach(zc => zc.position.set(footPos.x, footPos.y + pc.feetOffset, footPos.z))
     }
     println(s"Camera: pos=$eyePos yaw=$startYaw attached=$attached")
 
@@ -104,6 +102,12 @@ class CameraController(window: Long, screenW: Int, screenH: Int):
         zoomDist = Math.max(MinZoom, Math.min(MaxZoom, zoomDist - scroll * ZoomStep)).toFloat
 
     if attached then
+      // Sync from ZoneCharacter (model-origin space → feet-level for camera)
+      player.foreach { pc =>
+        pc.zoneChar.foreach { zc =>
+          playerPos.set(zc.position.x, zc.position.y - pc.feetOffset, zc.position.z)
+        }
+      }
       playerMoving = false
       if !ImGui.getIO().getWantCaptureKeyboard() then
         // Horizontal movement along camera yaw direction
@@ -121,17 +125,17 @@ class CameraController(window: Long, screenW: Int, screenH: Int):
         if input.isActionHeld(GameAction.StrafeRight) then
           dx -= frontZ * velocity; dz += frontX * velocity
         if dx != 0f || dz != 0f then
-          playerPos.x += dx
-          playerPos.z += dz
-          playerMoving = true
+          player match
+            case Some(pc) =>
+              playerMoving = pc.tryMove(playerPos, dx, dz)
+            case None =>
+              playerPos.x += dx
+              playerPos.z += dz
+              playerMoving = true
         if input.isActionPressed(GameAction.Jump) then
           player.foreach(_.jump())
-      // Gravity — delegated to PlayerCharacter (which works in model-origin space)
-      player.foreach { pc =>
-        pc.position.set(playerPos.x, playerPos.y + pc.feetOffset, playerPos.z)
-        pc.applyGravity(dt)
-        playerPos.y = pc.position.y - pc.feetOffset  // back to feet
-      }
+      // Gravity (feet-level space)
+      player.foreach(_.applyGravity(playerPos, dt))
 
       // Position camera: at eye height above feet, pulled back by zoomDist along camera yaw
       val eyeY = playerPos.y + eyeHeight
@@ -167,11 +171,15 @@ class CameraController(window: Long, screenW: Int, screenH: Int):
               camera.position.set(desiredX, desiredY, desiredZ)
           case None =>
             camera.position.set(desiredX, desiredY, desiredZ)
-      // Sync state to PlayerCharacter (model-origin space)
+      // Sync state to ZoneCharacter (feet-level → model-origin space)
       player.foreach { pc =>
-        pc.position.set(playerPos.x, playerPos.y + pc.feetOffset, playerPos.z)
-        pc.headingDeg = playerHeadingDeg
-        pc.moving = playerMoving
+        pc.zoneChar.foreach { zc =>
+          zc.position.set(playerPos.x, playerPos.y + pc.feetOffset, playerPos.z)
+          zc.heading = playerHeading
+          zc.moving = playerMoving
+          zc.airborne = pc.airborne
+          zc.speed = if playerMoving then pc.runSpeed else 0f
+        }
       }
     else if !ImGui.getIO().getWantCaptureKeyboard() then
       camera.processMovement(input, dt)

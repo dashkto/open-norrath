@@ -79,9 +79,11 @@ object ZoneCodec:
     buf.put(0.toByte) // null terminator
     buf.array()
 
-  /** OP_AutoAttack: single byte, 0=off, 1=on. */
+  /** OP_AutoAttack: uint32 (4 bytes), 0=off, 1=on. */
   def encodeAutoAttack(enabled: Boolean): Array[Byte] =
-    Array(if enabled then 1.toByte else 0.toByte)
+    val buf = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN)
+    buf.putInt(if enabled then 1 else 0)
+    buf.array()
 
   /** OP_MoveItem: MoveItem_Struct (12 bytes) — 3x uint32: from_slot, to_slot, number_in_stack. */
   def encodeMoveItem(fromSlot: Int, toSlot: Int, stackCount: Int): Array[Byte] =
@@ -925,6 +927,19 @@ object ZoneCodec:
     buf.getShort() // unknown
     val zcSuccess = buf.get().toInt
     Some(ZoneChangeResult(zcName, zcZoneId, zcReason, zcSuccess))
+
+  /** Encode OP_ZoneChange: ZoneChange_Struct (76 bytes).
+    * Client sends this in response to OP_RequestClientZoneChange.
+    */
+  def encodeZoneChange(charName: String, zoneId: Int): Array[Byte] =
+    val buf = ByteBuffer.allocate(76).order(ByteOrder.LITTLE_ENDIAN)
+    val nameBytes = charName.getBytes(StandardCharsets.US_ASCII)
+    val nameBuf = new Array[Byte](64)
+    System.arraycopy(nameBytes, 0, nameBuf, 0, Math.min(nameBytes.length, 63))
+    buf.put(nameBuf)
+    buf.putShort((zoneId & 0xFFFF).toShort)
+    // reason, unknown, unknown, success — all zero
+    buf.array()
 
   /** Decode OP_RequestClientZoneChange (24 bytes). */
   def decodeRequestClientZoneChange(data: Array[Byte]): Option[ZoneChangeRequest] =

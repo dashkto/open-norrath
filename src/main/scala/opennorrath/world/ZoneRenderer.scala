@@ -6,8 +6,11 @@ import opennorrath.archive.{PfsArchive, PfsEntry}
 import opennorrath.render.{Mesh, Shader, Texture}
 import opennorrath.wld.*
 import org.joml.{Matrix4f, Vector3f}
+import org.lwjgl.BufferUtils
 import org.lwjgl.opengl.GL11.*
-import org.lwjgl.opengl.GL20.glVertexAttrib3f
+import org.lwjgl.opengl.GL15.*
+import org.lwjgl.opengl.GL20.{glEnableVertexAttribArray, glVertexAttrib3f, glVertexAttribPointer}
+import org.lwjgl.opengl.GL30.{glBindVertexArray, glDeleteVertexArrays, glGenVertexArrays}
 import java.nio.file.{Path, Files}
 
 class ZoneRenderer(s3dPath: String, settings: Settings = Settings()):
@@ -19,6 +22,7 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings()):
   private val wld = WldFile(zoneWld.data)
   private val zoneMesh = ZoneGeometry.extract(wld)
   val collision = ZoneCollision(zoneMesh)
+  val zoneLineBsp: ZoneLineBsp = ZoneGeometry.extractZoneLineBsp(wld)
 
   // Load line lights from companion .txt file
   private val lights: List[LightBaker.LineLight] =
@@ -64,7 +68,10 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings()):
   // Live spawn characters — managed by addSpawn/removeSpawn/updateSpawnPosition
   private case class SpawnInstance(char: AnimatedCharacter, build: ZoneRenderer.CharBuild, size: Float, var moving: Boolean = false,
     var textureOverrides: Map[String, String] = Map.empty,
-    var weaponPrimary: Int = 0, var weaponSecondary: Int = 0)
+    var weaponPrimary: Int = 0, var weaponSecondary: Int = 0,
+    flying: Boolean = false):
+    /** Flying creatures hover above their server position by half their model height. */
+    val flyOffset: Float = if flying then build.glHeight * size * 0.5f else 0f
   private val _spawnCharacters = scala.collection.mutable.Map[Int, SpawnInstance]()
 
   /** Return (spawnId, modelMatrix, headHeight) for each live spawn — used for nameplates. */
@@ -79,16 +86,18 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings()):
     }
 
   /** Create a spawn character from a CharBuild template. Returns false if model not found. */
-  def addSpawn(spawnId: Int, modelCode: String, position: Vector3f, heading: Int, size: Float): Boolean =
+  def addSpawn(spawnId: Int, modelCode: String, position: Vector3f, heading: Int, size: Float, flying: Boolean = false): Boolean =
     characterBuilds.get(modelCode) match
       case None => false
       case Some(build) =>
         val interleaved = ZoneRenderer.buildInterleaved(build.zm)
         val glMesh = Mesh(interleaved, build.zm.indices, dynamic = build.clips.nonEmpty)
         val effectiveSize = if size > 0f then size / 6f else 1f
-        val modelMatrix = buildSpawnMatrix(build, position, heading, effectiveSize)
+        val inst = SpawnInstance(null, build, effectiveSize, flying = flying)
+        val flyPos = if inst.flyOffset != 0f then Vector3f(position.x, position.y + inst.flyOffset, position.z) else position
+        val modelMatrix = buildSpawnMatrix(build, flyPos, heading, effectiveSize)
         val char = AnimatedCharacter(build.skeleton, build.meshFragments, build.zm, glMesh, modelMatrix, build.clips, interleaved.clone(), build.attachBoneIndices)
-        _spawnCharacters(spawnId) = SpawnInstance(char, build, effectiveSize)
+        _spawnCharacters(spawnId) = inst.copy(char = char)
         true
 
   /** Get the vertical offset from model origin to feet for a given model code and size.
@@ -106,10 +115,14 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings()):
   def removeSpawn(spawnId: Int): Unit =
     _spawnCharacters.remove(spawnId).foreach(_.char.glMesh.cleanup())
 
-  /** Update a spawn's position and heading. */
+  /** Update a spawn's position (feet-level GL space) and heading. */
   def updateSpawnPosition(spawnId: Int, position: Vector3f, heading: Int): Unit =
     _spawnCharacters.get(spawnId).foreach { inst =>
-      buildSpawnMatrix(inst.build, position, heading, inst.size, inst.char.modelMatrix)
+      if inst.flyOffset != 0f then
+        val flyPos = Vector3f(position.x, position.y + inst.flyOffset, position.z)
+        buildSpawnMatrix(inst.build, flyPos, heading, inst.size, inst.char.modelMatrix)
+      else
+        buildSpawnMatrix(inst.build, position, heading, inst.size, inst.char.modelMatrix)
     }
 
   /** Switch a spawn's animation based on movement state. */
@@ -260,7 +273,6 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings()):
     case _ => ()
 
   private val equipMatrix = Matrix4f() // reusable scratch matrix for equipment positioning
-  private val debuggedEquipModels = scala.collection.mutable.Set[String]() // one-time debug per model
 
   private val eqToGl = ZoneRenderer.eqToGl
   private val glToEq = ZoneRenderer.glToEq
@@ -282,18 +294,6 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings()):
     equipmentModels.get(weaponId).foreach { equip =>
       val attachKey = findAttachKey(inst, suffixTarget)
       attachKey.flatMap(inst.char.attachmentTransform).foreach { boneTransform =>
-        // Debug: one-time print per model+suffix+weapon combo
-        val debugKey = s"${inst.build.key}/$suffixTarget/$weaponId"
-        if opaquePass && !debuggedEquipModels.contains(debugKey) then
-          debuggedEquipModels.add(debugKey)
-          val tx = boneTransform.m30(); val ty = boneTransform.m31(); val tz = boneTransform.m32()
-          val hasRoot = equip.rootBoneTransform.isDefined
-          val rootInfo = equip.rootBoneTransform.map(r => f" rootBone=(${r.m30()}%.2f,${r.m31()}%.2f,${r.m32()}%.2f)").getOrElse("")
-          val c = equip.meshCenter
-          val centerInfo = if c.x != 0f || c.y != 0f || c.z != 0f then f" center=(${c.x}%.2f,${c.y}%.2f,${c.z}%.2f)" else ""
-          val shieldTag = if equip.isShield then " SHIELD" else ""
-          println(f"  [Equip] ${inst.build.key} bone=${attachKey.getOrElse("?")} IT$weaponId: bonePos=($tx%.2f,$ty%.2f,$tz%.2f)$rootInfo$centerInfo hasSkel=$hasRoot$shieldTag")
-
         ZoneRenderer.composeEquipmentMatrix(equipMatrix, inst.char.modelMatrix, boneTransform, equip)
         shader.setMatrix4f("model", equipMatrix)
         for group <- equip.zm.groups do
@@ -397,6 +397,71 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings()):
       ps.draw(shader)
     }
 
+  // --- Zone line sphere debug rendering ---
+  private var sphereVao = 0
+  private var sphereVbo = 0
+  private var sphereVertexCount = 0
+  private var sphereInited = false
+
+  private def initZoneLineSpheres(): Unit =
+    if zoneLineBsp.spheres.isEmpty then return
+    val Segments = 24
+    // Each sphere: 3 filled discs (triangle fans as GL_TRIANGLES), Segments triangles × 3 verts each
+    val vertsPerSphere = Segments * 3 * 3
+    val totalVerts = zoneLineBsp.spheres.size * vertsPerSphere
+    val buf = BufferUtils.createFloatBuffer(totalVerts * 3)
+
+    for s <- zoneLineBsp.spheres do
+      val (cx, cy, cz) = EqCoords.s3dToGl(s.cx, s.cy, s.cz)
+      val r = s.radius
+      for i <- 0 until Segments do
+        val a0 = (2 * Math.PI * i / Segments).toFloat
+        val a1 = (2 * Math.PI * ((i + 1) % Segments) / Segments).toFloat
+        // Horizontal disc (XZ plane)
+        buf.put(cx).put(cy).put(cz)
+        buf.put(cx + r * Math.cos(a0).toFloat).put(cy).put(cz + r * Math.sin(a0).toFloat)
+        buf.put(cx + r * Math.cos(a1).toFloat).put(cy).put(cz + r * Math.sin(a1).toFloat)
+        // Vertical disc (XY plane)
+        buf.put(cx).put(cy).put(cz)
+        buf.put(cx + r * Math.cos(a0).toFloat).put(cy + r * Math.sin(a0).toFloat).put(cz)
+        buf.put(cx + r * Math.cos(a1).toFloat).put(cy + r * Math.sin(a1).toFloat).put(cz)
+        // Vertical disc (YZ plane)
+        buf.put(cx).put(cy).put(cz)
+        buf.put(cx).put(cy + r * Math.sin(a0).toFloat).put(cz + r * Math.cos(a0).toFloat)
+        buf.put(cx).put(cy + r * Math.sin(a1).toFloat).put(cz + r * Math.cos(a1).toFloat)
+    buf.flip()
+    sphereVertexCount = totalVerts
+
+    sphereVao = glGenVertexArrays()
+    sphereVbo = glGenBuffers()
+    glBindVertexArray(sphereVao)
+    glBindBuffer(GL_ARRAY_BUFFER, sphereVbo)
+    glBufferData(GL_ARRAY_BUFFER, buf, GL_STATIC_DRAW)
+    glVertexAttribPointer(0, 3, GL_FLOAT, false, 3 * 4, 0)
+    glEnableVertexAttribArray(0)
+    glBindVertexArray(0)
+    sphereInited = true
+
+  def drawZoneLineSpheres(shader: Shader): Unit =
+    if !sphereInited then initZoneLineSpheres()
+    if sphereVertexCount == 0 then return
+
+    glEnable(GL_BLEND)
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+    glDepthMask(false)
+    shader.setMatrix4f("model", Matrix4f())
+    glVertexAttrib3f(2, 0.4f, 0.7f, 1f)  // light blue
+    shader.setFloat("alphaMultiplier", 0.4f)
+
+    glBindVertexArray(sphereVao)
+    glDrawArrays(GL_TRIANGLES, 0, sphereVertexCount)
+    glBindVertexArray(0)
+
+    shader.setFloat("alphaMultiplier", 1.0f)
+    glVertexAttrib3f(2, 1f, 1f, 1f)
+    glDepthMask(true)
+    glDisable(GL_BLEND)
+
   def cleanup(): Unit =
     mesh.cleanup()
     objectInstances.foreach(_.glMesh.cleanup())
@@ -404,6 +469,9 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings()):
     _spawnCharacters.clear()
     equipmentModels.values.foreach(_.glMesh.cleanup())
     particleSystem.foreach(_.cleanup())
+    if sphereInited then
+      glDeleteBuffers(sphereVbo)
+      glDeleteVertexArrays(sphereVao)
     textureMap.values.foreach(glDeleteTextures(_))
     glDeleteTextures(fallbackTexture)
 
@@ -808,11 +876,6 @@ object ZoneRenderer:
                       val maxExt = math.max(extX, math.max(extY, extZ))
                       val minExt = math.min(extX, math.min(extY, extZ))
                       isShield = maxExt > 0f && minExt / maxExt < 0.25f && center.length() < 0.5f && rootBoneXform.isEmpty
-                    val skelInfo = rootBoneXform.map { r =>
-                      f" skel rootBone=(${r.m30()}%.2f,${r.m31()}%.2f,${r.m32()}%.2f)"
-                    }.getOrElse(" noSkel")
-                    val shieldTag = if isShield then " SHIELD" else ""
-                    println(f"    IT$itNum: ${meshFragments.size} meshes, center=(${cx}%.2f,${cy}%.2f,${cz}%.2f)$skelInfo$shieldTag")
                     val interleaved = buildInterleaved(zm)
                     val glMesh = Mesh(interleaved, zm.indices)
                     models(itNum) = EquipModel(zm, glMesh, rootBoneXform, center, isShield)

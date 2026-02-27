@@ -1,7 +1,5 @@
 package opennorrath.ui
 
-import org.joml.Vector3f
-
 import opennorrath.{Game, GameAction, InputManager}
 import opennorrath.network.ZoneEvent
 import opennorrath.screen.GameContext
@@ -26,7 +24,12 @@ class ZoneHud(ctx: GameContext, characters: scala.collection.Map[Int, ZoneCharac
 
   val spawnRemovedListener: ZoneEvent => Unit =
     case ZoneEvent.SpawnRemoved(id) =>
-      if targetPanel.target.exists(_.spawnId == id) then targetPanel.target = None
+      if targetPanel.target.exists(_.spawnId == id) then
+        targetPanel.target = None
+        disableAutoAttack()
+    case ZoneEvent.EntityDied(info) =>
+      if targetPanel.target.exists(_.spawnId == info.spawnId) then
+        disableAutoAttack()
     case _ => ()
 
   val groupListener: ZoneEvent => Unit =
@@ -51,29 +54,11 @@ class ZoneHud(ctx: GameContext, characters: scala.collection.Map[Int, ZoneCharac
       }
     }
 
-  /** A ZoneCharacter proxy for the local player, used for self-targeting. */
-  private val selfCharacter: Option[ZoneCharacter] = Game.player.map { pc =>
-    val myId = Game.zoneSession.map(_.client.mySpawnId).getOrElse(0)
-    ZoneCharacter(
-      spawnId = myId,
-      name = pc.name,
-      lastName = "",
-      race = pc.race,
-      classId = pc.classId,
-      gender = 0,
-      level = pc.level,
-      npcType = 0,
-      modelCode = "",
-      size = 1f,
-      position = Vector3f(),
-      heading = 0,
-      curHp = pc.currentHp,
-      maxHp = pc.maxHp,
-    )
-  }
+  /** The player's ZoneCharacter, used for self-targeting. */
+  private def selfCharacter: Option[ZoneCharacter] = Game.player.flatMap(_.zoneChar)
 
   def update(input: InputManager): Unit =
-    // Keep self-target HP in sync
+    // Keep self-target HP/level in sync (PC is source of truth for stats)
     selfCharacter.foreach { sc =>
       Game.player.foreach { pc =>
         sc.curHp = pc.currentHp
@@ -85,17 +70,43 @@ class ZoneHud(ctx: GameContext, characters: scala.collection.Map[Int, ZoneCharac
     if input.isActionPressed(GameAction.Escape) then
       if targetPanel.target.isDefined then
         targetPanel.target = None
+        disableAutoAttack()
       else
         escapeMenu.toggle()
 
     if !escapeMenu.isOpen then
       if !imgui.ImGui.getIO().getWantCaptureKeyboard() then
         if input.isActionPressed(GameAction.TargetSelf) then
-          selfCharacter.foreach(sc => targetPanel.target = Some(sc))
+          setTarget(selfCharacter)
+        if input.isActionPressed(GameAction.AutoAttack) then
+          toggleAutoAttack()
         if input.isActionPressed(GameAction.ToggleInventory) then
           inventoryPanel.toggle()
         if input.isActionPressed(GameAction.ToggleSpellBook) then
           spellBookPanel.foreach(_.toggle())
+
+  /** Update target and notify server. */
+  def setTarget(zc: Option[ZoneCharacter]): Unit =
+    targetPanel.target = zc
+    Game.zoneSession.foreach { session =>
+      session.client.target(zc.map(_.spawnId).getOrElse(0))
+    }
+
+  private def toggleAutoAttack(): Unit =
+    Game.player.foreach { pc =>
+      if pc.autoAttacking then
+        disableAutoAttack()
+      else if targetPanel.target.isDefined then
+        pc.autoAttacking = true
+        Game.zoneSession.foreach(_.client.autoAttack(true))
+    }
+
+  private def disableAutoAttack(): Unit =
+    Game.player.foreach { pc =>
+      if pc.autoAttacking then
+        pc.autoAttacking = false
+        Game.zoneSession.foreach(_.client.autoAttack(false))
+    }
 
   def render(): Unit =
     charInfoPanel.foreach(_.render())
