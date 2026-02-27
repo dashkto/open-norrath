@@ -3,7 +3,7 @@ package opennorrath.state
 import org.joml.Vector3f
 import opennorrath.Game
 import opennorrath.animation.AnimCode
-import opennorrath.network.{PlayerProfileData, SpellBuff, ZoneEvent}
+import opennorrath.network.{InventoryItem, PlayerProfileData, SpellBuff, ZoneEvent}
 import opennorrath.world.{Physics, ZoneCollision}
 
 /** Runtime state for the player's character while in a zone.
@@ -137,9 +137,8 @@ class PlayerCharacter(
         pos.x += dx; pos.z += dz
         dx != 0f || dz != 0f
       case Some(col) =>
-        val feetY = pos.y - feetOffset
-        // Probe at two heights: knee (~30% up) and chest (~70% up)
-        val heights = Array(feetY + modelHeight * 0.3f, feetY + modelHeight * 0.7f)
+        // pos.y is feet-level; probe at knee (~30%) and chest (~70%) above feet
+        val heights = Array(pos.y + modelHeight * 0.3f, pos.y + modelHeight * 0.7f)
         var movedX = dx
         var movedZ = dz
         // Test X axis
@@ -180,8 +179,8 @@ class PlayerCharacter(
     */
   def applyGravity(pos: Vector3f, dt: Float): Unit =
     collision.foreach { col =>
-      val feetY = pos.y - feetOffset
-      val py = feetY + ProbeUp
+      // pos.y is feet-level — probe starts slightly above feet
+      val py = pos.y + ProbeUp
       // Cast center + 4 corner rays, take the highest ground hit
       var bestGroundY = Float.MinValue
       var hits = 0
@@ -213,11 +212,10 @@ class PlayerCharacter(
       fallSpeed = Math.min(fallSpeed + Physics.Gravity * dt, Physics.MaxFallSpeed)
       pos.y -= fallSpeed * dt
 
-      val newFeetY = pos.y - feetOffset
       if hits > 0 then
-        if newFeetY <= bestGroundY then
+        if pos.y <= bestGroundY then
           // Landed on ground
-          pos.y = bestGroundY + feetOffset
+          pos.y = bestGroundY
           fallSpeed = 0f
           onGround = true
         else
@@ -225,6 +223,19 @@ class PlayerCharacter(
       else
         onGround = false
     }
+
+  // Hunger/thirst — tracked from OP_Stamina and player profile.
+  // Server decrements by 32 every ~46 seconds. Below 3000 = hungry/thirsty, at 0 = famished.
+  var hungerLevel: Int = 6000
+  var thirstLevel: Int = 6000
+
+  /** Callback for system messages (e.g., auto-eat). Set by ZoneHud to write to chat panel. */
+  var onSystemMessage: String => Unit = _ => ()
+
+  /** All inventory items including bag contents (slots 250+).
+    * Used by auto-consume to find food/drink in bags.
+    */
+  var allItems: Vector[InventoryItem] = Vector.empty
 
   val inventory: Inventory = Inventory()
 
@@ -239,6 +250,55 @@ class PlayerCharacter(
     for (buff, i) <- initial.zipWithIndex do
       buffs(i) = buff
 
+  // Item type constants from EQEmu's item_data.h
+  private val ItemTypeFood  = 14
+  private val ItemTypeDrink = 15
+  // Consume_Struct type field (different from ItemType)
+  private val ConsumeFood  = 1
+  private val ConsumeDrink = 2
+  // Server auto-eat threshold: below 3000 = hungry/thirsty
+  private val HungryThreshold = 3000
+
+  /** Find first food or drink item in inventory (general slots + bags).
+    * @param wantType ItemTypeFood (14) or ItemTypeDrink (15)
+    */
+  private def findConsumable(wantType: Int): Option[InventoryItem] =
+    allItems.find(_.itemType == wantType)
+
+  /** Decrement an item's charges by 1, removing it entirely if depleted. */
+  private def decrementItem(item: InventoryItem): Unit =
+    if item.charges <= 1 then
+      // Last charge — remove from inventory
+      allItems = allItems.filterNot(_.equipSlot == item.equipSlot)
+      inventory.swap(item.equipSlot, -1)
+    else
+      // Decrement stack count
+      val updated = item.copy(charges = item.charges - 1)
+      allItems = allItems.filterNot(_.equipSlot == item.equipSlot) :+ updated
+      inventory.update(updated)
+
+  /** Auto-consume food/drink when hungry/thirsty.
+    * Called when the server sends a stamina update. The original Mac EQ client
+    * auto-consumed from inventory whenever hunger or thirst dropped below 3000.
+    */
+  private def autoConsume(): Unit =
+    Game.zoneSession.foreach { session =>
+      if hungerLevel < HungryThreshold then
+        findConsumable(ItemTypeFood).foreach { food =>
+          println(s"[AutoEat] Eating '${food.name}' from slot ${food.equipSlot} (hunger=$hungerLevel)")
+          session.client.sendConsume(food.equipSlot, ConsumeFood)
+          onSystemMessage(s"You ate a ${food.name}.")
+          decrementItem(food)
+        }
+      if thirstLevel < HungryThreshold then
+        findConsumable(ItemTypeDrink).foreach { drink =>
+          println(s"[AutoEat] Drinking '${drink.name}' from slot ${drink.equipSlot} (thirst=$thirstLevel)")
+          session.client.sendConsume(drink.equipSlot, ConsumeDrink)
+          onSystemMessage(s"You drank a ${drink.name}.")
+          decrementItem(drink)
+        }
+    }
+
   /** ZoneClient event listener — handles stat and inventory updates. */
   val listener: ZoneEvent => Unit = {
     case ZoneEvent.LevelChanged(lvl) =>
@@ -250,11 +310,26 @@ class PlayerCharacter(
       currentMana = mana.curMana
     case ZoneEvent.ExpChanged(e) =>
       exp = e.exp
+    case ZoneEvent.StaminaChanged(sta) =>
+      hungerLevel = sta.food
+      thirstLevel = sta.water
+      autoConsume()
     case ZoneEvent.InventoryLoaded(items) =>
+      allItems = items
       inventory.load(items)
     case ZoneEvent.InventoryItemUpdated(item) =>
+      allItems = allItems.filterNot(_.equipSlot == item.equipSlot) :+ item
       inventory.update(item)
     case ZoneEvent.InventoryMoved(from, to) =>
+      // Update allItems tracking
+      if to == -1 || to == 0xFFFFFFFF then
+        allItems = allItems.filterNot(_.equipSlot == from)
+      else
+        val fromItem = allItems.find(_.equipSlot == from)
+        val toItem = allItems.find(_.equipSlot == to)
+        allItems = allItems.filterNot(i => i.equipSlot == from || i.equipSlot == to)
+        fromItem.foreach(i => allItems = allItems :+ i.copy(equipSlot = to))
+        toItem.foreach(i => allItems = allItems :+ i.copy(equipSlot = from))
       inventory.swap(from, to)
     case ZoneEvent.BuffsLoaded(initial) =>
       loadBuffs(initial)
@@ -274,6 +349,8 @@ object PlayerCharacter:
       platinum = pp.platinum, gold = pp.gold, silver = pp.silver, copper = pp.copper,
       exp = pp.exp,
     )
+    pc.hungerLevel = pp.hungerLevel
+    pc.thirstLevel = pp.thirstLevel
     pc.loadBuffs(pp.buffs)
     pc.spellBook ++= pp.spellBook
     pc

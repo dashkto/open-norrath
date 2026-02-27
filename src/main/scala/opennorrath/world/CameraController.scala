@@ -140,10 +140,17 @@ class CameraController(window: Long, screenW: Int, screenH: Int):
         pc.moving = moved
       }
 
-      // Position camera: at eye height above feet, pulled back by zoomDist along camera yaw
+      // Position camera: at eye height above feet, pushed forward to avoid head clipping,
+      // then pulled back by zoomDist along camera yaw for third-person
       val eyeY = pos.y + eyeHeight
+      val ForwardOffset = 2.0f  // push camera forward to clear the character model
       if zoomDist <= 0f then
-        camera.position.set(pos.x, eyeY, pos.z)
+        val yawRad1 = Math.toRadians(camera.yaw).toFloat
+        camera.position.set(
+          pos.x + Math.cos(yawRad1).toFloat * ForwardOffset,
+          eyeY,
+          pos.z + Math.sin(yawRad1).toFloat * ForwardOffset,
+        )
       else
         val yawRad2 = Math.toRadians(camera.yaw).toFloat
         val offX = -Math.cos(yawRad2).toFloat * zoomDist

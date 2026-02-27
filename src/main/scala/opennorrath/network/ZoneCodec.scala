@@ -123,6 +123,19 @@ object ZoneCodec:
   /** OP_Jump: empty payload — tells server the player jumped. */
   def encodeJump: Array[Byte] = Array.emptyByteArray
 
+  /** OP_Consume: Consume_Struct (16 bytes).
+    * Tells the server to eat/drink an item.
+    * @param slot      inventory slot of the food/drink item
+    * @param itemType  1=food, 2=water
+    */
+  def encodeConsume(slot: Int, itemType: Int): Array[Byte] =
+    val buf = ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN)
+    buf.putInt(slot)           // slot
+    buf.putInt(-1)             // auto_consumed = -1 (auto-eat)
+    buf.putInt(-1)             // c_unknown1
+    buf.putInt(itemType)       // type: 1=food, 2=water
+    buf.array()
+
   /** OP_SetServerFilter: 36 bytes of filter flags (all zeros = accept all). */
   def encodeServerFilter: Array[Byte] = new Array[Byte](36)
 
@@ -830,6 +843,18 @@ object ZoneCodec:
     val buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
     Some(SkillChange(buf.getInt(), buf.getInt()))
 
+  /** Decode OP_Stamina: Stamina_Struct (5 bytes).
+    * Server sends this every ~46 seconds as hunger/thirst tick down,
+    * and after consuming food/drink.
+    */
+  def decodeStamina(data: Array[Byte]): Option[StaminaInfo] =
+    if data.length < 5 then return None
+    val buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
+    val food = buf.getShort().toInt    // int16: hunger level (0–32000)
+    val water = buf.getShort().toInt   // int16: thirst level (0–32000)
+    val fatigue = buf.get() & 0xFF     // uint8: fatigue (0–100)
+    Some(StaminaInfo(food, water, fatigue))
+
   /** Decode OP_Buff: SpellBuffFade_Struct (12 bytes).
     * Returns (slotIndex, SpellBuff). */
   def decodeBuff(data: Array[Byte]): Option[(Int, SpellBuff)] =
@@ -1046,7 +1071,8 @@ object ZoneCodec:
     buf.position(base + 249)
     val delay = buf.get() & 0xFF          // 0249
     val damage = buf.get() & 0xFF         // 0250
-    buf.position(base + 254)
+    buf.position(base + 253)
+    val itemType = buf.get() & 0xFF       // 0253: ItemType (14=food, 15=drink)
     val magic = buf.get() & 0xFF          // 0254
 
     // Stackable at offset 0276 (inside common union)
@@ -1089,6 +1115,7 @@ object ZoneCodec:
       delay = if common then delay else 0,
       charges = charges,
       stackable = common && stackable == 1,
+      itemType = itemType,
       idFileNum = idFileNum,
     )
 

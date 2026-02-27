@@ -59,6 +59,7 @@ class ZoneHud(ctx: GameContext, characters: scala.collection.Map[Int, ZoneCharac
       eventHandler.submitChat(text)
     })
     eventHandler = ZoneEventHandler(chatPanel, characters, pc)
+    pc.foreach(_.onSystemMessage = msg => chatPanel.addLine(msg))
     Game.zoneSession.foreach { session =>
       session.client.addListener(eventHandler.listener)
       session.client.addListener(spawnRemovedListener)

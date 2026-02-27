@@ -52,6 +52,7 @@ enum ZoneEvent:
   case ExpChanged(update: ExpChange)
   case LevelChanged(update: LevelChange)
   case SkillChanged(update: SkillChange)
+  case StaminaChanged(update: StaminaInfo)
 
   // Chat — UI chat window
   case ChatReceived(msg: ChatMessage)
@@ -239,6 +240,13 @@ class ZoneClient extends PacketHandler:
   def sendJump(): Unit =
     queueAppPacket(ZoneOpcodes.Jump, ZoneCodec.encodeJump)
 
+  /** Consume food/drink. Called from game thread.
+    * @param slot      inventory slot of the item
+    * @param itemType  1=food, 2=water (Consume_Struct type field)
+    */
+  def sendConsume(slot: Int, itemType: Int): Unit =
+    queueAppPacket(ZoneOpcodes.Consume, ZoneCodec.encodeConsume(slot, itemType))
+
   // ===========================================================================
   // PacketHandler implementation — called from network thread
   // ===========================================================================
@@ -357,11 +365,15 @@ class ZoneClient extends PacketHandler:
             mySpawnId = change.parameter
             state = ZoneState.InZone
             emit(ZoneEvent.StateChanged(state))
-            // Send initial position to trigger server's CompleteConnect → ZoneSpawns
-            selfSpawn.foreach { s =>
-              sendPosition(PlayerPosition(spawnId = mySpawnId, y = s.y, x = s.x, z = s.z,
-                heading = s.heading.toFloat, deltaY = 0, deltaX = 0, deltaZ = 0, deltaHeading = 0, animation = 0))
-            }
+            // Send initial position to trigger server's CompleteConnect → client_data_loaded.
+            // Without this, the server stays in CLIENT_CONNECTING and regen/aggro/etc won't run.
+            selfSpawn match
+              case Some(s) =>
+                println(s"[Zone] Sending initial OP_ClientUpdate (spawnId=$mySpawnId) to trigger CompleteConnect")
+                sendPosition(PlayerPosition(spawnId = mySpawnId, y = s.y, x = s.x, z = s.z,
+                  heading = s.heading.toFloat, deltaY = 0, deltaX = 0, deltaZ = 0, deltaHeading = 0, animation = 0))
+              case None =>
+                println("[Zone] WARNING: selfSpawn is None — cannot send initial OP_ClientUpdate, server will not CompleteConnect!")
           emit(ZoneEvent.AppearanceChanged(change))
         }
 
@@ -471,7 +483,8 @@ class ZoneClient extends PacketHandler:
            ZoneOpcodes.SummonedItem | ZoneOpcodes.ContainerPacket | ZoneOpcodes.BookPacket =>
         handleItemPacket(pkt.opcode, pkt.payload)
 
-      case ZoneOpcodes.Stamina => ()
+      case ZoneOpcodes.Stamina =>
+        ZoneCodec.decodeStamina(pkt.payload).foreach(s => emit(ZoneEvent.StaminaChanged(s)))
 
       case ZoneOpcodes.SendExpZonein =>
         if state == ZoneState.RequestingSpawns then

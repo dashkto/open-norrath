@@ -387,6 +387,13 @@ case class SkillChange(
   value: Int,
 )
 
+/** Stamina update from OP_Stamina. Server sends every ~46 seconds as hunger/thirst tick down. */
+case class StaminaInfo(
+  food: Int,      // Hunger level (0–32000, auto-eat threshold = 3000, famished = 0)
+  water: Int,     // Thirst level (0–32000, auto-drink threshold = 3000, famished = 0)
+  fatigue: Int,   // Fatigue level (0–100)
+)
+
 // =============================================================================
 // Chat — used by UI for chat window
 // =============================================================================
@@ -592,6 +599,7 @@ case class InventoryItem(
   delay: Int,
   charges: Int,
   stackable: Boolean,
+  itemType: Int = 0,       // EQ item type: 14=food, 15=drink (from ItemType field at offset 253)
   idFileNum: Int = 0,      // IT number from IDFile (e.g., "IT27" → 27) — used for weapon model lookup
 ):
   def stackCount: Int = if stackable && charges > 1 then charges else 0
