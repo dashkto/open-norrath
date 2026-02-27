@@ -3,7 +3,7 @@ package opennorrath
 import org.lwjgl.glfw.GLFW.*
 
 enum GameAction:
-  case MoveForward, MoveBackward, StrafeLeft, StrafeRight, MoveUp, MoveDown
+  case MoveForward, MoveBackward, StrafeLeft, StrafeRight, MoveUp, MoveDown, Jump
   case FreeLook, Target
   case TargetSelf, TabTarget
   case ToggleInventory, ToggleSpellBook, DumpDebug, DetachCamera, Escape
@@ -21,6 +21,7 @@ object KeyBindings:
     GameAction.StrafeLeft   -> Seq(KeyBind(GLFW_KEY_A)),
     GameAction.StrafeRight  -> Seq(KeyBind(GLFW_KEY_D)),
     GameAction.MoveUp       -> Seq(KeyBind(GLFW_KEY_SPACE)),
+    GameAction.Jump         -> Seq(KeyBind(GLFW_KEY_SPACE)),
     GameAction.MoveDown     -> Seq(KeyBind(GLFW_KEY_LEFT_SHIFT)),
     GameAction.FreeLook     -> Seq(MouseBind(GLFW_MOUSE_BUTTON_RIGHT)),
     GameAction.Target       -> Seq(MouseBind(GLFW_MOUSE_BUTTON_LEFT)),
@@ -84,6 +85,13 @@ class InputManager(window: Long, val keyBindings: KeyBindings = KeyBindings()):
     _mouseY = yPos.toFloat
   )
 
+  private var scrollStagingY: Float = 0f
+  private var _scrollY: Float = 0f
+
+  glfwSetScrollCallback(window, (_, _, yOffset) =>
+    scrollStagingY += yOffset.toFloat
+  )
+
   glfwSetMouseButtonCallback(window, (_, button, action, _) =>
     action match
       case GLFW_PRESS =>
@@ -109,6 +117,9 @@ class InputManager(window: Long, val keyBindings: KeyBindings = KeyBindings()):
     mouseStagingDX = 0f
     mouseStagingDY = 0f
 
+    _scrollY = scrollStagingY
+    scrollStagingY = 0f
+
     buttonsPressed.clear()
     buttonsPressed.addAll(buttonsPressedStaging)
     buttonsPressedStaging.clear()
@@ -120,6 +131,7 @@ class InputManager(window: Long, val keyBindings: KeyBindings = KeyBindings()):
   def isMousePressed(button: Int): Boolean = buttonsPressed.contains(button)
   def mousePos: (Float, Float) = (_mouseX, _mouseY)
   def mouseDelta: (Float, Float) = (mouseDX, mouseDY)
+  def scrollY: Float = _scrollY
 
   private def shiftHeld: Boolean =
     keysDown.contains(GLFW_KEY_LEFT_SHIFT) || keysDown.contains(GLFW_KEY_RIGHT_SHIFT)

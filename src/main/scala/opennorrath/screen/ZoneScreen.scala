@@ -10,10 +10,11 @@ import org.lwjgl.opengl.GL20.glVertexAttrib3f
 import imgui.ImGui
 
 import opennorrath.{Game, GameAction}
+import opennorrath.animation.AnimCode
 import opennorrath.render.Shader
 import opennorrath.state.ZoneCharacter
 import opennorrath.world.{CameraController, EqCoords, SpellEffectSystem, TargetingSystem, ZoneRenderer}
-import opennorrath.network.{PlayerPosition, PlayerProfileData, SpawnData, ZoneEvent}
+import opennorrath.network.{InventoryItem, PlayerPosition, PlayerProfileData, SpawnData, ZoneEvent}
 import opennorrath.ui.{NameplateRenderer, ZoneHud}
 
 class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData] = None, profile: Option[PlayerProfileData] = None) extends Screen:
@@ -31,6 +32,8 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
   private val PosUpdateInterval = 0.4f   // ~2.5Hz while moving
   private var lastSentHeading = -1f       // track heading changes for idle sends
   private val lastSentPos = Vector3f()    // track position changes
+  private var wasAirborne = false          // track airborne state for fall animation
+  private var jumpAnimTimer = 0f          // countdown for crouch animation on jump
 
   // --- Spawn rendering ---
 
@@ -49,15 +52,11 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
       zone.removeSpawn(id)
     case ZoneEvent.SpawnMoved(upd) =>
       val pos = EqCoords.serverToGl(upd.y, upd.x, upd.z)
+      val serverVel = EqCoords.serverToGl(upd.deltaY, upd.deltaX, upd.deltaZ)
       val isMoving = upd.animType != 0
       zoneCharacters.get(upd.spawnId).foreach { zc =>
-        zc.onServerPositionUpdate(pos, upd.heading, isMoving, upd.animType)
+        zc.onServerPositionUpdate(pos, serverVel, upd.heading, isMoving, upd.animType)
       }
-      // Only update rendered position if actually moving — MobUpdate uses short
-      // integers for x/y, so idle NPCs would snap from their float spawn position.
-      if isMoving then
-        zone.updateSpawnPosition(upd.spawnId, pos, upd.heading)
-      zone.updateSpawnAnimation(upd.spawnId, moving = isMoving, upd.animType)
     case ZoneEvent.HPChanged(hp) =>
       zoneCharacters.get(hp.spawnId).foreach { zc =>
         zc.curHp = hp.curHp
@@ -68,6 +67,24 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
         zc.updateEquipment(wc.wearSlot, wc.material, wc.color)
         zone.updateSpawnEquipment(wc.spawnId, zc.equipment, zc.bodyTexture)
       }
+    case ZoneEvent.InventoryMoved(from, to) =>
+      // When items move to/from weapon slots, update the player's visual equipment.
+      // Read from session.client.inventory (already updated before event dispatch),
+      // not pc.inventory (updated by pc.listener which runs after spawnListener).
+      val isPrimary = from == InventoryItem.Primary || to == InventoryItem.Primary
+      val isSecondary = from == InventoryItem.Secondary || to == InventoryItem.Secondary
+      if isPrimary || isSecondary then
+        Game.zoneSession.foreach { session =>
+          val myId = session.client.mySpawnId
+          zoneCharacters.get(myId).foreach { zc =>
+            val inv = session.client.inventory
+            if isPrimary then
+              zc.equipment(7) = inv.find(_.equipSlot == InventoryItem.Primary).map(_.idFileNum).getOrElse(0)
+            if isSecondary then
+              zc.equipment(8) = inv.find(_.equipSlot == InventoryItem.Secondary).map(_.idFileNum).getOrElse(0)
+            zone.updateSpawnEquipment(myId, zc.equipment, zc.bodyTexture)
+          }
+        }
     case _ => ()
 
   private val spellListener: ZoneEvent => Unit =
@@ -89,7 +106,8 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
     val hitboxes = zone.spawnHitData.map { case (id, mat, h, w, d) => id -> (mat, h, w, d) }.toMap
     val target = Vector3f()
 
-    val visible = zoneCharacters.toVector.flatMap { (id, zc) =>
+    val myId = Game.zoneSession.map(_.client.mySpawnId).getOrElse(-1)
+    val visible = zoneCharacters.toVector.filter(_._1 != myId).flatMap { (id, zc) =>
       val dx = zc.position.x - cam.x
       val dy = zc.position.y - cam.y
       val dz = zc.position.z - cam.z
@@ -152,6 +170,7 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
     zone = ZoneRenderer(zonePath, ctx.settings)
     camCtrl = CameraController(ctx.window, ctx.windowWidth, ctx.windowHeight)
     camCtrl.player = Game.player
+    Game.player.foreach(_.collision = Some(zone.collision))
     camCtrl.initFromSpawn(selfSpawn, profile)
     println(s"Loading zone: $zonePath")
 
@@ -173,6 +192,10 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
           zoneCharacters(myId) = playerZc
           if zone.addSpawn(myId, playerZc.modelCode, playerZc.position, playerZc.heading, playerZc.size) then
             zone.updateSpawnEquipment(myId, playerZc.equipment, playerZc.bodyTexture)
+          // Set feet offset and model height so gravity and camera scale with the model
+          val (fo, mh) = zone.modelMetrics(playerZc.modelCode, playerZc.size)
+          Game.player.foreach { pc => pc.feetOffset = fo; pc.modelHeight = mh }
+          println(f"  Player model ${playerZc.modelCode}: feetOffset=$fo%.2f modelHeight=$mh%.2f (size=${playerZc.size}%.1f)")
         }
       }
       println(s"  Loaded ${zoneCharacters.size} / ${zc.spawns.size} initial spawns")
@@ -198,10 +221,16 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
   override def update(dt: Float): Unit =
     Game.zoneSession.foreach(_.client.dispatchEvents())
 
-    // Client-side interpolation: advance moving spawns along their velocity
-    for zc <- zoneCharacters.values if zc.moving do
-      zc.interpolate(dt)
-      zone.updateSpawnPosition(zc.spawnId, zc.position, zc.facingHeading)
+    // Client-side interpolation and NPC animation
+    val myId = Game.zoneSession.map(_.client.mySpawnId).getOrElse(-1)
+    for (id, zc) <- zoneCharacters do
+      if id != myId then
+        // NPC: compute speed from velocity for walk/run threshold
+        zc.speed = Math.sqrt(zc.velocity.x * zc.velocity.x + zc.velocity.z * zc.velocity.z).toFloat
+        zc.interpolate(dt)
+        zone.updateSpawnPosition(zc.spawnId, zc.position, zc.facingHeading)
+        if zc.updateAnimation(dt) then
+          zone.playSpawnAnimation(id, zc.currentAnimCode)
 
     spellEffects.update(dt, camCtrl.viewMatrix, zoneCharacters)
 
@@ -210,12 +239,26 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
 
     camCtrl.update(ctx.input, dt)
 
-    // Update player model position/heading to match camera controller
+    // Update player model position/heading and animation
     if camCtrl.attached then
       Game.zoneSession.foreach { session =>
-        val myId = session.client.mySpawnId
-        zone.updateSpawnPosition(myId, camCtrl.playerPos, camCtrl.playerHeading)
-        zone.updateSpawnAnimation(myId, moving = camCtrl.playerMoving, animType = if camCtrl.playerMoving then 1 else 0)
+        val pid = session.client.mySpawnId
+        Game.player match
+          case Some(pc) => zone.updateSpawnPosition(pid, pc.position, camCtrl.playerHeading)
+          case None => zone.updateSpawnPosition(pid, camCtrl.playerPos, camCtrl.playerHeading)
+        // Sync player state into their ZoneCharacter for animation resolution
+        zoneCharacters.get(pid).foreach { zc =>
+          Game.player.foreach { pc =>
+            if pc.jumped then
+              pc.jumped = false
+              zc.playTimedAnimation(AnimCode.Crouch.code, 0.3f)
+            zc.airborne = pc.airborne
+          }
+          zc.moving = camCtrl.playerMoving
+          zc.speed = if camCtrl.playerMoving then 30f else 0f  // PlayerSpeed
+          if zc.updateAnimation(dt) then
+            zone.playSpawnAnimation(pid, zc.currentAnimCode)
+        }
       }
 
     // Send player position to server when attached — only if something changed

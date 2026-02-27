@@ -7,14 +7,31 @@ import org.joml.{Matrix4f, Quaternionf, Vector3f}
 
 /** Standard EQ 3-char animation codes. */
 enum AnimCode(val code: String):
-  case Idle    extends AnimCode("P01")
-  case Walk    extends AnimCode("L01")
-  case Run     extends AnimCode("L02")
-  case Passive extends AnimCode("P02")
-  case Sit     extends AnimCode("L05")
-  case Crouch  extends AnimCode("L06")
-  case Death   extends AnimCode("D01")
-  case Combat  extends AnimCode("C01")
+  // Passive / idle
+  case Idle       extends AnimCode("P01")
+  case Passive    extends AnimCode("P02")
+  case Fidget     extends AnimCode("P03")
+  case SwimIdle   extends AnimCode("P06")
+  // Locomotion
+  case Walk       extends AnimCode("L01")
+  case Run        extends AnimCode("L02")
+  case WalkBack   extends AnimCode("L03")
+  case Sit        extends AnimCode("L05")
+  case Crouch     extends AnimCode("L06")
+  case Fall       extends AnimCode("L09")
+  // Combat
+  case Attack1    extends AnimCode("C01")
+  case Attack2    extends AnimCode("C02")
+  case GetHit     extends AnimCode("C05")
+  case AttackOff  extends AnimCode("C09")
+  case AttackRng  extends AnimCode("C10")
+  // Death
+  case Death1     extends AnimCode("D01")
+  case Death2     extends AnimCode("D02")
+  case DeadLoop   extends AnimCode("D05")
+  // Other
+  case Social     extends AnimCode("O01")
+  case SpellCast  extends AnimCode("T06")
 
 case class AnimationClip(code: String, frameCount: Int, boneTrackDefs: Array[Fragment12_TrackDef])
 
@@ -26,11 +43,13 @@ class AnimatedCharacter(
     val modelMatrix: Matrix4f,
     val clips: Map[String, AnimationClip],
     private val interleavedBuffer: Array[Float], // mutable working buffer
+    val attachBoneIndices: Map[String, Int] = Map.empty, // bone suffix → index for _POINT bones
 ):
   private var currentClip: Option[AnimationClip] = selectDefaultClip()
   private var currentFrame: Int = 0
   private var frameTime: Float = 0f
   private val fps: Float = 15f // EQ animation speed
+  private var reverse: Boolean = false
 
   // Vertex-level interpolation: pre-compute vertices at frame boundaries,
   // then cheaply lerp positions each render frame.
@@ -38,13 +57,34 @@ class AnimatedCharacter(
   private val frameBVertices = interleavedBuffer.clone()
   private var needsInit = true
 
+  // Cross-fade transition between clips
+  private val TransitionDuration = 0.2f
+  private val transitionFromVertices = interleavedBuffer.clone()
+  private var transitionTime: Float = -1f // negative = no transition active
+
+  // Cached bone transforms for attachment point lookups (updated each frame)
+  private var cachedBoneTransforms: Array[Matrix4f] = null
+  private var transitionFromBoneTransforms: Array[Matrix4f] = null
+
   def clipNames: Seq[String] = clips.keys.toSeq.sorted
   def currentClipCode: String = currentClip.map(_.code).getOrElse("none")
 
-  def play(code: String): Unit =
+  /** World-space transform for a named attachment point (e.g., "R_POINT"). */
+  def attachmentTransform(suffix: String): Option[Matrix4f] =
+    if cachedBoneTransforms == null then return None
+    attachBoneIndices.get(suffix).map(idx => cachedBoneTransforms(idx))
+
+  def play(code: String, playReverse: Boolean = false): Unit =
     clips.get(code).foreach { clip =>
+      // Snapshot current pose for cross-fade (only if we already have a valid pose)
+      if currentClip.isDefined && transitionTime < 0f then
+        System.arraycopy(interleavedBuffer, 0, transitionFromVertices, 0, interleavedBuffer.length)
+        if cachedBoneTransforms != null then
+          transitionFromBoneTransforms = cachedBoneTransforms.map(m => Matrix4f(m))
+        transitionTime = 0f
       currentClip = Some(clip)
-      currentFrame = 0
+      reverse = playReverse
+      currentFrame = if playReverse then clip.frameCount - 1 else 0
       frameTime = 0f
       needsInit = true
     }
@@ -58,11 +98,15 @@ class AnimatedCharacter(
         var frameChanged = false
         while frameTime >= frameDuration do
           frameTime -= frameDuration
-          currentFrame = (currentFrame + 1) % clip.frameCount
+          currentFrame =
+            if reverse then (currentFrame - 1 + clip.frameCount) % clip.frameCount
+            else (currentFrame + 1) % clip.frameCount
           frameChanged = true
 
         if frameChanged || needsInit then
-          val nextFrame = (currentFrame + 1) % clip.frameCount
+          val nextFrame =
+            if reverse then (currentFrame - 1 + clip.frameCount) % clip.frameCount
+            else (currentFrame + 1) % clip.frameCount
           computeFrameVertices(clip, currentFrame, frameAVertices)
           computeFrameVertices(clip, nextFrame, frameBVertices)
           needsInit = false
@@ -77,7 +121,43 @@ class AnimatedCharacter(
           interleavedBuffer(idx + 1) = frameAVertices(idx + 1) + (frameBVertices(idx + 1) - frameAVertices(idx + 1)) * t
           interleavedBuffer(idx + 2) = frameAVertices(idx + 2) + (frameBVertices(idx + 2) - frameAVertices(idx + 2)) * t
           i += 1
+
+        // Cross-fade from previous clip's pose if transitioning
+        if transitionTime >= 0f then
+          transitionTime += deltaTime
+          if transitionTime >= TransitionDuration then
+            transitionTime = -1f // transition complete
+          else
+            val blend = transitionTime / TransitionDuration
+            i = 0
+            while i < vertexCount do
+              val idx = i * 5
+              interleavedBuffer(idx) = transitionFromVertices(idx) + (interleavedBuffer(idx) - transitionFromVertices(idx)) * blend
+              interleavedBuffer(idx + 1) = transitionFromVertices(idx + 1) + (interleavedBuffer(idx + 1) - transitionFromVertices(idx + 1)) * blend
+              interleavedBuffer(idx + 2) = transitionFromVertices(idx + 2) + (interleavedBuffer(idx + 2) - transitionFromVertices(idx + 2)) * blend
+              i += 1
+
         glMesh.updateVertices(interleavedBuffer)
+
+        // Cache interpolated bone transforms for attachment points (weapons, shields)
+        if attachBoneIndices.nonEmpty then
+          val nextFrame = (currentFrame + 1) % clip.frameCount
+          cachedBoneTransforms = AnimatedCharacter.computeBoneTransformsLerp(skeleton, clip, currentFrame, nextFrame, t)
+          // Blend bone transforms during cross-fade transition
+          if transitionTime >= 0f && transitionFromBoneTransforms != null then
+            val blend = transitionTime / TransitionDuration
+            for idx <- cachedBoneTransforms.indices do
+              if idx < transitionFromBoneTransforms.length then
+                val from = transitionFromBoneTransforms(idx)
+                val to = cachedBoneTransforms(idx)
+                // Decompose, lerp, recompose
+                val fromT = from.getTranslation(Vector3f())
+                val toT = to.getTranslation(Vector3f())
+                val fromR = from.getUnnormalizedRotation(Quaternionf())
+                val toR = to.getUnnormalizedRotation(Quaternionf())
+                fromT.lerp(toT, blend)
+                fromR.slerp(toR, blend)
+                cachedBoneTransforms(idx) = Matrix4f().translate(fromT).rotate(fromR)
 
   /** Compute bone-transformed vertices for a single frame into the target buffer. */
   private def computeFrameVertices(clip: AnimationClip, frame: Int, buffer: Array[Float]): Unit =

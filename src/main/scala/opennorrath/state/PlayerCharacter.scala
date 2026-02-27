@@ -2,6 +2,7 @@ package opennorrath.state
 
 import org.joml.Vector3f
 import opennorrath.network.{SpellBuff, ZoneEvent}
+import opennorrath.world.ZoneCollision
 
 /** Runtime state for the player's character while in a zone.
   *
@@ -42,6 +43,98 @@ class PlayerCharacter(
 
   /** Whether the player is currently moving. */
   var moving: Boolean = false
+
+  /** Base run speed in GL units/sec. Can be modified by buffs (SoW etc). */
+  var runSpeed: Float = 25f
+
+  /** Zone collision mesh for ground detection. */
+  var collision: Option[ZoneCollision] = None
+
+  /** Offset from model origin to feet (positive = origin is above feet).
+    * Set from CharBuild.glMinY when the player spawn is created.
+    * e.g., if model origin is at hip and glMinY = -3.5, feetOffset = 3.5
+    */
+  var feetOffset: Float = 0f
+
+  /** Full model height in GL units (scaled). Used to derive eye height. */
+  var modelHeight: Float = 0f
+
+  private val Gravity = 80f       // GL units/sec² downward acceleration
+  private val MaxFallSpeed = Gravity * 4f // terminal velocity
+  private val JumpSpeed = 30f     // initial upward velocity when jumping
+  private val GroundProbe = 200f  // max raycast distance below player
+  private val SnapThreshold = 0.5f
+  private val FootRadius = 1.5f   // half-width of foot hitbox for multi-ray ground detection
+  private val ProbeUp = 2f        // probe starts this far above feet
+  private var fallSpeed = 0f
+  private var onGround = true
+
+  /** Whether the character has significant vertical momentum (for fall animation). */
+  def airborne: Boolean = fallSpeed > Gravity
+
+  /** Set to true when a jump is initiated; ZoneScreen reads and clears it for animation. */
+  var jumped: Boolean = false
+
+  def jump(): Unit =
+    if onGround then
+      fallSpeed = -JumpSpeed  // negative = upward
+      onGround = false
+      jumped = true
+  private val probeOrigin = Vector3f() // reusable to avoid allocation
+
+  /** Apply gravity using multi-ray ground detection.
+    * Casts 5 rays (center + 4 corners of foot hitbox) to find the highest ground.
+    * This prevents falling through ramps and narrow geometry.
+    */
+  def applyGravity(dt: Float): Unit =
+    collision.foreach { col =>
+      // Feet are below model origin by feetOffset
+      val feetY = position.y - feetOffset
+      val py = feetY + ProbeUp
+      // Cast center + 4 corner rays, take the highest ground hit
+      var bestGroundY = Float.MinValue
+      var hits = 0
+      var i = 0
+      while i < 5 do
+        val px = position.x + (i match
+          case 1 => -FootRadius
+          case 2 => FootRadius
+          case 3 => 0f
+          case 4 => 0f
+          case _ => 0f
+        )
+        val pz = position.z + (i match
+          case 1 => 0f
+          case 2 => 0f
+          case 3 => -FootRadius
+          case 4 => FootRadius
+          case _ => 0f
+        )
+        probeOrigin.set(px, py, pz)
+        val d = col.raycastDown(probeOrigin, GroundProbe)
+        if d >= 0f then
+          val gy = py - d
+          hits += 1
+          if gy > bestGroundY then bestGroundY = gy
+        i += 1
+
+      // Apply velocity (negative = upward from jump, positive = falling)
+      fallSpeed = Math.min(fallSpeed + Gravity * dt, MaxFallSpeed)
+      position.y -= fallSpeed * dt
+      val newFeetY = position.y - feetOffset
+
+      if hits > 0 then
+        val targetY = bestGroundY + feetOffset
+        if newFeetY <= bestGroundY then
+          // Landed on ground
+          position.y = targetY
+          fallSpeed = 0f
+          onGround = true
+        else
+          onGround = false
+      else
+        onGround = false
+    }
 
   val inventory: Inventory = Inventory()
 

@@ -60,6 +60,56 @@ class ZoneCollision(zoneMesh: ZoneMesh):
       i += 1
     false
 
+  /** Cast a ray from origin toward target. Returns the closest hit distance (0..maxDist), or -1 if clear. */
+  def raycast(origin: Vector3f, target: Vector3f): Float =
+    val dx = target.x - origin.x
+    val dy = target.y - origin.y
+    val dz = target.z - origin.z
+    val maxDistSq = dx * dx + dy * dy + dz * dz
+    if maxDistSq < 0.001f then return -1f
+    val maxDist = Math.sqrt(maxDistSq.toDouble).toFloat
+    val invDist = 1f / maxDist
+    val dirX = dx * invDist
+    val dirY = dy * invDist
+    val dirZ = dz * invDist
+    var closest = -1f
+    var i = 0
+    while i < triCount do
+      val idx = i * 3
+      val i0 = indices(idx) * 3
+      val i1 = indices(idx + 1) * 3
+      val i2 = indices(idx + 2) * 3
+      val t = rayTriIntersect(
+        origin.x, origin.y, origin.z, dirX, dirY, dirZ,
+        glVerts(i0), glVerts(i0 + 1), glVerts(i0 + 2),
+        glVerts(i1), glVerts(i1 + 1), glVerts(i1 + 2),
+        glVerts(i2), glVerts(i2 + 1), glVerts(i2 + 2),
+      )
+      if t > 0.1f && t < maxDist && (closest < 0f || t < closest) then
+        closest = t
+      i += 1
+    closest
+
+  /** Cast a ray straight down and return the closest hit distance, or -1 if no hit within maxDist. */
+  def raycastDown(origin: Vector3f, maxDist: Float): Float =
+    var closest = -1f
+    var i = 0
+    while i < triCount do
+      val idx = i * 3
+      val i0 = indices(idx) * 3
+      val i1 = indices(idx + 1) * 3
+      val i2 = indices(idx + 2) * 3
+      val t = rayTriIntersect(
+        origin.x, origin.y, origin.z, 0f, -1f, 0f,
+        glVerts(i0), glVerts(i0 + 1), glVerts(i0 + 2),
+        glVerts(i1), glVerts(i1 + 1), glVerts(i1 + 2),
+        glVerts(i2), glVerts(i2 + 1), glVerts(i2 + 2),
+      )
+      if t > 0f && t <= maxDist && (closest < 0f || t < closest) then
+        closest = t
+      i += 1
+    closest
+
   /** Möller-Trumbore ray-triangle intersection. Returns t on hit, -1 on miss. */
   private def rayTriIntersect(
     ox: Float, oy: Float, oz: Float,
