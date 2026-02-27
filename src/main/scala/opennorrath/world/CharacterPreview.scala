@@ -23,25 +23,43 @@ class CharacterPreview(assetsDir: String):
   private val projection = Matrix4f()
   private val viewMatrix = Matrix4f()
   private val modelMatrix = Matrix4f()
+  private val equipMatrix = Matrix4f() // scratch matrix for equipment positioning
 
   // Current preview
   private var currentChar: Option[AnimatedCharacter] = None
   private var currentBuild: Option[ZoneRenderer.CharBuild] = None
   private var currentCode = ""
+  private var currentEquipment: Array[Int] = Array.fill(9)(0)
   private var rotation = -90f  // start facing camera (+Z)
+
+  // Equipment state
+  private var textureOverrides: Map[String, String] = Map.empty
+  private var weaponPrimary: Int = 0
+  private var weaponSecondary: Int = 0
 
   // Load global character models
   val characterBuilds: Map[String, ZoneRenderer.CharBuild] = loadGlobalCharacters()
 
-  def setCharacter(modelCode: String): Unit =
-    if modelCode == currentCode then return
+  // Load equipment models from gequip*.s3d (shared with ZoneRenderer)
+  private val equipmentModels: Map[Int, ZoneRenderer.EquipModel] =
+    val dir = Path.of(assetsDir)
+    if Files.isDirectory(dir) then
+      ZoneRenderer.loadEquipmentModels(dir, entries => loadTextures(entries))
+    else Map.empty
+
+  def setCharacter(modelCode: String, equipment: Array[Int] = Array.fill(9)(0)): Unit =
+    if modelCode == currentCode && java.util.Arrays.equals(equipment, currentEquipment) then return
     currentCode = modelCode
+    currentEquipment = equipment.clone()
     rotation = -90f
 
     // Clean up previous
     currentChar.foreach(_.glMesh.cleanup())
     currentChar = None
     currentBuild = None
+    textureOverrides = Map.empty
+    weaponPrimary = 0
+    weaponSecondary = 0
 
     characterBuilds.get(modelCode) match
       case None => ()
@@ -51,7 +69,7 @@ class CharacterPreview(assetsDir: String):
         // Recenter for preview framing only — not needed for world placement (see buildSpawnMatrix)
         val mm = Matrix4f()
         mm.translate(-build.glCenterX, -build.glMinY, -build.glCenterZ)
-        val char = AnimatedCharacter(build.skeleton, build.meshFragments, build.zm, glMesh, mm, build.clips, interleaved.clone())
+        val char = AnimatedCharacter(build.skeleton, build.meshFragments, build.zm, glMesh, mm, build.clips, interleaved.clone(), build.attachBoneIndices)
         // Play idle animation
         val idleCode = if build.clips.contains(AnimCode.Idle.code) then AnimCode.Idle.code
           else if build.clips.contains(AnimCode.Passive.code) then AnimCode.Passive.code
@@ -59,6 +77,19 @@ class CharacterPreview(assetsDir: String):
         if idleCode.nonEmpty then char.play(idleCode)
         currentChar = Some(char)
         currentBuild = Some(build)
+
+        // Compute texture overrides from equipment
+        textureOverrides = ZoneRenderer.computeTextureOverrides(
+          build.zm.groups, build.key, equipment, textureMap)
+        if equipment.length > 8 then
+          weaponPrimary = equipment(7)
+          weaponSecondary = equipment(8)
+        if textureOverrides.nonEmpty || weaponPrimary != 0 || weaponSecondary != 0 then
+          println(s"  [Preview] $modelCode: ${textureOverrides.size} tex overrides, weapons=$weaponPrimary/$weaponSecondary")
+          for (base, variant) <- textureOverrides do
+            val baseId = textureMap.getOrElse(base, -1)
+            val varId = textureMap.getOrElse(variant, -1)
+            println(s"  [Preview]   $base (id=$baseId) -> $variant (id=$varId)")
 
   def draw(dt: Float, viewportX: Int, viewportY: Int, viewportW: Int, viewportH: Int, fullW: Int, fullH: Int): Unit =
     currentChar match
@@ -102,12 +133,31 @@ class CharacterPreview(assetsDir: String):
         char.update(dt)
         for group <- char.zoneMesh.groups do
           if group.materialType != MaterialType.Invisible && group.materialType != MaterialType.Boundary then
-            val texId = textureMap.getOrElse(group.textureName.toLowerCase, fallbackTexture)
+            val texName = textureOverrides.getOrElse(group.textureName.toLowerCase, group.textureName)
+            val texId = textureMap.getOrElse(texName.toLowerCase, fallbackTexture)
             glBindTexture(GL_TEXTURE_2D, texId)
             char.glMesh.drawRange(group.startIndex, group.indexCount)
 
+        // Draw weapons at attachment points using shared coordinate pipeline
+        drawWeapon(char, weaponPrimary, "R_POINT")
+        drawWeapon(char, weaponSecondary, "L_POINT")
+
         // Restore full viewport
         glViewport(0, 0, fullW, fullH)
+
+  private def drawWeapon(char: AnimatedCharacter, weaponId: Int, suffix: String): Unit =
+    if weaponId == 0 then return
+    equipmentModels.get(weaponId).foreach { equip =>
+      ZoneRenderer.findAttachKey(char.attachBoneIndices, suffix)
+        .flatMap(char.attachmentTransform).foreach { boneTransform =>
+          ZoneRenderer.composeEquipmentMatrix(equipMatrix, modelMatrix, boneTransform, equip)
+          shader.setMatrix4f("model", equipMatrix)
+          for group <- equip.zm.groups do
+            if group.materialType != MaterialType.Invisible && group.materialType != MaterialType.Boundary then
+              glBindTexture(GL_TEXTURE_2D, textureMap.getOrElse(group.textureName.toLowerCase, fallbackTexture))
+              equip.glMesh.drawRange(group.startIndex, group.indexCount)
+        }
+    }
 
   def cleanup(): Unit =
     currentChar.foreach(_.glMesh.cleanup())

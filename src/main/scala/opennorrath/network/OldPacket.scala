@@ -265,7 +265,7 @@ object OldPacket:
     var hdr1 = 0
     hdr1 = setBit(hdr1, B2_ARSP)
 
-    buf.put(0.toByte) // hdr0
+    buf.put(0.toByte) // hdr0 — no flags (CLOSING flags would signal disconnect)
     buf.put(hdr1.toByte)
     buf.putShort((seq & 0xFFFF).toShort)
     buf.putShort((arsp & 0xFFFF).toShort)

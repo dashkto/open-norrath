@@ -246,7 +246,6 @@ class InventoryPanel extends Panel:
           val srcAllowed = sourceItem.forall(_.canEquipIn(slotId))
           val dstAllowed = destItem.forall(_.canEquipIn(sourceSlot))
           if srcAllowed && dstAllowed then
-            Game.player.foreach(_.inventory.swap(sourceSlot, slotId))
             Game.zoneSession.foreach(_.client.sendMoveItem(sourceSlot, slotId))
       ImGui.endDragDropTarget()
 
@@ -311,7 +310,6 @@ class InventoryPanel extends Panel:
           val srcAllowed = sourceItem.forall(_.canEquipIn(slotId))
           val dstAllowed = destItem.forall(_.canEquipIn(sourceSlot))
           if srcAllowed && dstAllowed then
-            Game.player.foreach(_.inventory.swap(sourceSlot, slotId))
             Game.zoneSession.foreach(_.client.sendMoveItem(sourceSlot, slotId))
       ImGui.endDragDropTarget()
 

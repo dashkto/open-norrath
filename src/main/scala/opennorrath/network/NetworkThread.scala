@@ -76,7 +76,7 @@ class NetworkThread(handler: PacketHandler):
 
             OldPacket.decode(data, data.length) match
               case Some(decoded) => handler.handlePacket(decoded)
-              case None => ()
+              case None => () // unrecognized packet format
           catch
             case _: SocketTimeoutException => () // normal
 

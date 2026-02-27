@@ -99,6 +99,7 @@ class WorldClient extends PacketHandler:
 
     if pkt.opcode == 0 then return
 
+    println(f"[World] Received opcode: 0x${pkt.opcode & 0xFFFF}%04x (${WorldOpcodes.name(pkt.opcode)}) ${pkt.payload.length}B")
     pkt.opcode match
       case WorldOpcodes.SendCharInfo =>
         characters = WorldCodec.decodeCharacterSelect(pkt.payload)
@@ -139,7 +140,8 @@ class WorldClient extends PacketHandler:
         val approved = WorldCodec.decodeNameApproval(pkt.payload)
         emit(WorldEvent.NameApproved(approved))
 
-      case _ => ()
+      case other =>
+        println(f"[World] Unhandled opcode: 0x${other & 0xFFFF}%04x (${pkt.payload.length} bytes)")
 
   /** Called periodically from network thread. Builds queued app packets and ACKs. */
   def tick(): Unit =
@@ -149,7 +151,7 @@ class WorldClient extends PacketHandler:
       buildAppPacket(pending._1, pending._2)
       pending = pendingApps.poll()
 
-    if needArsp && outQueue.isEmpty then
+    if needArsp then
       val ack = OldPacket.encodeAck(nextSeq(), lastInArq)
       outQueue.add(ack)
       needArsp = false
@@ -180,11 +182,13 @@ class WorldClient extends PacketHandler:
     needArsp = false
     val isFirst = firstPacket
     firstPacket = false
+    val seq = nextSeq()
+    val arq = nextArq()
     val packet = OldPacket.encode(
       opcode = opcode,
       payload = payload,
-      seq = nextSeq(),
-      arq = Some(nextArq()),
+      seq = seq,
+      arq = Some(arq),
       arsp = arsp,
       includeAsq = true,
       seqStart = isFirst,

@@ -204,6 +204,14 @@ class ZoneClient extends PacketHandler:
   def sendMoveItem(fromSlot: Int, toSlot: Int, stackCount: Int = 0): Unit =
     if state == ZoneState.InZone then
       queueAppPacket(ZoneOpcodes.MoveItem, ZoneCodec.encodeMoveItem(fromSlot, toSlot, stackCount))
+      // Update local inventory and emit event so listeners (e.g. weapon visual updates)
+      // react immediately — the server doesn't echo OP_MoveItem back to the originator.
+      val fromItem = inventory.find(_.equipSlot == fromSlot)
+      val toItem = inventory.find(_.equipSlot == toSlot)
+      inventory = inventory.filterNot(i => i.equipSlot == fromSlot || i.equipSlot == toSlot)
+      fromItem.foreach(i => inventory = inventory :+ i.copy(equipSlot = toSlot))
+      toItem.foreach(i => inventory = inventory :+ i.copy(equipSlot = fromSlot))
+      emit(ZoneEvent.InventoryMoved(fromSlot, toSlot))
 
   /** Save character. Called from game thread. */
   def save(): Unit =
@@ -468,7 +476,7 @@ class ZoneClient extends PacketHandler:
           buildAppPacket(ZoneOpcodes.ZoneEntry, ZoneCodec.encodeZoneEntry(pendingCharName))
           lastZoneEntrySentMs = now
 
-    if needArsp && outQueue.isEmpty then
+    if needArsp then
       val ack = OldPacket.encodeAck(nextSeq(), lastInArq)
       outQueue.add(ack)
       needArsp = false

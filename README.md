@@ -153,6 +153,13 @@ WHERE s2.zone = 'arena';
 SELECT id, Name, ac, hp, mana, damage, delay, slots FROM items WHERE Name LIKE '%Short Sword%';
 ```
 
+## Public Login Servers
+
+| Server | Host | Port |
+|--------|------|------|
+| Project Quarm (TAKP-based) | `loginserver.takproject.net` | 6000 |
+| Project 1999 | `login.eqemulator.net` | 5998 |
+
 ## Settings
 
 `settings.yml` in the project root controls runtime configuration:
@@ -162,7 +169,7 @@ use_eqg: false
 debug:
   animation_model: gor
 login:
-  host: 127.0.0.1
+  host: loginserver.takproject.net
   port: 6000
 ```
 

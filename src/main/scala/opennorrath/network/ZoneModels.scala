@@ -577,6 +577,7 @@ case class InventoryItem(
   delay: Int,
   charges: Int,
   stackable: Boolean,
+  idFileNum: Int = 0,      // IT number from IDFile (e.g., "IT27" → 27) — used for weapon model lookup
 ):
   def stackCount: Int = if stackable && charges > 1 then charges else 0
   /** Check if this item can be placed in the given equipment slot (0-21). */

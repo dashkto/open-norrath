@@ -47,7 +47,7 @@ class CharacterSelectScreen(
       lastSelectedIndex = selectedIndex
       val char = characters(selectedIndex)
       EqData.raceModelCode(char.race, char.gender) match
-        case Some(code) => preview.setCharacter(code)
+        case Some(code) => preview.setCharacter(code, char.equipment)
         case None => preview.setCharacter("")
 
     // Escape to go back — tear down world session

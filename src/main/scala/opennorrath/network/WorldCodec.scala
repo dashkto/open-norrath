@@ -11,6 +11,8 @@ case class CharacterInfo(
   race: Int,
   gender: Int,
   zone: Int,
+  face: Int = 0,
+  equipment: Array[Int] = Array.fill(9)(0), // slots 0-6=armor material, 7=primary IT, 8=secondary IT
 )
 
 /** Zone server connection info. */
@@ -68,7 +70,9 @@ object WorldCodec:
     *   class_[10]      — 10 bytes (uint8)
     *   race[10]        — 20 bytes (uint16)
     *   zone[10]        — 40 bytes (uint32)
-    *   ... remaining fields (gender, face, equip, etc.)
+    *   gender[10]      — 10 bytes (uint8)
+    *   face[10]        — 10 bytes (uint8)
+    *   equip[10][9]    — 180 bytes (uint16 per slot per char)
     */
   def decodeCharacterSelect(data: Array[Byte]): Vector[CharacterInfo] =
     if data.length < 720 then return Vector.empty // need at least names + levels + classes + races
@@ -93,17 +97,45 @@ object WorldCodec:
       val zones = Array.fill(10)(buf.getInt())
       // gender[10] — uint8 each (10 bytes, offset 720)
       val genders = Array.fill(10)(buf.get() & 0xFF)
+      // face[10] — uint8 each (10 bytes, offset 730)
+      val faces = if buf.remaining() >= 10 then Array.fill(10)(buf.get() & 0xFF)
+        else Array.fill(10)(0)
+      // EQ::TextureProfile equip[10] — 9 × uint32 per char (360 bytes, offset 740)
+      val equips = if buf.remaining() >= 360 then
+        Array.fill(10)(Array.fill(9)(buf.getInt()))
+      else Array.fill(10)(Array.fill(9)(0))
+      // EQ::TintProfile cs_colors[10] — 9 × uint32 per char (360 bytes, offset 1100) — skip
+      if buf.remaining() >= 360 then buf.position(buf.position() + 360)
+      // deity[10] — uint16 each (20 bytes, offset 1460) — skip
+      if buf.remaining() >= 20 then buf.position(buf.position() + 20)
+      // primary[10] — uint32 IDFile each (40 bytes, offset 1480)
+      val primaries = if buf.remaining() >= 40 then Array.fill(10)(buf.getInt())
+        else Array.fill(10)(0)
+      // secondary[10] — uint32 IDFile each (40 bytes, offset 1520)
+      val secondaries = if buf.remaining() >= 40 then Array.fill(10)(buf.getInt())
+        else Array.fill(10)(0)
 
       for i <- 0 until 10 do
         if names(i).nonEmpty && levels(i) > 0 then
-          chars += CharacterInfo(
+          // Merge armor materials (slots 0-6) with weapon IDFile numbers (slots 7-8)
+          val merged = new Array[Int](9)
+          for j <- 0 until 7 do merged(j) = equips(i)(j)
+          merged(7) = primaries(i)
+          merged(8) = secondaries(i)
+          val info = CharacterInfo(
             name = names(i),
             level = levels(i),
             classId = classes(i),
             race = races(i),
             gender = genders(i),
             zone = zones(i),
+            face = faces(i),
+            equipment = merged,
           )
+          val nonZeroEquip = info.equipment.zipWithIndex.filter(_._1 != 0).map((v, s) => s"s$s=$v").mkString(",")
+          if nonZeroEquip.nonEmpty then
+            println(s"[CharSelect] ${info.name}: equip[$nonZeroEquip]")
+          chars += info
     catch
       case e: Exception =>
         println(s"[WorldCodec] Error decoding character select: ${e.getMessage}")
@@ -122,10 +154,10 @@ object WorldCodec:
       val port = ((data(128) & 0xFF) << 8) | (data(129) & 0xFF) // big-endian (network byte order)
       Some(ZoneAddress(ip, port))
 
-  /** Encode OP_ApproveName (76 bytes on the wire).
-    * Server's EQPacket::Size() adds +2 for the opcode, so payload must be
-    * sizeof(NameApproval_Struct) - 2 = 76 bytes for the size check to pass.
-    * Layout: name[64] + race(u16) + class(u16) + unknown(u32×2)
+  /** Encode OP_ApproveName.
+    * NameApproval_Struct (78 bytes):
+    *   name[64] + race(u16) + unknown(u16) + class(u16) + unknown(u32×2)
+    * Server: app->Size() = opcode(2) + payload. Check: Size() == 78 → payload = 76.
     */
   def encodeApproveName(name: String, race: Int, classId: Int): Array[Byte] =
     val buf = ByteBuffer.allocate(76).order(ByteOrder.LITTLE_ENDIAN)
@@ -134,9 +166,9 @@ object WorldCodec:
     System.arraycopy(nameBytes, 0, nameBuf, 0, Math.min(nameBytes.length, 63))
     buf.put(nameBuf)
     buf.putShort((race & 0xFFFF).toShort)
+    buf.putShort(0.toShort) // unknown066
     buf.putShort((classId & 0xFFFF).toShort)
-    buf.putInt(0) // unknown
-    buf.putInt(0) // unknown
+    buf.putInt(0) // unknown070
     buf.array()
 
   /** Decode OP_ApproveName reply (1 byte): 1=approved, 0=rejected. */

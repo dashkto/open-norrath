@@ -52,6 +52,13 @@ class LoginClient extends PacketHandler:
 
   /** Initiate connection and login. Called from game thread. */
   def connect(user: String, pass: String): Unit =
+    // Reset protocol state for fresh connection
+    outSeq = 0
+    outArq = 0
+    lastInArq = -1
+    needArsp = false
+    firstPacket = true
+    outQueue.clear()
     pendingUser = user
     pendingPass = pass
     state = LoginState.Connecting
@@ -136,7 +143,7 @@ class LoginClient extends PacketHandler:
 
   /** Called periodically from network thread. Produces ACK if needed. */
   def tick(): Unit =
-    if needArsp && outQueue.isEmpty then
+    if needArsp then
       val ack = OldPacket.encodeAck(nextSeq(), lastInArq)
       outQueue.add(ack)
       needArsp = false

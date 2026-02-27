@@ -138,24 +138,8 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings()):
     */
   def updateSpawnEquipment(spawnId: Int, equipment: Array[Int], bodyTexture: Int = 0): Unit =
     _spawnCharacters.get(spawnId).foreach { inst =>
-      val overrides = scala.collection.mutable.Map[String, String]()
-      for group <- inst.char.zoneMesh.groups do
-        val baseName = group.textureName.toLowerCase
-        if baseName.length >= 9 && baseName.endsWith(".bmp") then
-          val prefix = baseName.substring(0, 3) // race code
-          if prefix == inst.build.key then
-            val bodyPart = baseName.substring(3, 5)
-            val slot = ZoneRenderer.bodyPartToSlot.getOrElse(bodyPart, -1)
-            if slot >= 0 then
-              val material = if equipment(slot) != 0 then equipment(slot)
-                else if bodyTexture != 0 then bodyTexture
-                else 0
-              if material != 0 then
-                val index = baseName.substring(7, 9) // preserve original texture index
-                val variant = s"${prefix}${bodyPart}${"%02d".format(material)}${index}.bmp"
-                if textureMap.contains(variant) then
-                  overrides(group.textureName.toLowerCase) = variant
-      inst.textureOverrides = overrides.toMap
+      inst.textureOverrides = ZoneRenderer.computeTextureOverrides(
+        inst.char.zoneMesh.groups, inst.build.key, equipment, textureMap, bodyTexture)
       // Store weapon model IDs (IT codes) for attachment rendering
       if equipment.length > 8 then
         inst.weaponPrimary = equipment(7)
@@ -278,32 +262,11 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings()):
   private val equipMatrix = Matrix4f() // reusable scratch matrix for equipment positioning
   private val debuggedEquipModels = scala.collection.mutable.Set[String]() // one-time debug per model
 
-  // EQ S3D space → GL space conversion matrix: (x,y,z) → (x, z, -y)
-  // JOML constructor is column-major: (col0, col1, col2, col3)
-  private val eqToGl = Matrix4f(
-    1f, 0f, 0f, 0f,   // col 0
-    0f, 0f, -1f, 0f,  // col 1
-    0f, 1f, 0f, 0f,   // col 2
-    0f, 0f, 0f, 1f,   // col 3
-  )
-  // GL space → EQ S3D space (inverse): (x,y,z) → (x, -z, y)
-  private val glToEq = Matrix4f(
-    1f, 0f, 0f, 0f,   // col 0
-    0f, 0f, 1f, 0f,   // col 1
-    0f, -1f, 0f, 0f,  // col 2
-    0f, 0f, 0f, 1f,   // col 3
-  )
+  private val eqToGl = ZoneRenderer.eqToGl
+  private val glToEq = ZoneRenderer.glToEq
 
-  /** Find the best matching attachment bone for a target suffix.
-    * For primary weapon: look for R_POINT
-    * For secondary weapon: look for L_POINT, then SHIELD_POINT as fallback
-    */
   private def findAttachKey(inst: SpawnInstance, suffixTarget: String): Option[String] =
-    val direct = inst.char.attachBoneIndices.keys.find(_.endsWith(suffixTarget))
-    if direct.isDefined then direct
-    else if suffixTarget == "L_POINT" then
-      inst.char.attachBoneIndices.keys.find(_.endsWith("SHIELD_POINT"))
-    else None
+    ZoneRenderer.findAttachKey(inst.char.attachBoneIndices, suffixTarget)
 
   /** Draw an equipment model at a bone attachment point.
     *
@@ -331,35 +294,7 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings()):
           val shieldTag = if equip.isShield then " SHIELD" else ""
           println(f"  [Equip] ${inst.build.key} bone=${attachKey.getOrElse("?")} IT$weaponId: bonePos=($tx%.2f,$ty%.2f,$tz%.2f)$rootInfo$centerInfo hasSkel=$hasRoot$shieldTag")
 
-        // For shield-like equipment, push slightly outward from the body center to reduce
-        // arm clipping. Shields have their mesh centered at origin (unlike weapons which have
-        // the grip at origin), so the back face overlaps the arm. We offset the bone position
-        // along the vector from skeleton root → bone, pushing the shield outward.
-        val effectiveBone = if equip.isShield then
-          val bx = boneTransform.m30(); val by = boneTransform.m31(); val bz = boneTransform.m32()
-          val dist = math.sqrt((bx * bx + by * by + bz * bz).toDouble).toFloat
-          if dist > 0.01f then
-            val ShieldOutwardOffset = 0.5f // EQ units
-            val adjusted = Matrix4f(boneTransform)
-            adjusted.setTranslation(
-              bx + bx / dist * ShieldOutwardOffset,
-              by + by / dist * ShieldOutwardOffset,
-              bz + bz / dist * ShieldOutwardOffset)
-            adjusted
-          else boneTransform
-        else boneTransform
-
-        // Compose: modelMatrix × eqToGl × boneTransform × [rootBone × translate(-center)] × glToEq
-        // The translate(-center) undoes the center baked into vertices during WLD parse,
-        // converting them to bone-local space so the root bone transform positions correctly.
-        equipMatrix.set(inst.char.modelMatrix).mul(eqToGl).mul(effectiveBone)
-        equip.rootBoneTransform.foreach { rootXform =>
-          equipMatrix.mul(rootXform)
-          val c = equip.meshCenter
-          if c.x != 0f || c.y != 0f || c.z != 0f then
-            equipMatrix.translate(-c.x, -c.y, -c.z)
-        }
-        equipMatrix.mul(glToEq)
+        ZoneRenderer.composeEquipmentMatrix(equipMatrix, inst.char.modelMatrix, boneTransform, equip)
         shader.setMatrix4f("model", equipMatrix)
         for group <- equip.zm.groups do
           val emt = effectiveMaterialType(group)
@@ -664,106 +599,10 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings()):
       println(s"  Global character models: ${buildList.size} (${buildList.map(_.key).sorted.mkString(", ")})")
     (allTracks, buildList)
 
-  /** Load equipment 3D models from gequip*.s3d archives.
-    * Returns IT number → EquipModel (mesh + GPU data).
-    */
   private def loadEquipmentModels(): Map[Int, ZoneRenderer.EquipModel] =
     val assetsDir = Path.of(s3dPath).getParent
     if assetsDir == null then return Map.empty
-    val gequipFiles = Files.list(assetsDir).toArray.map(_.asInstanceOf[Path])
-      .filter { p =>
-        val name = p.getFileName.toString.toLowerCase
-        name.startsWith("gequip") && name.endsWith(".s3d")
-      }.sorted
-    if gequipFiles.isEmpty then return Map.empty
-
-    val models = scala.collection.mutable.Map[Int, ZoneRenderer.EquipModel]()
-    val itPattern = "^it(\\d+)$".r
-
-    for file <- gequipFiles do
-      try
-        val fileEntries = PfsArchive.load(file)
-        loadTextures(fileEntries, applyColorKey = false)
-        fileEntries.find(_.extension == "wld").foreach { wldEntry =>
-          val eqWld = WldFile(wldEntry.data)
-          val actors = eqWld.fragmentsOfType[Fragment14_Actor]
-          for actor <- actors do
-            val actorKey = actor.name.replace("_ACTORDEF", "").toLowerCase
-            actorKey match
-              case itPattern(numStr) =>
-                val itNum = numStr.toInt
-                if !models.contains(itNum) then
-                  // Equipment actors may reference meshes directly (Fragment2D) or
-                  // via a skeleton hierarchy (Fragment11 → Fragment10 → meshes).
-                  var meshFragments = List.empty[Fragment36_Mesh]
-                  var rootBoneXform: Option[Matrix4f] = None
-                  for ref <- actor.componentRefs do
-                    try
-                      eqWld.fragment(ref) match
-                        case mr: Fragment2D_MeshReference =>
-                          eqWld.fragment(mr.meshRef) match
-                            case m: Fragment36_Mesh => meshFragments = meshFragments :+ m
-                            case _ =>
-                        case skelRef: Fragment11_SkeletonHierarchyRef =>
-                          eqWld.fragment(skelRef.skeletonRef) match
-                            case skel: Fragment10_SkeletonHierarchy =>
-                              // Extract meshes from skeleton's mesh refs
-                              for mr <- skel.meshRefs do
-                                try
-                                  eqWld.fragment(mr) match
-                                    case meshRef: Fragment2D_MeshReference =>
-                                      eqWld.fragment(meshRef.meshRef) match
-                                        case m: Fragment36_Mesh => meshFragments = meshFragments :+ m
-                                        case _ =>
-                                    case _ =>
-                                catch case _: Exception => ()
-                              // Compute root bone rest-pose transform (provides grip offset)
-                              if skel.bones.nonEmpty then
-                                rootBoneXform = Some(skel.restPoseBoneTransform(0, eqWld))
-                            case _ =>
-                        case _ =>
-                    catch case _: Exception => ()
-                  if meshFragments.nonEmpty then
-                    // Store mesh center for all equipment (for debug + skeletal offset correction)
-                    val cx = meshFragments.map(_.center.x).sum / meshFragments.size
-                    val cy = meshFragments.map(_.center.y).sum / meshFragments.size
-                    val cz = meshFragments.map(_.center.z).sum / meshFragments.size
-                    val center = Vector3f(cx, cy, cz)
-                    val zm = ZoneRenderer.extractMeshGeometry(eqWld, meshFragments)
-                    // Compute vertex bounds to detect shield-like geometry (flat items centered at origin)
-                    val vc = zm.vertices.length / 3
-                    var isShield = false
-                    if vc > 0 then
-                      var minX = Float.MaxValue; var maxX = Float.MinValue
-                      var minY = Float.MaxValue; var maxY = Float.MinValue
-                      var minZ = Float.MaxValue; var maxZ = Float.MinValue
-                      for i <- 0 until vc do
-                        val x = zm.vertices(i * 3); val y = zm.vertices(i * 3 + 1); val z = zm.vertices(i * 3 + 2)
-                        if x < minX then minX = x; if x > maxX then maxX = x
-                        if y < minY then minY = y; if y > maxY then maxY = y
-                        if z < minZ then minZ = z; if z > maxZ then maxZ = z
-                      val extX = maxX - minX; val extY = maxY - minY; val extZ = maxZ - minZ
-                      val maxExt = math.max(extX, math.max(extY, extZ))
-                      val minExt = math.min(extX, math.min(extY, extZ))
-                      // Shield-like: flat (thinnest < 25% of thickest), centered at origin, no skeleton
-                      isShield = maxExt > 0f && minExt / maxExt < 0.25f && center.length() < 0.5f && rootBoneXform.isEmpty
-                    // Debug: print load-time info for equipment models
-                    val skelInfo = rootBoneXform.map { r =>
-                      f" skel rootBone=(${r.m30()}%.2f,${r.m31()}%.2f,${r.m32()}%.2f)"
-                    }.getOrElse(" noSkel")
-                    val shieldTag = if isShield then " SHIELD" else ""
-                    println(f"    IT$itNum: ${meshFragments.size} meshes, center=(${cx}%.2f,${cy}%.2f,${cz}%.2f)$skelInfo$shieldTag")
-                    val interleaved = ZoneRenderer.buildInterleaved(zm)
-                    val glMesh = Mesh(interleaved, zm.indices)
-                    models(itNum) = ZoneRenderer.EquipModel(zm, glMesh, rootBoneXform, center, isShield)
-              case _ => () // skip non-IT actors
-        }
-      catch case e: Exception =>
-        println(s"  Warning: failed to load ${file.getFileName}: ${e.getMessage}")
-
-    if models.nonEmpty then
-      println(s"  Equipment models: ${models.size} from ${gequipFiles.length} gequip files")
-    models.toMap
+    ZoneRenderer.loadEquipmentModels(assetsDir, entries => loadTextures(entries, applyColorKey = false))
 
   private def buildModelMatrix(placement: Fragment15_ObjectInstance): Matrix4f =
     val pos = placement.position
@@ -808,6 +647,183 @@ object ZoneRenderer:
     * outward offset at attachment points to avoid clipping through the arm.
     */
   case class EquipModel(zm: ZoneMesh, glMesh: Mesh, rootBoneTransform: Option[Matrix4f] = None, meshCenter: Vector3f = Vector3f(), isShield: Boolean = false)
+
+  // EQ S3D space → GL space conversion matrix: (x,y,z) → (x, z, -y)
+  // JOML constructor is column-major: (col0, col1, col2, col3)
+  val eqToGl = Matrix4f(
+    1f, 0f, 0f, 0f,   // col 0
+    0f, 0f, -1f, 0f,  // col 1
+    0f, 1f, 0f, 0f,   // col 2
+    0f, 0f, 0f, 1f,   // col 3
+  )
+  // GL space → EQ S3D space (inverse): (x,y,z) → (x, -z, y)
+  val glToEq = Matrix4f(
+    1f, 0f, 0f, 0f,   // col 0
+    0f, 0f, 1f, 0f,   // col 1
+    0f, -1f, 0f, 0f,  // col 2
+    0f, 0f, 0f, 1f,   // col 3
+  )
+
+  /** Find the best matching attachment bone for a target suffix.
+    * For primary weapon: look for R_POINT
+    * For secondary weapon: look for L_POINT, then SHIELD_POINT as fallback
+    */
+  def findAttachKey(attachBoneIndices: Map[String, Int], suffixTarget: String): Option[String] =
+    val direct = attachBoneIndices.keys.find(_.endsWith(suffixTarget))
+    if direct.isDefined then direct
+    else if suffixTarget == "L_POINT" then
+      attachBoneIndices.keys.find(_.endsWith("SHIELD_POINT"))
+    else None
+
+  /** Compose the equipment model matrix for rendering at a bone attachment point.
+    *
+    * Coordinate pipeline: equipment mesh vertices are in GL space (from buildInterleaved).
+    * Bone transforms are in EQ S3D space. So we compose:
+    *   charModelMatrix × eqToGl × boneTransform × [rootBone × translate(-center)] × glToEq
+    *
+    * For shields, applies outward offset to reduce arm clipping.
+    */
+  def composeEquipmentMatrix(target: Matrix4f, charModelMatrix: Matrix4f,
+      boneTransform: Matrix4f, equip: EquipModel): Matrix4f =
+    // For shield-like equipment, push slightly outward from the body center
+    val effectiveBone = if equip.isShield then
+      val bx = boneTransform.m30(); val by = boneTransform.m31(); val bz = boneTransform.m32()
+      val dist = math.sqrt((bx * bx + by * by + bz * bz).toDouble).toFloat
+      if dist > 0.01f then
+        val ShieldOutwardOffset = 0.5f // EQ units
+        val adjusted = Matrix4f(boneTransform)
+        adjusted.setTranslation(
+          bx + bx / dist * ShieldOutwardOffset,
+          by + by / dist * ShieldOutwardOffset,
+          bz + bz / dist * ShieldOutwardOffset)
+        adjusted
+      else boneTransform
+    else boneTransform
+    target.set(charModelMatrix).mul(eqToGl).mul(effectiveBone)
+    equip.rootBoneTransform.foreach { rootXform =>
+      target.mul(rootXform)
+      val c = equip.meshCenter
+      if c.x != 0f || c.y != 0f || c.z != 0f then
+        target.translate(-c.x, -c.y, -c.z)
+    }
+    target.mul(glToEq)
+
+  /** Compute texture overrides for equipment.
+    * Maps base texture names to variant names based on equipment material IDs.
+    * Texture naming: {race:3}{bodyPart:2}{material:02d}{index:02d}.bmp
+    */
+  def computeTextureOverrides(groups: List[ZoneMeshGroup], buildKey: String,
+      equipment: Array[Int], textureMap: scala.collection.Map[String, Int],
+      bodyTexture: Int = 0): Map[String, String] =
+    val overrides = scala.collection.mutable.Map[String, String]()
+    for group <- groups do
+      val baseName = group.textureName.toLowerCase
+      if baseName.length >= 9 && baseName.endsWith(".bmp") then
+        val prefix = baseName.substring(0, 3) // race code
+        if prefix == buildKey then
+          val bodyPart = baseName.substring(3, 5)
+          val slot = bodyPartToSlot.getOrElse(bodyPart, -1)
+          if slot >= 0 && slot < equipment.length then
+            val material = if equipment(slot) != 0 then equipment(slot)
+              else if bodyTexture != 0 then bodyTexture
+              else 0
+            if material != 0 then
+              val index = baseName.substring(7, 9) // preserve original texture index
+              val variant = s"${prefix}${bodyPart}${"%02d".format(material)}${index}.bmp"
+              if textureMap.contains(variant) then
+                overrides(group.textureName.toLowerCase) = variant
+    overrides.toMap
+
+  /** Load equipment 3D models from gequip*.s3d archives.
+    * Returns IT number → EquipModel (mesh + GPU data).
+    */
+  def loadEquipmentModels(assetsDir: Path, loadTextures: List[PfsEntry] => Unit): Map[Int, EquipModel] =
+    val gequipFiles = Files.list(assetsDir).toArray.map(_.asInstanceOf[Path])
+      .filter { p =>
+        val name = p.getFileName.toString.toLowerCase
+        name.startsWith("gequip") && name.endsWith(".s3d")
+      }.sorted
+    if gequipFiles.isEmpty then return Map.empty
+
+    val models = scala.collection.mutable.Map[Int, EquipModel]()
+    val itPattern = "^it(\\d+)$".r
+
+    for file <- gequipFiles do
+      try
+        val fileEntries = PfsArchive.load(file)
+        loadTextures(fileEntries)
+        fileEntries.find(_.extension == "wld").foreach { wldEntry =>
+          val eqWld = WldFile(wldEntry.data)
+          val actors = eqWld.fragmentsOfType[Fragment14_Actor]
+          for actor <- actors do
+            val actorKey = actor.name.replace("_ACTORDEF", "").toLowerCase
+            actorKey match
+              case itPattern(numStr) =>
+                val itNum = numStr.toInt
+                if !models.contains(itNum) then
+                  var meshFragments = List.empty[Fragment36_Mesh]
+                  var rootBoneXform: Option[Matrix4f] = None
+                  for ref <- actor.componentRefs do
+                    try
+                      eqWld.fragment(ref) match
+                        case mr: Fragment2D_MeshReference =>
+                          eqWld.fragment(mr.meshRef) match
+                            case m: Fragment36_Mesh => meshFragments = meshFragments :+ m
+                            case _ =>
+                        case skelRef: Fragment11_SkeletonHierarchyRef =>
+                          eqWld.fragment(skelRef.skeletonRef) match
+                            case skel: Fragment10_SkeletonHierarchy =>
+                              for mr <- skel.meshRefs do
+                                try
+                                  eqWld.fragment(mr) match
+                                    case meshRef: Fragment2D_MeshReference =>
+                                      eqWld.fragment(meshRef.meshRef) match
+                                        case m: Fragment36_Mesh => meshFragments = meshFragments :+ m
+                                        case _ =>
+                                    case _ =>
+                                catch case _: Exception => ()
+                              if skel.bones.nonEmpty then
+                                rootBoneXform = Some(skel.restPoseBoneTransform(0, eqWld))
+                            case _ =>
+                        case _ =>
+                    catch case _: Exception => ()
+                  if meshFragments.nonEmpty then
+                    val cx = meshFragments.map(_.center.x).sum / meshFragments.size
+                    val cy = meshFragments.map(_.center.y).sum / meshFragments.size
+                    val cz = meshFragments.map(_.center.z).sum / meshFragments.size
+                    val center = Vector3f(cx, cy, cz)
+                    val zm = extractMeshGeometry(eqWld, meshFragments)
+                    val vc = zm.vertices.length / 3
+                    var isShield = false
+                    if vc > 0 then
+                      var minX = Float.MaxValue; var maxX = Float.MinValue
+                      var minY = Float.MaxValue; var maxY = Float.MinValue
+                      var minZ = Float.MaxValue; var maxZ = Float.MinValue
+                      for i <- 0 until vc do
+                        val x = zm.vertices(i * 3); val y = zm.vertices(i * 3 + 1); val z = zm.vertices(i * 3 + 2)
+                        if x < minX then minX = x; if x > maxX then maxX = x
+                        if y < minY then minY = y; if y > maxY then maxY = y
+                        if z < minZ then minZ = z; if z > maxZ then maxZ = z
+                      val extX = maxX - minX; val extY = maxY - minY; val extZ = maxZ - minZ
+                      val maxExt = math.max(extX, math.max(extY, extZ))
+                      val minExt = math.min(extX, math.min(extY, extZ))
+                      isShield = maxExt > 0f && minExt / maxExt < 0.25f && center.length() < 0.5f && rootBoneXform.isEmpty
+                    val skelInfo = rootBoneXform.map { r =>
+                      f" skel rootBone=(${r.m30()}%.2f,${r.m31()}%.2f,${r.m32()}%.2f)"
+                    }.getOrElse(" noSkel")
+                    val shieldTag = if isShield then " SHIELD" else ""
+                    println(f"    IT$itNum: ${meshFragments.size} meshes, center=(${cx}%.2f,${cy}%.2f,${cz}%.2f)$skelInfo$shieldTag")
+                    val interleaved = buildInterleaved(zm)
+                    val glMesh = Mesh(interleaved, zm.indices)
+                    models(itNum) = EquipModel(zm, glMesh, rootBoneXform, center, isShield)
+              case _ => ()
+        }
+      catch case e: Exception =>
+        println(s"  Warning: failed to load ${file.getFileName}: ${e.getMessage}")
+
+    if models.nonEmpty then
+      println(s"  Equipment models: ${models.size} from ${gequipFiles.length} gequip files")
+    models.toMap
 
   def buildInterleaved(zm: ZoneMesh): Array[Float] =
     val vc = zm.vertices.length / 3

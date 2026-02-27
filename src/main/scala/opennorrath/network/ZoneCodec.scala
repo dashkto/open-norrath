@@ -988,7 +988,12 @@ object ZoneCodec:
     buf.get(nameBytes)
     val loreBytes = new Array[Byte](80)
     buf.get(loreBytes)
-    buf.position(buf.position() + 30) // skip IDFile[30]
+    val idFileBytes = new Array[Byte](30)
+    buf.get(idFileBytes)
+    val idFile = readNullStr(idFileBytes).toUpperCase
+    val idFileNum = if idFile.startsWith("IT") then
+      try idFile.drop(2).toInt catch case _: NumberFormatException => 0
+    else 0
 
     val weight = buf.get() & 0xFF        // 0174
     val noRent = buf.get() & 0xFF        // 0175
@@ -1065,6 +1070,7 @@ object ZoneCodec:
       delay = if common then delay else 0,
       charges = charges,
       stackable = common && stackable == 1,
+      idFileNum = idFileNum,
     )
 
   // ===========================================================================

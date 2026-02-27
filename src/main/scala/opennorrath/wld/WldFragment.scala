@@ -86,6 +86,11 @@ case class Fragment10_SkeletonHierarchy(
       transforms(i) = computeBoneWorld(i, wld, transforms)
     transforms
 
+  /** Compute the world-space rest-pose transform for a single bone (walking up parent chain). */
+  def restPoseBoneTransform(index: Int, wld: WldFile): Matrix4f =
+    val cache = new Array[Matrix4f](bones.length)
+    computeBoneWorld(index, wld, cache)
+
   private def computeBoneWorld(index: Int, wld: WldFile, cache: Array[Matrix4f]): Matrix4f =
     if cache(index) != null then return cache(index)
     val bone = bones(index)
