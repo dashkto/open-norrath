@@ -32,6 +32,9 @@ class Shader(vertexSource: String, fragmentSource: String):
   def setFloat(name: String, value: Float): Unit =
     glUniform1f(glGetUniformLocation(program, name), value)
 
+  def setVec3(name: String, x: Float, y: Float, z: Float): Unit =
+    glUniform3f(glGetUniformLocation(program, name), x, y, z)
+
   def setVec4(name: String, x: Float, y: Float, z: Float, w: Float): Unit =
     glUniform4f(glGetUniformLocation(program, name), x, y, z, w)
 

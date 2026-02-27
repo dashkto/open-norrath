@@ -3,7 +3,7 @@ package opennorrath.world
 import opennorrath.Settings
 import opennorrath.animation.{AnimCode, AnimatedCharacter}
 import opennorrath.archive.{PfsArchive, PfsEntry}
-import opennorrath.render.{Mesh, Shader, Texture}
+import opennorrath.render.{Mesh, Shader, ShadowMap, Texture}
 import opennorrath.state.ZoneCharacter
 import opennorrath.wld.*
 import org.joml.{Matrix4f, Vector3f}
@@ -49,7 +49,22 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings(),
 
   private[opennorrath] val fallbackTexture = Texture.createCheckerboard(64, 8)
 
-  val mesh = Mesh(interleavedVertices, zoneMesh.indices, stride = zoneStride)
+  private val zoneNormals = ZoneRenderer.buildNormals(zoneMesh)
+  val mesh = Mesh(interleavedVertices, zoneMesh.indices, stride = zoneStride,
+    normalsOpt = Some(zoneNormals))
+
+  // Shadow map — compute zone AABB from interleaved vertices (GL space) for the ortho frustum
+  val shadowMap: ShadowMap =
+    var minX = Float.MaxValue; var minY = Float.MaxValue; var minZ = Float.MaxValue
+    var maxX = -Float.MaxValue; var maxY = -Float.MaxValue; var maxZ = -Float.MaxValue
+    for i <- 0 until vertexCount do
+      val x = interleavedVertices(i * zoneStride + 0)
+      val y = interleavedVertices(i * zoneStride + 1)
+      val z = interleavedVertices(i * zoneStride + 2)
+      if x < minX then minX = x; if x > maxX then maxX = x
+      if y < minY then minY = y; if y > maxY then maxY = y
+      if z < minZ then minZ = z; if z > maxZ then maxZ = z
+    ShadowMap(Vector3f(minX, minY, minZ), Vector3f(maxX, maxY, maxZ), ZoneRenderer.SunDir)
 
   println(s"Zone loaded: $vertexCount vertices, ${zoneMesh.indices.length / 3} triangles, ${textureMap.size} textures")
 
@@ -86,11 +101,13 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings(),
           // GPU skinning: vertices stay in bone-local S3D space, bone index per vertex
           // VBO is static since the GPU handles deformation via bone transform uniforms
           val skinned = ZoneRenderer.buildSkinnedInterleaved(build.zm, build.meshFragments)
-          (skinned, Mesh(skinned, build.zm.indices, dynamic = false, stride = 6))
+          val normals = ZoneRenderer.buildSkinnedNormals(build.zm, build.meshFragments)
+          (skinned, Mesh(skinned, build.zm.indices, dynamic = false, stride = 6, normalsOpt = Some(normals)))
         else
           // No animation: standard GL-space interleaved buffer
           val standard = ZoneRenderer.buildInterleaved(build.zm)
-          (standard, Mesh(standard, build.zm.indices, dynamic = false))
+          val normals = ZoneRenderer.buildNormals(build.zm)
+          (standard, Mesh(standard, build.zm.indices, dynamic = false, normalsOpt = Some(normals)))
         zc.initRendering(build, null) // sets effectiveSize/flyOffset, animChar filled below
         val flyPos = if zc.flyOffset != 0f then Vector3f(zc.position.x, zc.position.y + zc.flyOffset, zc.position.z) else zc.position
         val modelMatrix = buildSpawnMatrix(build, flyPos, zc.heading, zc.effectiveSize)
@@ -254,6 +271,48 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings(),
     }
     (curTex, curAlpha)
 
+  /** Render all opaque geometry into the shadow map depth buffer from the sun's perspective.
+    * Uses a depth-only shader — no texture/color/material state needed.
+    * Called from ZoneScreen.render() before the main color pass.
+    */
+  def drawShadowPass(shadowShader: Shader): Unit =
+    shadowShader.use()
+    shadowShader.setMatrix4f("lightSpaceMatrix", shadowMap.lightSpaceMatrix)
+    shadowShader.setBool("skinned", false) // ensure clean state at start of each frame
+
+    val identity = Matrix4f()
+
+    // Zone mesh
+    shadowShader.setMatrix4f("model", identity)
+    mesh.bind()
+    for group <- zoneMesh.groups do
+      if isOpaque(effectiveMaterialType(group)) then
+        mesh.drawRangeNoBind(group.startIndex, group.indexCount)
+    mesh.unbind()
+
+    // Objects
+    for obj <- objectInstances do
+      shadowShader.setMatrix4f("model", obj.modelMatrix)
+      obj.glMesh.bind()
+      for group <- obj.zoneMesh.groups do
+        if isOpaque(effectiveMaterialType(group)) then
+          obj.glMesh.drawRangeNoBind(group.startIndex, group.indexCount)
+      obj.glMesh.unbind()
+
+    // Characters (skinned models need bone transforms for correct shadow shapes)
+    for zc <- zoneCharacters.values if zc.hasRendering do
+      val isSkinned = zc.animChar.clips.nonEmpty
+      if isSkinned then
+        shadowShader.setBool("skinned", true)
+        zc.animChar.uploadBoneTransforms(shadowShader)
+      shadowShader.setMatrix4f("model", zc.animChar.modelMatrix)
+      zc.animChar.glMesh.bind()
+      for group <- zc.animChar.zoneMesh.groups do
+        if isOpaque(effectiveMaterialType(group)) then
+          zc.animChar.glMesh.drawRangeNoBind(group.startIndex, group.indexCount)
+      zc.animChar.glMesh.unbind()
+      if isSkinned then shadowShader.setBool("skinned", false)
+
   def draw(shader: Shader, deltaTime: Float, viewMatrix: Matrix4f): Unit =
     elapsedMs += deltaTime * 1000f
     shader.setInt("tex0", 0)
@@ -379,6 +438,9 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings(),
     shader.setInt("alphaTest", 0)
     shader.setFloat("alphaMultiplier", 1.0f)
 
+    // Disable directional lighting for particles — fire/flame should glow, not receive shadow
+    shader.setFloat("ambientStrength", 1.0f)
+
     // Update and draw particles (last, for correct additive blending)
     particleSystem.foreach { ps =>
       ps.update(deltaTime, viewMatrix)
@@ -452,6 +514,7 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings(),
 
   def cleanup(): Unit =
     mesh.cleanup()
+    shadowMap.cleanup()
     objectInstances.foreach(_.glMesh.cleanup())
     zoneCharacters.values.foreach(zc => if zc.hasRendering then zc.animChar.glMesh.cleanup())
     // Equipment glMeshes owned by EquipmentModels store — don't clean up here
@@ -552,7 +615,8 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings(),
 
       actorMeshes.get(placement.actorName).map { zm =>
         val interleaved = ZoneRenderer.buildInterleaved(zm)
-        val glMesh = Mesh(interleaved, zm.indices)
+        val normals = ZoneRenderer.buildNormals(zm)
+        val glMesh = Mesh(interleaved, zm.indices, normalsOpt = Some(normals))
         val modelMatrix = buildModelMatrix(placement)
         ObjectRenderData(zm, glMesh, modelMatrix)
       }
@@ -606,6 +670,11 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings(),
     mat
 
 object ZoneRenderer:
+  /** Fixed sun direction in GL space — roughly overhead and to the side (mid-afternoon feel).
+    * Points FROM the sun TOWARD the scene (the direction light travels).
+    */
+  val SunDir = Vector3f(0.4f, -0.8f, 0.3f)
+
   private[opennorrath] val PerRacePattern = "^global([a-z]{2,3})_chr\\.s3d$".r
 
   /** Map texture body-part codes → equipment slot indices.
@@ -793,7 +862,8 @@ object ZoneRenderer:
                       val minExt = math.min(extX, math.min(extY, extZ))
                       isShield = maxExt > 0f && minExt / maxExt < 0.25f && center.length() < 0.5f && rootBoneXform.isEmpty
                     val interleaved = buildInterleaved(zm)
-                    val glMesh = Mesh(interleaved, zm.indices)
+                    val normals = buildNormals(zm)
+                    val glMesh = Mesh(interleaved, zm.indices, normalsOpt = Some(normals))
                     models(itNum) = EquipModel(zm, glMesh, rootBoneXform, center, isShield)
               case _ => ()
         }
@@ -871,9 +941,68 @@ object ZoneRenderer:
         arr(i * 5 + 4) = zm.uvs(i * 2 + 1)
     arr
 
+  /** Build a separate GL-space normal buffer from ZoneMesh normals (S3D space).
+    * Used as a second VBO for the normal attribute (location 4) on non-skinned meshes.
+    * The S3D→GL rotation for normals is the same as for positions: (nx, nz, -ny).
+    */
+  def buildNormals(zm: ZoneMesh): Array[Float] =
+    val vc = zm.vertices.length / 3
+    val arr = new Array[Float](vc * 3)
+    for i <- 0 until vc do
+      if i * 3 + 2 < zm.normals.length then
+        // S3D→GL rotation for normals: (x, z, -y)
+        arr(i * 3 + 0) = zm.normals(i * 3 + 0)
+        arr(i * 3 + 1) = zm.normals(i * 3 + 2)
+        arr(i * 3 + 2) = -zm.normals(i * 3 + 1)
+      else
+        arr(i * 3 + 1) = 1f // default up normal
+    arr
+
+  /** Build bone-local S3D-space normals parallel to buildSkinnedInterleaved.
+    * Normals stay in bone-local S3D space; the vertex shader transforms them
+    * with mat3(boneTransforms[idx]) which has the S3D→GL rotation baked in.
+    */
+  def buildSkinnedNormals(zm: ZoneMesh, meshFragments: List[Fragment36_Mesh]): Array[Float] =
+    val vc = zm.vertices.length / 3
+    val arr = new Array[Float](vc * 3)
+    var globalIdx = 0
+    for mesh <- meshFragments do
+      if mesh.vertexPieces.nonEmpty then
+        var vertIdx = 0
+        for piece <- mesh.vertexPieces do
+          for _ <- 0 until piece.count do
+            if globalIdx < vc && vertIdx < mesh.normals.length then
+              val n = mesh.normals(vertIdx)
+              arr(globalIdx * 3 + 0) = n.x
+              arr(globalIdx * 3 + 1) = n.y
+              arr(globalIdx * 3 + 2) = n.z
+              globalIdx += 1
+              vertIdx += 1
+            else
+              if globalIdx < vc then
+                arr(globalIdx * 3 + 1) = 1f // default up
+                globalIdx += 1
+              vertIdx += 1
+      else
+        for i <- mesh.normals.indices do
+          if globalIdx < vc then
+            val n = mesh.normals(i)
+            arr(globalIdx * 3 + 0) = n.x
+            arr(globalIdx * 3 + 1) = n.y
+            arr(globalIdx * 3 + 2) = n.z
+            globalIdx += 1
+        // If fewer normals than vertices, pad with default
+        val remaining = mesh.vertices.length - mesh.normals.length
+        for _ <- 0 until remaining do
+          if globalIdx < vc then
+            arr(globalIdx * 3 + 1) = 1f
+            globalIdx += 1
+    arr
+
   def extractMeshGeometry(objWld: WldFile, meshFragments: List[Fragment36_Mesh]): ZoneMesh =
     var allVertices = Array.empty[Float]
     var allUvs = Array.empty[Float]
+    var allNormals = Array.empty[Float]
     var allIndices = Array.empty[Int]
     var allGroups = List.empty[ZoneMeshGroup]
 
@@ -890,6 +1019,14 @@ object ZoneRenderer:
         mesh.uvs.take(mesh.vertices.length)
       val uvs = paddedUvs.flatMap((u, v) => Array(u, v))
       allUvs = allUvs ++ uvs
+
+      // Normals — stored in S3D space like vertices; pad with up (0,0,1) if missing
+      val paddedNormals = if mesh.normals.length >= mesh.vertices.length then
+        mesh.normals.take(mesh.vertices.length)
+      else
+        mesh.normals ++ Array.fill(mesh.vertices.length - mesh.normals.length)(Vector3f(0f, 0f, 1f))
+      val norms = paddedNormals.flatMap(n => Array(n.x, n.y, n.z))
+      allNormals = allNormals ++ norms
 
       var polyIndex = 0
       for group <- mesh.renderGroups do
@@ -911,7 +1048,7 @@ object ZoneRenderer:
         if indexCount > 0 then
           allGroups = allGroups :+ ZoneMeshGroup(startIndex, indexCount, textureName, matType)
 
-    ZoneMesh(allVertices, allUvs, allIndices, allGroups)
+    ZoneMesh(allVertices, allUvs, allNormals, allIndices, allGroups)
 
   def applyBoneTransforms(mesh: Fragment36_Mesh, boneTransforms: Array[Matrix4f]): Fragment36_Mesh =
     if mesh.vertexPieces.isEmpty then return mesh

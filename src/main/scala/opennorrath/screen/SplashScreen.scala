@@ -12,11 +12,14 @@ import org.lwjgl.opengl.GL11.*
 import opennorrath.{BuildInfo, Game}
 import opennorrath.render.Shader
 import opennorrath.world.{Camera, ZoneRenderer}
+import org.lwjgl.opengl.GL13.{glActiveTexture, GL_TEXTURE0, GL_TEXTURE1}
+import org.lwjgl.opengl.GL20.glVertexAttrib3f
 import opennorrath.ui.{Colors, Fonts}
 
 class SplashScreen(ctx: GameContext, zonePath: String) extends Screen:
 
   private var zoneShader: Shader = uninitialized
+  private var shadowShader: Shader = uninitialized
   private var zone: ZoneRenderer = uninitialized
   private var camera: Camera = uninitialized
   private var projection3d: Matrix4f = uninitialized
@@ -30,6 +33,7 @@ class SplashScreen(ctx: GameContext, zonePath: String) extends Screen:
     glClearColor(0.1f, 0.1f, 0.15f, 1f)
 
     zoneShader = Shader.fromResources("/shaders/default.vert", "/shaders/default.frag")
+    shadowShader = Shader.fromResources("/shaders/shadow.vert", "/shaders/shadow.frag")
     zone = ZoneRenderer(zonePath, ctx.settings)
     camera = Camera(
       position = Vector3f(-150f, 60f, -460f),
@@ -66,15 +70,36 @@ class SplashScreen(ctx: GameContext, zonePath: String) extends Screen:
       case "Quit" => glfwSetWindowShouldClose(ctx.window, true)
 
   override def render(dt: Float): Unit =
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
-
-    // 3D zone background
+    // Shadow map pre-pass
     glEnable(GL_DEPTH_TEST)
     glDisable(GL_BLEND)
+    zone.shadowMap.bind()
+    zone.drawShadowPass(shadowShader)
+    zone.shadowMap.unbind(ctx.windowWidth, ctx.windowHeight)
+
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+
+    // 3D zone background with lighting
     zoneShader.use()
     zoneShader.setMatrix4f("projection", projection3d)
     zoneShader.setMatrix4f("view", camera.viewMatrix)
     zoneShader.setMatrix4f("model", model)
+
+    // Lighting uniforms
+    zoneShader.setBool("enableLighting", true)
+    zoneShader.setBool("enableShadows", true)
+    val sunDir = ZoneRenderer.SunDir
+    zoneShader.setVec3("lightDir", sunDir.x, sunDir.y, sunDir.z)
+    zoneShader.setFloat("ambientStrength", 0.35f)
+    zoneShader.setMatrix4f("lightSpaceMatrix", zone.shadowMap.lightSpaceMatrix)
+
+    // Bind shadow map to texture unit 1
+    glActiveTexture(GL_TEXTURE1)
+    glBindTexture(GL_TEXTURE_2D, zone.shadowMap.depthTexture)
+    zoneShader.setInt("shadowMap", 1)
+    glActiveTexture(GL_TEXTURE0)
+    glVertexAttrib3f(4, 0f, 1f, 0f) // default up normal
+
     zone.draw(zoneShader, dt, camera.viewMatrix)
 
     // ImGui overlay
@@ -128,6 +153,7 @@ class SplashScreen(ctx: GameContext, zonePath: String) extends Screen:
   override def dispose(): Unit =
     zone.cleanup()
     zoneShader.cleanup()
+    shadowShader.cleanup()
 
   private def pushColor(idx: Int, c: (Float, Float, Float, Float)): Unit =
     ImGui.pushStyleColor(idx, c._1, c._2, c._3, c._4)

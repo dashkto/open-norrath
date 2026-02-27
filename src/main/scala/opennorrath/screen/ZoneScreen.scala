@@ -5,6 +5,7 @@ import scala.compiletime.uninitialized
 import org.joml.{Matrix4f, Vector3f, Vector4f}
 import org.lwjgl.glfw.GLFW.*
 import org.lwjgl.opengl.GL11.*
+import org.lwjgl.opengl.GL13.{glActiveTexture, GL_TEXTURE0, GL_TEXTURE1}
 import org.lwjgl.opengl.GL20.glVertexAttrib3f
 
 import imgui.ImGui
@@ -20,6 +21,7 @@ import opennorrath.ui.{NameplateRenderer, ZoneHud}
 class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData] = None, profile: Option[PlayerProfileData] = None) extends Screen:
 
   private var shader: Shader = uninitialized
+  private var shadowShader: Shader = uninitialized
   private var zone: ZoneRenderer = uninitialized
   private var camCtrl: CameraController = uninitialized
   private val model = Matrix4f()
@@ -273,6 +275,7 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
     player = Game.zoneSession.flatMap(_.client.profile).map(PlayerCharacter.fromProfile)
     hud.init(player)
     shader = Shader.fromResources("/shaders/default.vert", "/shaders/default.frag")
+    shadowShader = Shader.fromResources("/shaders/shadow.vert", "/shaders/shadow.frag")
     zone = ZoneRenderer(zonePath, ctx.settings, zoneCharacters)
     camCtrl = CameraController(ctx.window, ctx.windowWidth, ctx.windowHeight)
     camCtrl.player = player
@@ -475,12 +478,36 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
   override def render(dt: Float): Unit =
     glEnable(GL_DEPTH_TEST)
     glDisable(GL_BLEND)
+
+    // --- Shadow map pre-pass: render depth from sun's perspective ---
+    zone.shadowMap.bind()
+    zone.drawShadowPass(shadowShader)
+    zone.shadowMap.unbind(ctx.windowWidth, ctx.windowHeight)
+
+    // --- Main color pass ---
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
 
     shader.use()
     shader.setMatrix4f("projection", camCtrl.projection)
     shader.setMatrix4f("view", camCtrl.viewMatrix)
     shader.setMatrix4f("model", model)
+
+    // Lighting uniforms — set once per frame
+    shader.setBool("enableLighting", true)
+    shader.setBool("enableShadows", true)
+    val sunDir = ZoneRenderer.SunDir
+    shader.setVec3("lightDir", sunDir.x, sunDir.y, sunDir.z)
+    shader.setFloat("ambientStrength", 0.35f)
+    shader.setMatrix4f("lightSpaceMatrix", zone.shadowMap.lightSpaceMatrix)
+
+    // Bind shadow map depth texture to unit 1 (diffuse tex0 stays on unit 0)
+    glActiveTexture(GL_TEXTURE1)
+    glBindTexture(GL_TEXTURE_2D, zone.shadowMap.depthTexture)
+    shader.setInt("shadowMap", 1)
+    glActiveTexture(GL_TEXTURE0)
+
+    // Set default normal for meshes without a normal VBO (particles, nameplates, debug)
+    glVertexAttrib3f(4, 0f, 1f, 0f)
 
     zone.draw(shader, dt, camCtrl.viewMatrix)
 
@@ -493,6 +520,7 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
     }
 
     // Spell particle effects (additive blending, before nameplates)
+    // ambientStrength=1.0 already set by zone.draw() for particles — keeps spells unlit too
     spellEffects.draw(shader)
 
     // Nameplates: billboarded 3D quads with depth test (occluded by geometry)
@@ -554,3 +582,4 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
     targeting.cleanup()
     zone.cleanup()
     shader.cleanup()
+    shadowShader.cleanup()

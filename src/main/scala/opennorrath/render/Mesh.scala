@@ -10,8 +10,12 @@ import org.lwjgl.BufferUtils
   * Stride 5: [x, y, z, u, v]             — zone mesh, objects, static models (GL-space positions)
   * Stride 6: [x, y, z, u, v, boneIndex]  — skinned character meshes (bone-local S3D positions)
   * Stride 8: [x, y, z, u, v, r, g, b]    — zone mesh with baked vertex lighting
+  *
+  * Optional separate normal VBO: when normalsOpt is provided, a second VBO is created
+  * with normals at attribute location 4. This avoids changing any existing stride/layout.
   */
-class Mesh(vertices: Array[Float], indices: Array[Int], dynamic: Boolean = false, stride: Int = 5):
+class Mesh(vertices: Array[Float], indices: Array[Int], dynamic: Boolean = false, stride: Int = 5,
+           normalsOpt: Option[Array[Float]] = None):
 
   private val vao = glGenVertexArrays()
   private val vbo = glGenBuffers()
@@ -47,6 +51,20 @@ class Mesh(vertices: Array[Float], indices: Array[Int], dynamic: Boolean = false
     glVertexAttribPointer(2, 3, GL_FLOAT, false, strideBytes, 5 * 4)
     glEnableVertexAttribArray(2)
 
+  // Normal vector: 3 floats at attrib location 4 (optional separate VBO).
+  // Kept in a separate buffer so existing stride/layout code is untouched.
+  private val normVbo: Int = normalsOpt match
+    case Some(normals) =>
+      val nid = glGenBuffers()
+      val nbuf = BufferUtils.createFloatBuffer(normals.length)
+      nbuf.put(normals).flip()
+      glBindBuffer(GL_ARRAY_BUFFER, nid)
+      glBufferData(GL_ARRAY_BUFFER, nbuf, GL_STATIC_DRAW)
+      glVertexAttribPointer(4, 3, GL_FLOAT, false, 3 * 4, 0)
+      glEnableVertexAttribArray(4)
+      nid
+    case None => 0
+
   glBindVertexArray(0)
 
   def draw(): Unit =
@@ -78,4 +96,5 @@ class Mesh(vertices: Array[Float], indices: Array[Int], dynamic: Boolean = false
   def cleanup(): Unit =
     glDeleteBuffers(vbo)
     glDeleteBuffers(ebo)
+    if normVbo != 0 then glDeleteBuffers(normVbo)
     glDeleteVertexArrays(vao)

@@ -59,10 +59,12 @@ class CharacterPreview:
       case Some(build) =>
         val (interleaved, glMesh) = if build.clips.nonEmpty then
           val skinned = ZoneRenderer.buildSkinnedInterleaved(build.zm, build.meshFragments)
-          (skinned, Mesh(skinned, build.zm.indices, dynamic = false, stride = 6))
+          val normals = ZoneRenderer.buildSkinnedNormals(build.zm, build.meshFragments)
+          (skinned, Mesh(skinned, build.zm.indices, dynamic = false, stride = 6, normalsOpt = Some(normals)))
         else
           val standard = ZoneRenderer.buildInterleaved(build.zm)
-          (standard, Mesh(standard, build.zm.indices, dynamic = false))
+          val normals = ZoneRenderer.buildNormals(build.zm)
+          (standard, Mesh(standard, build.zm.indices, dynamic = false, normalsOpt = Some(normals)))
         // Recenter for preview framing only — not needed for world placement (see buildSpawnMatrix)
         val mm = Matrix4f()
         mm.translate(-build.glCenterX, -build.glMinY, -build.glCenterZ)
@@ -126,6 +128,14 @@ class CharacterPreview:
         shader.setMatrix4f("view", viewMatrix)
         shader.setMatrix4f("model", modelMatrix)
         glVertexAttrib3f(2, 1f, 1f, 1f) // white vertex color
+
+        // Diffuse-only lighting (no shadows) — light from slightly above and in front
+        shader.setBool("enableLighting", true)
+        shader.setVec3("lightDir", 0f, -0.6f, -0.8f)
+        shader.setFloat("ambientStrength", 0.45f)
+        // Point shadowMap sampler at unit 1 to avoid sampler type conflict with tex0 on unit 0
+        // (sampler2D + sampler2DShadow on same unit = undefined behavior → no output on most drivers)
+        shader.setInt("shadowMap", 1)
 
         char.update(dt)
         val isSkinned = char.clips.nonEmpty

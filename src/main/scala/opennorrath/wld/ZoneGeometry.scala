@@ -7,8 +7,9 @@ case class TextureAnim(frames: Vector[String], delayMs: Int)
 case class ZoneMeshGroup(startIndex: Int, indexCount: Int, textureName: String, materialType: MaterialType, anim: Option[TextureAnim] = None)
 
 case class ZoneMesh(
-    vertices: Array[Float],  // x, y, z interleaved
+    vertices: Array[Float],  // x, y, z interleaved (S3D space)
     uvs: Array[Float],       // u, v interleaved
+    normals: Array[Float],   // nx, ny, nz interleaved (S3D space, parallel to vertices)
     indices: Array[Int],
     groups: List[ZoneMeshGroup],
 )
@@ -152,6 +153,7 @@ object ZoneGeometry:
 
     var allVertices = Array.empty[Float]
     var allUvs = Array.empty[Float]
+    var allNormals = Array.empty[Float]
     var allIndices = Array.empty[Int]
     var allGroups = List.empty[ZoneMeshGroup]
 
@@ -169,6 +171,14 @@ object ZoneGeometry:
         mesh.uvs.take(mesh.vertices.length)
       val uvs = paddedUvs.flatMap((u, v) => Array(u, v))
       allUvs = allUvs ++ uvs
+
+      // Append normals — stored in S3D space like vertices; pad with up (0,0,1) if missing
+      val paddedNormals = if mesh.normals.length >= mesh.vertices.length then
+        mesh.normals.take(mesh.vertices.length)
+      else
+        mesh.normals ++ Array.fill(mesh.vertices.length - mesh.normals.length)(Vector3f(0f, 0f, 1f))
+      val norms = paddedNormals.flatMap(n => Array(n.x, n.y, n.z))
+      allNormals = allNormals ++ norms
 
       // Process render groups to get material-grouped triangles
       var polyIndex = 0
@@ -192,7 +202,7 @@ object ZoneGeometry:
         if indexCount > 0 then
           allGroups = allGroups :+ ZoneMeshGroup(startIndex, indexCount, textureName, matType, anim)
 
-    ZoneMesh(allVertices, allUvs, allIndices, allGroups)
+    ZoneMesh(allVertices, allUvs, allNormals, allIndices, allGroups)
 
   def resolveTextureName(wld: WldFile, materialListRef: Int, materialIndex: Int): String =
     try
