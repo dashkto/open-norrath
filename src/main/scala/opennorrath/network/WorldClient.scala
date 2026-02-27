@@ -43,12 +43,17 @@ class WorldClient extends PacketHandler:
   // Fragment reassembly
   private val assembler = FragmentAssembler()
 
+  // Keepalive — send periodic ACKs so the server doesn't drop the connection
+  private var lastSentMs: Long = 0
+  private val KeepaliveIntervalMs = 5000L
+
   // Login data
   var characters: Vector[CharacterInfo] = Vector.empty
 
   // Pending connection info (set from game thread, consumed by network thread)
   @volatile private var pendingAccountId = 0
   @volatile private var pendingSessionKey = ""
+  @volatile private var zoningCharName: String = ""  // non-empty = zoning mode
 
   /** Initiate world connection. Called from game thread. */
   def connect(accountId: Int, sessionKey: String): Unit =
@@ -57,6 +62,13 @@ class WorldClient extends PacketHandler:
     state = WorldState.Connecting
     emit(WorldEvent.StateChanged(state))
     queueAppPacket(WorldOpcodes.SendLoginInfo, WorldCodec.encodeLoginInfo(accountId, sessionKey))
+
+  /** Initiate world reconnection for zone-to-zone. Called from game thread.
+    * Server will recognize pZoning=true and skip character select.
+    */
+  def connectForZoning(accountId: Int, sessionKey: String, charName: String): Unit =
+    zoningCharName = charName
+    connect(accountId, sessionKey)
 
   /** Request to enter the world with a character. Called from game thread. */
   def enterWorld(charName: String): Unit =
@@ -140,6 +152,15 @@ class WorldClient extends PacketHandler:
         val approved = WorldCodec.decodeNameApproval(pkt.payload)
         emit(WorldEvent.NameApproved(approved))
 
+      case WorldOpcodes.EnterWorld =>
+        // Server sends OP_EnterWorld during zoning reconnect (pZoning=true).
+        // Auto-respond with OP_EnterWorld to continue the zone-to-zone flow.
+        if zoningCharName.nonEmpty then
+          println(s"[World] Zoning: auto-responding OP_EnterWorld for '$zoningCharName'")
+          queueAppPacket(WorldOpcodes.EnterWorld, WorldCodec.encodeEnterWorld(zoningCharName))
+          state = WorldState.EnteringZone
+          emit(WorldEvent.StateChanged(state))
+
       case other =>
         println(f"[World] Unhandled opcode: 0x${other & 0xFFFF}%04x (${pkt.payload.length} bytes)")
 
@@ -155,6 +176,14 @@ class WorldClient extends PacketHandler:
       val ack = OldPacket.encodeAck(nextSeq(), lastInArq)
       outQueue.add(ack)
       needArsp = false
+      lastSentMs = System.currentTimeMillis()
+
+    // Keepalive — send a periodic ACK to prevent server from dropping idle connection
+    val now = System.currentTimeMillis()
+    if lastInArq >= 0 && now - lastSentMs > KeepaliveIntervalMs then
+      val ack = OldPacket.encodeAck(nextSeq(), lastInArq)
+      outQueue.add(ack)
+      lastSentMs = now
 
   /** Dequeue next outgoing raw packet. Called from network thread. */
   def pollOutgoing(): Option[Array[Byte]] =

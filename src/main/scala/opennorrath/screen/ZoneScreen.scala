@@ -9,12 +9,12 @@ import org.lwjgl.opengl.GL20.glVertexAttrib3f
 
 import imgui.ImGui
 
-import opennorrath.{Game, GameAction}
+import opennorrath.{Game, GameAction, WorldSession}
 import opennorrath.animation.AnimCode
 import opennorrath.render.Shader
 import opennorrath.state.{PlayerCharacter, ZoneCharacter}
 import opennorrath.world.{CameraController, EqCoords, SpellEffectSystem, TargetingSystem, ZoneRenderer}
-import opennorrath.network.{InventoryItem, PlayerPosition, PlayerProfileData, SpawnData, WorldEvent, ZoneEvent, ZonePointData}
+import opennorrath.network.{InventoryItem, NetCommand, NetworkThread, PlayerPosition, PlayerProfileData, SpawnData, WorldClient, WorldEvent, ZoneEvent, ZonePointData}
 import opennorrath.ui.{NameplateRenderer, ZoneHud}
 
 class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData] = None, profile: Option[PlayerProfileData] = None) extends Screen:
@@ -36,7 +36,10 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
   private var wasAirborne = false          // track airborne state for fall animation
   private var jumpAnimTimer = 0f          // countdown for crouch animation on jump
   private var zoning = false              // true after server requests zone change
+  private var zoneChangeAccepted = false  // true after OP_ZoneChange success=1 received
   private var zoneDeniedUntil = 0L       // cooldown (millis) after zone change denial
+  private var zoningStartedAt = 0L       // millis when zoning started (for timeout)
+  private val ZoningTimeoutMs = 15000L   // give up if world ZoneServerInfo never arrives
   private var zonePoints = Vector.empty[ZonePointData]
   private val ZoneLineRadius = 30f       // trigger radius in EQ units (~30 feet)
 
@@ -75,8 +78,13 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
     case ZoneEvent.ZoneChangeRequested(req) =>
       println(s"[Zone] Zone change requested → zoneId=${req.zoneId}")
       zoning = true
-    case ZoneEvent.Error(msg) if zoning =>
-      println(s"[Zone] Zone change aborted: $msg")
+      zoningStartedAt = System.currentTimeMillis()
+    case ZoneEvent.ZoneChangeAccepted if zoning && !zoneChangeAccepted =>
+      println(s"[Zone] Zone change accepted — reconnecting to world")
+      zoneChangeAccepted = true
+      reconnectWorldForZoning()
+    case ZoneEvent.ZoneChangeDenied if zoning =>
+      println(s"[Zone] Zone change denied by server")
       zoning = false
       zoneDeniedUntil = System.currentTimeMillis() + 3000
     case ZoneEvent.ZonePointsLoaded(points) =>
@@ -229,21 +237,26 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
 
     // When zoning, poll world server for new zone address instead of normal updates
     if zoning then
-      Game.worldSession.foreach { ws =>
-        var event = ws.client.pollEvent()
-        while event.isDefined do
-          event.get match
-            case WorldEvent.ZoneInfo(addr) =>
-              val charName = player.map(_.name).getOrElse("")
-              Game.setScreen(ZoneLoadingScreen(ctx, addr, charName))
-              return
-            case WorldEvent.Error(msg) =>
-              println(s"[Zone] World error during zone change: $msg")
-              zoning = false
-            case _ => ()
-          event = ws.client.pollEvent()
-      }
-      return // skip normal zone update while zoning
+      if System.currentTimeMillis() - zoningStartedAt > ZoningTimeoutMs then
+        println("[Zone] Zoning timed out waiting for world ZoneServerInfo")
+        zoning = false
+        zoneChangeAccepted = false
+        zoneDeniedUntil = System.currentTimeMillis() + 5000
+      else
+        Game.worldSession.foreach { ws =>
+          var event = ws.client.pollEvent()
+          while event.isDefined do
+            event.get match
+              case WorldEvent.ZoneInfo(addr) =>
+                val charName = player.map(_.name).getOrElse("")
+                Game.setScreen(ZoneLoadingScreen(ctx, addr, charName))
+                return
+              case WorldEvent.Error(msg) =>
+                println(s"[Zone] World error during zone change: $msg")
+              case _ => ()
+            event = ws.client.pollEvent()
+        }
+        return // skip normal zone update while zoning
 
     // Client-side interpolation and NPC animation
     val myId = Game.zoneSession.map(_.client.mySpawnId).getOrElse(-1)
@@ -319,6 +332,7 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
           println(s"[Zone] Zone line hit: '${info.regionName}' param1=${info.param1} param2=${info.param2}")
           Game.zoneSession.foreach(_.client.sendZoneChange(0))
           zoning = true
+          zoningStartedAt = System.currentTimeMillis()
         }
       }}
 
@@ -369,25 +383,29 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
 
     hud.render()
 
-    // Show zone point debug overlay — distance to nearest server zone point
-    if zonePoints.nonEmpty then
-      player.foreach { pc => pc.zoneChar.foreach { zc =>
-        val pos = zc.position
-        val (sy, sx, sz) = EqCoords.glToServer(pos.x, pos.y - pc.feetOffset, pos.z)
-        val drawList = ImGui.getForegroundDrawList()
-        var minDist = Float.MaxValue
-        var nearest: ZonePointData = null
-        for zp <- zonePoints do
-          val dx = sx - zp.x; val dy = sy - zp.y; val dz = sz - zp.z
-          val dist = Math.sqrt(dx * dx + dy * dy + dz * dz).toFloat
-          if dist < minDist then { minDist = dist; nearest = zp }
-        val inside = minDist <= ZoneLineRadius
-        val col = if inside then ImGui.colorConvertFloat4ToU32(0.2f, 1f, 0.2f, 0.9f)
-                  else ImGui.colorConvertFloat4ToU32(0.7f, 0.7f, 0.7f, 0.6f)
-        drawList.addText(10f, 40f, col, f"ZP #${nearest.iterator} dist=${minDist}%.0f/${ZoneLineRadius}%.0f → zone${nearest.targetZoneId}  loc=($sx%.0f,$sy%.0f,$sz%.0f)")
-        if inside then
-          drawList.addText(10f, 55f, col, f"ZONE LINE → zone ${nearest.targetZoneId}")
-      }}
+  /** Reconnect to world server for zone-to-zone transition.
+    * EQ protocol requires: disconnect both zone+world, reconnect to world,
+    * authenticate, wait for server's OP_EnterWorld (pZoning=true path),
+    * auto-respond, then receive OP_ZoneServerInfo.
+    */
+  private def reconnectWorldForZoning(): Unit =
+    // Stop zone session (server is kicking us out anyway)
+    Game.zoneSession.foreach(_.stop())
+    Game.zoneSession = None
+
+    // Stop old world session
+    Game.worldSession.foreach(_.stop())
+    Game.worldSession = None
+
+    // Create new world session in zoning mode
+    val charName = player.map(_.name).getOrElse("")
+    val wc = WorldClient()
+    val wnt = NetworkThread(wc)
+    Game.worldSession = Some(WorldSession(wc, wnt))
+    wnt.start()
+    wnt.send(NetCommand.Connect(Game.worldHost, Game.worldPort))
+    wc.connectForZoning(Game.worldAccountId, Game.worldKey, charName)
+    zoningStartedAt = System.currentTimeMillis() // reset timeout
 
   override def dispose(): Unit =
     hud.dispose()

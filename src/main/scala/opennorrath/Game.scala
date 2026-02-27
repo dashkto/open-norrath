@@ -32,6 +32,14 @@ object Game:
   /** Active zone session — created on zone entry, survives screen transitions. */
   var zoneSession: Option[ZoneSession] = None
 
+  /** World connection credentials — saved for zone-to-zone reconnection.
+    * When zoning, the client must reconnect to the world server with the same credentials.
+    */
+  var worldHost: String = ""
+  var worldPort: Int = 0
+  var worldAccountId: Int = 0
+  var worldKey: String = ""
+
   def run(ctx: GameContext, initialScreen: Screen): Unit =
     setScreen(initialScreen)
 

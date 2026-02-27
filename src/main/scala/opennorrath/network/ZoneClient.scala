@@ -78,6 +78,8 @@ enum ZoneEvent:
 
   // Zone transitions
   case ZoneChangeRequested(req: ZoneChangeRequest)
+  case ZoneChangeAccepted
+  case ZoneChangeDenied
 
   case Error(message: String)
 
@@ -419,8 +421,11 @@ class ZoneClient extends PacketHandler:
 
       case ZoneOpcodes.ZoneChange =>
         ZoneCodec.decodeZoneChange(pkt.payload).foreach { result =>
-          if result.success != 1 then
-            emit(ZoneEvent.Error(s"Zone change denied"))
+          println(s"[Zone] OP_ZoneChange response: success=${result.success}")
+          if result.success == 1 then
+            emit(ZoneEvent.ZoneChangeAccepted)
+          else
+            emit(ZoneEvent.ZoneChangeDenied)
         }
 
       // --- Misc (log but don't emit events) ---

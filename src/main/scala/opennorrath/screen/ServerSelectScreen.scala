@@ -169,6 +169,12 @@ class ServerSelectScreen(
     Game.loginSession.foreach(_.stop())
     Game.loginSession = None
 
+    // Save credentials for zone-to-zone reconnection
+    Game.worldHost = serverIp
+    Game.worldPort = worldPort
+    Game.worldAccountId = accountId
+    Game.worldKey = loginClient.worldKey
+
     val wc = WorldClient()
     val wnt = NetworkThread(wc)
     Game.worldSession = Some(WorldSession(wc, wnt))
