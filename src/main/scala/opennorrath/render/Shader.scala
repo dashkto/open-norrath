@@ -43,6 +43,27 @@ class Shader(vertexSource: String, fragmentSource: String):
       glUniformMatrix4fv(glGetUniformLocation(program, name), false, buf)
     finally stack.pop()
 
+  /** Upload an array of mat4 uniforms (e.g., bone transforms) in a single call.
+    * JOML's Matrix4f.get(FloatBuffer) writes 16 floats at the buffer's current position
+    * using absolute puts (position is NOT advanced), so we must advance manually.
+    * IMPORTANT: both statements must be on separate lines — Scala 3 parses
+    * `for x <- xs do a; b` as `(for x <- xs do a); b`, so a single-line
+    * semicolon would silently move the position advance outside the loop.
+    */
+  def setMatrix4fArray(name: String, matrices: Array[Matrix4f]): Unit =
+    val stack = MemoryStack.stackPush()
+    try
+      val buf = stack.mallocFloat(matrices.length * 16)
+      for m <- matrices do
+        m.get(buf)
+        buf.position(buf.position() + 16)
+      buf.flip()
+      glUniformMatrix4fv(glGetUniformLocation(program, name), false, buf)
+    finally stack.pop()
+
+  def setBool(name: String, value: Boolean): Unit =
+    glUniform1i(glGetUniformLocation(program, name), if value then 1 else 0)
+
   def cleanup(): Unit = glDeleteProgram(program)
 
   private def compileShader(source: String, shaderType: Int): Int =

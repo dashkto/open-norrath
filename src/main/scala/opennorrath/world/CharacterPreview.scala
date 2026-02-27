@@ -57,12 +57,16 @@ class CharacterPreview:
     characterBuilds.get(modelCode) match
       case None => ()
       case Some(build) =>
-        val interleaved = ZoneRenderer.buildInterleaved(build.zm)
-        val glMesh = Mesh(interleaved, build.zm.indices, dynamic = build.clips.nonEmpty)
+        val (interleaved, glMesh) = if build.clips.nonEmpty then
+          val skinned = ZoneRenderer.buildSkinnedInterleaved(build.zm, build.meshFragments)
+          (skinned, Mesh(skinned, build.zm.indices, dynamic = false, stride = 6))
+        else
+          val standard = ZoneRenderer.buildInterleaved(build.zm)
+          (standard, Mesh(standard, build.zm.indices, dynamic = false))
         // Recenter for preview framing only — not needed for world placement (see buildSpawnMatrix)
         val mm = Matrix4f()
         mm.translate(-build.glCenterX, -build.glMinY, -build.glCenterZ)
-        val char = AnimatedCharacter(build.skeleton, build.meshFragments, build.zm, glMesh, mm, build.clips, interleaved.clone(), build.attachBoneIndices)
+        val char = AnimatedCharacter(build.skeleton, build.meshFragments, build.zm, glMesh, mm, build.clips, build.attachBoneIndices)
         // Play idle animation
         val idleCode = if build.clips.contains(AnimCode.Idle.code) then AnimCode.Idle.code
           else if build.clips.contains(AnimCode.Passive.code) then AnimCode.Passive.code
@@ -124,12 +128,17 @@ class CharacterPreview:
         glVertexAttrib3f(2, 1f, 1f, 1f) // white vertex color
 
         char.update(dt)
+        val isSkinned = char.clips.nonEmpty
+        if isSkinned then
+          shader.setBool("skinned", true)
+          char.uploadBoneTransforms(shader)
         for group <- char.zoneMesh.groups do
           if group.materialType != MaterialType.Invisible && group.materialType != MaterialType.Boundary then
             val texName = textureOverrides.getOrElse(group.textureName.toLowerCase, group.textureName)
             val texId = textureMap.getOrElse(texName.toLowerCase, fallbackTexture)
             glBindTexture(GL_TEXTURE_2D, texId)
             char.glMesh.drawRange(group.startIndex, group.indexCount)
+        if isSkinned then shader.setBool("skinned", false)
 
         // Draw weapons at attachment points using shared coordinate pipeline
         drawWeapon(char, weaponPrimary, "R_POINT")

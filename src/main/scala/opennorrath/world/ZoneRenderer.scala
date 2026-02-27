@@ -82,12 +82,19 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings(),
     characterBuilds.get(zc.modelCode) match
       case None => false
       case Some(build) =>
-        val interleaved = ZoneRenderer.buildInterleaved(build.zm)
-        val glMesh = Mesh(interleaved, build.zm.indices, dynamic = build.clips.nonEmpty)
+        val (interleaved, glMesh) = if build.clips.nonEmpty then
+          // GPU skinning: vertices stay in bone-local S3D space, bone index per vertex
+          // VBO is static since the GPU handles deformation via bone transform uniforms
+          val skinned = ZoneRenderer.buildSkinnedInterleaved(build.zm, build.meshFragments)
+          (skinned, Mesh(skinned, build.zm.indices, dynamic = false, stride = 6))
+        else
+          // No animation: standard GL-space interleaved buffer
+          val standard = ZoneRenderer.buildInterleaved(build.zm)
+          (standard, Mesh(standard, build.zm.indices, dynamic = false))
         zc.initRendering(build, null) // sets effectiveSize/flyOffset, animChar filled below
         val flyPos = if zc.flyOffset != 0f then Vector3f(zc.position.x, zc.position.y + zc.flyOffset, zc.position.z) else zc.position
         val modelMatrix = buildSpawnMatrix(build, flyPos, zc.heading, zc.effectiveSize)
-        val char = AnimatedCharacter(build.skeleton, build.meshFragments, build.zm, glMesh, modelMatrix, build.clips, interleaved.clone(), build.attachBoneIndices)
+        val char = AnimatedCharacter(build.skeleton, build.meshFragments, build.zm, glMesh, modelMatrix, build.clips, build.attachBoneIndices)
         zc.animChar = char
         updateSpawnEquipment(zc)
         true
@@ -215,103 +222,157 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings(),
     * which converts GL vertices → EQ space, applies bone, converts back to GL,
     * then applies the spawn's world position/heading/scale.
     */
+  /** Draw an equipment model. Returns (lastBoundTexture, lastAlphaTest) for state tracking. */
   private def drawEquipment(shader: Shader, zc: ZoneCharacter, weaponId: Int, suffixTarget: String,
-      opaquePass: Boolean): Unit =
-    if weaponId == 0 then return
+      opaquePass: Boolean, lastTex: Int, lastAlpha: Int): (Int, Int) =
+    if weaponId == 0 then return (lastTex, lastAlpha)
+    var curTex = lastTex
+    var curAlpha = lastAlpha
     equipmentModels.get(weaponId).foreach { equip =>
       val attachKey = findAttachKey(zc, suffixTarget)
       attachKey.flatMap(zc.animChar.attachmentTransform).foreach { boneTransform =>
         ZoneRenderer.composeEquipmentMatrix(equipMatrix, zc.animChar.modelMatrix, boneTransform, equip)
         shader.setMatrix4f("model", equipMatrix)
+        equip.glMesh.bind()
         for group <- equip.zm.groups do
           val emt = effectiveMaterialType(group)
           if opaquePass then
             if isOpaque(emt) then
-              shader.setInt("alphaTest", if emt == MaterialType.TransparentMasked then 1 else 0)
-              glBindTexture(GL_TEXTURE_2D, resolveTexture(group.textureName))
-              equip.glMesh.drawRange(group.startIndex, group.indexCount)
+              val alpha = if emt == MaterialType.TransparentMasked then 1 else 0
+              if alpha != curAlpha then { shader.setInt("alphaTest", alpha); curAlpha = alpha }
+              val tex = resolveTexture(group.textureName)
+              if tex != curTex then { glBindTexture(GL_TEXTURE_2D, tex); curTex = tex }
+              equip.glMesh.drawRangeNoBind(group.startIndex, group.indexCount)
           else
             if isTransparent(emt) then
               setBlendMode(shader, emt)
-              glBindTexture(GL_TEXTURE_2D, resolveTexture(group.textureName))
-              equip.glMesh.drawRange(group.startIndex, group.indexCount)
+              val tex = resolveTexture(group.textureName)
+              if tex != curTex then { glBindTexture(GL_TEXTURE_2D, tex); curTex = tex }
+              equip.glMesh.drawRangeNoBind(group.startIndex, group.indexCount)
+        equip.glMesh.unbind()
       }
     }
+    (curTex, curAlpha)
 
   def draw(shader: Shader, deltaTime: Float, viewMatrix: Matrix4f): Unit =
     elapsedMs += deltaTime * 1000f
     shader.setInt("tex0", 0)
 
     val identity = Matrix4f()
+    var lastTex = -1   // track last bound texture to skip redundant glBindTexture
+    var lastAlpha = -1 // track last alphaTest value to skip redundant uniform sets
 
     // --- Pass 1: Opaque + masked geometry (depth write ON, blend OFF) ---
     shader.setMatrix4f("model", identity)
+
+    // Zone mesh: bind VAO once, draw all opaque groups
+    mesh.bind()
     for group <- zoneMesh.groups do
       val emt = effectiveMaterialType(group)
       if isOpaque(emt) then
-        shader.setInt("alphaTest", if emt == MaterialType.TransparentMasked then 1 else 0)
-        glBindTexture(GL_TEXTURE_2D, resolveAnimatedTexture(group))
-        mesh.drawRange(group.startIndex, group.indexCount)
+        val alpha = if emt == MaterialType.TransparentMasked then 1 else 0
+        if alpha != lastAlpha then { shader.setInt("alphaTest", alpha); lastAlpha = alpha }
+        val tex = resolveAnimatedTexture(group)
+        if tex != lastTex then { glBindTexture(GL_TEXTURE_2D, tex); lastTex = tex }
+        mesh.drawRangeNoBind(group.startIndex, group.indexCount)
+    mesh.unbind()
 
     glVertexAttrib3f(2, 1f, 1f, 1f)
 
+    // Objects: bind each object's VAO once, draw all opaque groups
     for obj <- objectInstances do
       shader.setMatrix4f("model", obj.modelMatrix)
+      obj.glMesh.bind()
       for group <- obj.zoneMesh.groups do
         val emt = effectiveMaterialType(group)
         if isOpaque(emt) then
-          shader.setInt("alphaTest", if emt == MaterialType.TransparentMasked then 1 else 0)
-          glBindTexture(GL_TEXTURE_2D, resolveTexture(group.textureName))
-          obj.glMesh.drawRange(group.startIndex, group.indexCount)
+          val alpha = if emt == MaterialType.TransparentMasked then 1 else 0
+          if alpha != lastAlpha then { shader.setInt("alphaTest", alpha); lastAlpha = alpha }
+          val tex = resolveTexture(group.textureName)
+          if tex != lastTex then { glBindTexture(GL_TEXTURE_2D, tex); lastTex = tex }
+          obj.glMesh.drawRangeNoBind(group.startIndex, group.indexCount)
+      obj.glMesh.unbind()
 
+    // Characters: animated models use GPU skinning — the VBO holds bone-local S3D positions
+    // and the shader transforms them via per-bone uniforms. Non-animated characters (no clips)
+    // use the standard path with pre-transformed GL positions, same as zone/objects.
     for zc <- zoneCharacters.values if zc.hasRendering do
       zc.animChar.update(deltaTime)
+      val isSkinned = zc.animChar.clips.nonEmpty
+      if isSkinned then
+        shader.setBool("skinned", true)
+        zc.animChar.uploadBoneTransforms(shader)
       shader.setMatrix4f("model", zc.animChar.modelMatrix)
+      zc.animChar.glMesh.bind()
       for group <- zc.animChar.zoneMesh.groups do
         val emt = effectiveMaterialType(group)
         if isOpaque(emt) then
-          shader.setInt("alphaTest", if emt == MaterialType.TransparentMasked then 1 else 0)
+          val alpha = if emt == MaterialType.TransparentMasked then 1 else 0
+          if alpha != lastAlpha then { shader.setInt("alphaTest", alpha); lastAlpha = alpha }
           val texName = zc.textureOverrides.getOrElse(group.textureName.toLowerCase, group.textureName)
-          glBindTexture(GL_TEXTURE_2D, resolveTexture(texName))
-          zc.animChar.glMesh.drawRange(group.startIndex, group.indexCount)
-      // Draw weapons at attachment points
-      drawEquipment(shader, zc, zc.weaponPrimary, "R_POINT", opaquePass = true)
-      drawEquipment(shader, zc, zc.weaponSecondary, "L_POINT", opaquePass = true)
+          val tex = resolveTexture(texName)
+          if tex != lastTex then { glBindTexture(GL_TEXTURE_2D, tex); lastTex = tex }
+          zc.animChar.glMesh.drawRangeNoBind(group.startIndex, group.indexCount)
+      zc.animChar.glMesh.unbind()
+      if isSkinned then shader.setBool("skinned", false)
+      // Draw weapons at attachment points (NOT skinned — use equipment's own model matrix)
+      val (t1, a1) = drawEquipment(shader, zc, zc.weaponPrimary, "R_POINT", opaquePass = true, lastTex, lastAlpha)
+      val (t2, a2) = drawEquipment(shader, zc, zc.weaponSecondary, "L_POINT", opaquePass = true, t1, a1)
+      lastTex = t2; lastAlpha = a2
 
     // --- Pass 2: Transparent geometry (depth write OFF, blend ON) ---
     glEnable(GL_BLEND)
     glDepthMask(false)
-    shader.setInt("alphaTest", 1)
+    shader.setInt("alphaTest", 1); lastAlpha = 1
 
     shader.setMatrix4f("model", identity)
     glVertexAttrib3f(2, 1f, 1f, 1f)
+
+    // Zone mesh transparent pass
+    mesh.bind()
     for group <- zoneMesh.groups do
       val emt = effectiveMaterialType(group)
       if isTransparent(emt) then
         setBlendMode(shader, emt)
-        glBindTexture(GL_TEXTURE_2D, resolveAnimatedTexture(group))
-        mesh.drawRange(group.startIndex, group.indexCount)
+        val tex = resolveAnimatedTexture(group)
+        if tex != lastTex then { glBindTexture(GL_TEXTURE_2D, tex); lastTex = tex }
+        mesh.drawRangeNoBind(group.startIndex, group.indexCount)
+    mesh.unbind()
 
+    // Objects transparent pass
     for obj <- objectInstances do
       shader.setMatrix4f("model", obj.modelMatrix)
+      obj.glMesh.bind()
       for group <- obj.zoneMesh.groups do
         val emt = effectiveMaterialType(group)
         if isTransparent(emt) then
           setBlendMode(shader, emt)
-          glBindTexture(GL_TEXTURE_2D, resolveTexture(group.textureName))
-          obj.glMesh.drawRange(group.startIndex, group.indexCount)
+          val tex = resolveTexture(group.textureName)
+          if tex != lastTex then { glBindTexture(GL_TEXTURE_2D, tex); lastTex = tex }
+          obj.glMesh.drawRangeNoBind(group.startIndex, group.indexCount)
+      obj.glMesh.unbind()
 
+    // Characters transparent pass (GPU skinning)
     for zc <- zoneCharacters.values if zc.hasRendering do
+      val isSkinned = zc.animChar.clips.nonEmpty
+      if isSkinned then
+        shader.setBool("skinned", true)
+        zc.animChar.uploadBoneTransforms(shader)
       shader.setMatrix4f("model", zc.animChar.modelMatrix)
+      zc.animChar.glMesh.bind()
       for group <- zc.animChar.zoneMesh.groups do
         val emt = effectiveMaterialType(group)
         if isTransparent(emt) then
           setBlendMode(shader, emt)
           val texName = zc.textureOverrides.getOrElse(group.textureName.toLowerCase, group.textureName)
-          glBindTexture(GL_TEXTURE_2D, resolveTexture(texName))
-          zc.animChar.glMesh.drawRange(group.startIndex, group.indexCount)
-      drawEquipment(shader, zc, zc.weaponPrimary, "R_POINT", opaquePass = false)
-      drawEquipment(shader, zc, zc.weaponSecondary, "L_POINT", opaquePass = false)
+          val tex = resolveTexture(texName)
+          if tex != lastTex then { glBindTexture(GL_TEXTURE_2D, tex); lastTex = tex }
+          zc.animChar.glMesh.drawRangeNoBind(group.startIndex, group.indexCount)
+      zc.animChar.glMesh.unbind()
+      if isSkinned then shader.setBool("skinned", false)
+      val (t1, a1) = drawEquipment(shader, zc, zc.weaponPrimary, "R_POINT", opaquePass = false, lastTex, lastAlpha)
+      val (t2, a2) = drawEquipment(shader, zc, zc.weaponSecondary, "L_POINT", opaquePass = false, t1, a1)
+      lastTex = t2; lastAlpha = a2
 
     glDepthMask(true)
     glDisable(GL_BLEND)
@@ -742,6 +803,56 @@ object ZoneRenderer:
     if models.nonEmpty then
       println(s"  Equipment models: ${models.size} from ${gequipFiles.length} gequip files")
     models.toMap
+
+  /** Build a skinned interleaved vertex buffer for GPU skeletal animation.
+    * Stride 6: [s3d_x, s3d_y, s3d_z, u, v, boneIndex]
+    *
+    * Unlike buildInterleaved (which converts positions to GL space for static rendering),
+    * this keeps vertex positions in bone-local S3D space — the same raw coordinates from
+    * the mesh fragments. The GPU handles deformation: the vertex shader multiplies each
+    * vertex by its bone's pre-composed transform (boneWorld * s3dToGl), producing GL-space
+    * output. This makes the VBO static (no per-frame CPU vertex updates).
+    *
+    * Vertex ordering matches extractMeshGeometry (both iterate meshFragments in order),
+    * so zm.indices and zm.uvs are compatible. Positions come from meshFragments (bone-local),
+    * UVs come from zm (identical data either way since applyBoneTransforms doesn't touch UVs).
+    */
+  def buildSkinnedInterleaved(zm: ZoneMesh, meshFragments: List[Fragment36_Mesh]): Array[Float] =
+    val vc = zm.vertices.length / 3
+    val arr = new Array[Float](vc * 6)
+
+    // Build combined vertex positions + bone indices from raw mesh fragments
+    // (bone-local space, same iteration order as extractMeshGeometry)
+    var globalIdx = 0
+    for mesh <- meshFragments do
+      if mesh.vertexPieces.nonEmpty then
+        var vertIdx = 0
+        for piece <- mesh.vertexPieces do
+          for _ <- 0 until piece.count do
+            if globalIdx < vc && vertIdx < mesh.vertices.length then
+              val v = mesh.vertices(vertIdx)
+              arr(globalIdx * 6 + 0) = v.x
+              arr(globalIdx * 6 + 1) = v.y
+              arr(globalIdx * 6 + 2) = v.z
+              arr(globalIdx * 6 + 5) = piece.boneIndex.toFloat
+              globalIdx += 1
+              vertIdx += 1
+      else
+        // No vertex pieces — use raw positions, assign bone 0 (root)
+        for v <- mesh.vertices do
+          if globalIdx < vc then
+            arr(globalIdx * 6 + 0) = v.x
+            arr(globalIdx * 6 + 1) = v.y
+            arr(globalIdx * 6 + 2) = v.z
+            arr(globalIdx * 6 + 5) = 0f
+            globalIdx += 1
+
+    // UVs come from zm (same regardless of bone transforms)
+    for i <- 0 until vc do
+      if i * 2 + 1 < zm.uvs.length then
+        arr(i * 6 + 3) = zm.uvs(i * 2 + 0)
+        arr(i * 6 + 4) = zm.uvs(i * 2 + 1)
+    arr
 
   def buildInterleaved(zm: ZoneMesh): Array[Float] =
     val vc = zm.vertices.length / 3

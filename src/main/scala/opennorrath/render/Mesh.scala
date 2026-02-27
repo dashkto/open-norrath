@@ -6,6 +6,11 @@ import org.lwjgl.opengl.GL20.*
 import org.lwjgl.opengl.GL30.*
 import org.lwjgl.BufferUtils
 
+/** OpenGL mesh with configurable vertex layout.
+  * Stride 5: [x, y, z, u, v]             — zone mesh, objects, static models (GL-space positions)
+  * Stride 6: [x, y, z, u, v, boneIndex]  — skinned character meshes (bone-local S3D positions)
+  * Stride 8: [x, y, z, u, v, r, g, b]    — zone mesh with baked vertex lighting
+  */
 class Mesh(vertices: Array[Float], indices: Array[Int], dynamic: Boolean = false, stride: Int = 5):
 
   private val vao = glGenVertexArrays()
@@ -33,6 +38,10 @@ class Mesh(vertices: Array[Float], indices: Array[Int], dynamic: Boolean = false
   // uv: 2 floats
   glVertexAttribPointer(1, 2, GL_FLOAT, false, strideBytes, 3 * 4)
   glEnableVertexAttribArray(1)
+  // bone index: 1 float (skinned meshes, stride == 6)
+  if stride == 6 then
+    glVertexAttribPointer(3, 1, GL_FLOAT, false, strideBytes, 5 * 4)
+    glEnableVertexAttribArray(3)
   // vertex color: 3 floats (optional, stride >= 8)
   if stride >= 8 then
     glVertexAttribPointer(2, 3, GL_FLOAT, false, strideBytes, 5 * 4)
@@ -49,6 +58,16 @@ class Mesh(vertices: Array[Float], indices: Array[Int], dynamic: Boolean = false
     glBindVertexArray(vao)
     glDrawElements(GL_TRIANGLES, count, GL_UNSIGNED_INT, startIndex.toLong * 4)
     glBindVertexArray(0)
+
+  /** Bind this mesh's VAO. Pair with unbind() for batched draw calls. */
+  def bind(): Unit = glBindVertexArray(vao)
+
+  /** Unbind VAO after batched draw calls. */
+  def unbind(): Unit = glBindVertexArray(0)
+
+  /** Issue a draw call without binding/unbinding VAO — caller must call bind() first. */
+  def drawRangeNoBind(startIndex: Int, count: Int): Unit =
+    glDrawElements(GL_TRIANGLES, count, GL_UNSIGNED_INT, startIndex.toLong * 4)
 
   def updateVertices(newVertices: Array[Float]): Unit =
     val buf = BufferUtils.createFloatBuffer(newVertices.length)

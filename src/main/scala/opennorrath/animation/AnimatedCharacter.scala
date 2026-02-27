@@ -1,6 +1,6 @@
 package opennorrath.animation
 
-import opennorrath.render.Mesh
+import opennorrath.render.{Mesh, Shader}
 import opennorrath.world.EqCoords
 import opennorrath.wld.*
 import org.joml.{Matrix4f, Quaternionf, Vector3f}
@@ -95,7 +95,6 @@ class AnimatedCharacter(
     val glMesh: Mesh,
     val modelMatrix: Matrix4f,
     val clips: Map[String, AnimationClip],
-    private val interleavedBuffer: Array[Float], // mutable working buffer
     val attachBoneIndices: Map[String, Int] = Map.empty, // bone suffix → index for _POINT bones
 ):
   private var currentClip: Option[AnimationClip] = selectDefaultClip()
@@ -103,37 +102,41 @@ class AnimatedCharacter(
   private var frameTime: Float = 0f
   private val fps: Float = 15f // EQ animation speed
   private var reverse: Boolean = false
-
-  // Vertex-level interpolation: pre-compute vertices at frame boundaries,
-  // then cheaply lerp positions each render frame.
-  private val frameAVertices = interleavedBuffer.clone()
-  private val frameBVertices = interleavedBuffer.clone()
   private var needsInit = true
 
   // Cross-fade transition between clips
   private val TransitionDuration = 0.2f
-  private val transitionFromVertices = interleavedBuffer.clone()
   private var transitionTime: Float = -1f // negative = no transition active
 
-  // Cached bone transforms for attachment point lookups (updated each frame)
+  // Bone transforms: computed each frame, uploaded to GPU as uniforms.
+  // cachedBoneTransforms has S3D→GL baked in so the shader just does boneTransform * vertex.
   private var cachedBoneTransforms: Array[Matrix4f] = null
-  private var transitionFromBoneTransforms: Array[Matrix4f] = null
+  private var cachedRawTransforms: Array[Matrix4f] = null
+  // Cross-fade stores RAW S3D-space transforms (without S3D→GL bake) so that
+  // decompose/slerp/recompose blending works correctly. The S3D→GL matrix is a
+  // reflection (det = -1) which quaternion decomposition can't represent — blending
+  // with it baked in would lose the reflection and cause visible squashing.
+  private var transitionFromRawTransforms: Array[Matrix4f] = null
 
   def clipNames: Seq[String] = clips.keys.toSeq.sorted
   def currentClipCode: String = currentClip.map(_.code).getOrElse("none")
 
-  /** World-space transform for a named attachment point (e.g., "R_POINT"). */
+  /** World-space transform for a named attachment point (e.g., "R_POINT").
+    * Returns the raw EQ-space bone transform (without S3D→GL bake) for equipment composition.
+    */
   def attachmentTransform(suffix: String): Option[Matrix4f] =
     if cachedBoneTransforms == null then return None
-    attachBoneIndices.get(suffix).map(idx => cachedBoneTransforms(idx))
+    // cachedBoneTransforms have S3D→GL baked in; undo it for equipment which expects EQ space
+    attachBoneIndices.get(suffix).map { idx =>
+      Matrix4f(AnimatedCharacter.glToS3dMatrix).mul(cachedBoneTransforms(idx))
+    }
 
   def play(code: String, playReverse: Boolean = false): Unit =
     clips.get(code).foreach { clip =>
-      // Snapshot current pose for cross-fade (only if we already have a valid pose)
+      // Snapshot current raw bone transforms for cross-fade blending
       if currentClip.isDefined && transitionTime < 0f then
-        System.arraycopy(interleavedBuffer, 0, transitionFromVertices, 0, interleavedBuffer.length)
-        if cachedBoneTransforms != null then
-          transitionFromBoneTransforms = cachedBoneTransforms.map(m => Matrix4f(m))
+        if cachedRawTransforms != null then
+          transitionFromRawTransforms = cachedRawTransforms.map(m => Matrix4f(m))
         transitionTime = 0f
       currentClip = Some(clip)
       reverse = playReverse
@@ -142,101 +145,70 @@ class AnimatedCharacter(
       needsInit = true
     }
 
+  /** Update bone transforms for the current animation frame. Call once per frame.
+    *
+    * GPU skinning pipeline: instead of transforming vertices on the CPU each frame,
+    * we compute bone transforms here and upload them as shader uniforms. The vertex
+    * shader then does: gl_Position = P * V * model * (s3dToGl * boneWorld) * vertex_bone_local.
+    * This keeps the VBO static (no per-frame updateVertices call).
+    */
   def update(deltaTime: Float): Unit =
     currentClip match
       case None => return
       case Some(clip) =>
         frameTime += deltaTime
         val frameDuration = 1f / fps
-        var frameChanged = false
         while frameTime >= frameDuration do
           frameTime -= frameDuration
           currentFrame =
             if reverse then (currentFrame - 1 + clip.frameCount) % clip.frameCount
             else (currentFrame + 1) % clip.frameCount
-          frameChanged = true
+          needsInit = true // force recompute on frame boundaries (lerp endpoints change)
 
-        if frameChanged || needsInit then
-          val nextFrame =
-            if reverse then (currentFrame - 1 + clip.frameCount) % clip.frameCount
-            else (currentFrame + 1) % clip.frameCount
-          computeFrameVertices(clip, currentFrame, frameAVertices)
-          computeFrameVertices(clip, nextFrame, frameBVertices)
-          needsInit = false
-
-        // Lerp vertex positions between frame A and frame B
+        val nextFrame =
+          if reverse then (currentFrame - 1 + clip.frameCount) % clip.frameCount
+          else (currentFrame + 1) % clip.frameCount
         val t = frameTime / frameDuration
-        val vertexCount = interleavedBuffer.length / 5
-        var i = 0
-        while i < vertexCount do
-          val idx = i * 5
-          interleavedBuffer(idx) = frameAVertices(idx) + (frameBVertices(idx) - frameAVertices(idx)) * t
-          interleavedBuffer(idx + 1) = frameAVertices(idx + 1) + (frameBVertices(idx + 1) - frameAVertices(idx + 1)) * t
-          interleavedBuffer(idx + 2) = frameAVertices(idx + 2) + (frameBVertices(idx + 2) - frameAVertices(idx + 2)) * t
-          i += 1
 
-        // Cross-fade from previous clip's pose if transitioning
+        // Interpolate bone transforms between current and next frame in S3D space.
+        // Raw transforms are in S3D world space (bone-local → model root).
+        val rawTransforms = AnimatedCharacter.computeBoneTransformsLerp(skeleton, clip, currentFrame, nextFrame, t)
+
+        // Cross-fade: blend raw S3D-space transforms from previous clip BEFORE
+        // applying S3D→GL, so the decompose/slerp/recompose doesn't lose the
+        // reflection component of the S3D→GL matrix (det = -1).
         if transitionTime >= 0f then
           transitionTime += deltaTime
           if transitionTime >= TransitionDuration then
             transitionTime = -1f // transition complete
           else
             val blend = transitionTime / TransitionDuration
-            i = 0
-            while i < vertexCount do
-              val idx = i * 5
-              interleavedBuffer(idx) = transitionFromVertices(idx) + (interleavedBuffer(idx) - transitionFromVertices(idx)) * blend
-              interleavedBuffer(idx + 1) = transitionFromVertices(idx + 1) + (interleavedBuffer(idx + 1) - transitionFromVertices(idx + 1)) * blend
-              interleavedBuffer(idx + 2) = transitionFromVertices(idx + 2) + (interleavedBuffer(idx + 2) - transitionFromVertices(idx + 2)) * blend
-              i += 1
-
-        glMesh.updateVertices(interleavedBuffer)
-
-        // Cache interpolated bone transforms for attachment points (weapons, shields)
-        if attachBoneIndices.nonEmpty then
-          val nextFrame = (currentFrame + 1) % clip.frameCount
-          cachedBoneTransforms = AnimatedCharacter.computeBoneTransformsLerp(skeleton, clip, currentFrame, nextFrame, t)
-          // Blend bone transforms during cross-fade transition
-          if transitionTime >= 0f && transitionFromBoneTransforms != null then
-            val blend = transitionTime / TransitionDuration
-            for idx <- cachedBoneTransforms.indices do
-              if idx < transitionFromBoneTransforms.length then
-                val from = transitionFromBoneTransforms(idx)
-                val to = cachedBoneTransforms(idx)
-                // Decompose, lerp, recompose
+            for idx <- rawTransforms.indices do
+              if transitionFromRawTransforms != null && idx < transitionFromRawTransforms.length then
+                val from = transitionFromRawTransforms(idx)
+                val to = rawTransforms(idx)
+                // Decompose, lerp, recompose for smooth blending
                 val fromT = from.getTranslation(Vector3f())
                 val toT = to.getTranslation(Vector3f())
                 val fromR = from.getUnnormalizedRotation(Quaternionf())
                 val toR = to.getUnnormalizedRotation(Quaternionf())
                 fromT.lerp(toT, blend)
                 fromR.slerp(toR, blend)
-                cachedBoneTransforms(idx) = Matrix4f().translate(fromT).rotate(fromR)
+                rawTransforms(idx) = Matrix4f().translate(fromT).rotate(fromR)
 
-  /** Compute bone-transformed vertices for a single frame into the target buffer. */
-  private def computeFrameVertices(clip: AnimationClip, frame: Int, buffer: Array[Float]): Unit =
-    val boneTransforms = AnimatedCharacter.computeBoneTransforms(skeleton, clip, frame)
-    var globalVertexIdx = 0
+        // Cache raw transforms for cross-fade snapshots, then bake in S3D→GL
+        // conversion so the shader just does boneTransform * vertex.
+        cachedRawTransforms = rawTransforms
+        cachedBoneTransforms = rawTransforms.map { m =>
+          Matrix4f(AnimatedCharacter.s3dToGlMatrix).mul(m)
+        }
 
-    for mesh <- originalMeshes do
-      var vertexIndex = 0
-      for piece <- mesh.vertexPieces do
-        if piece.boneIndex < boneTransforms.length then
-          val transform = boneTransforms(piece.boneIndex)
-          for _ <- 0 until piece.count do
-            if vertexIndex < mesh.vertices.length then
-              val v = mesh.vertices(vertexIndex)
-              val transformed = Vector3f(v.x, v.y, v.z)
-              transform.transformPosition(transformed)
-              val (glX, glY, glZ) = EqCoords.s3dToGl(transformed.x, transformed.y, transformed.z)
-              val bufIdx = globalVertexIdx * 5
-              buffer(bufIdx + 0) = glX
-              buffer(bufIdx + 1) = glY
-              buffer(bufIdx + 2) = glZ
-              globalVertexIdx += 1
-              vertexIndex += 1
-        else
-          globalVertexIdx += piece.count
-          vertexIndex += piece.count
+        needsInit = false
+
+  /** Upload bone transforms to the shader for GPU skinning. */
+  def uploadBoneTransforms(shader: Shader): Unit =
+    if cachedBoneTransforms != null then
+      shader.setMatrix4fArray("boneTransforms", cachedBoneTransforms)
 
   private def selectDefaultClip(): Option[AnimationClip] =
     clips.get(AnimCode.Idle.code)
@@ -244,6 +216,24 @@ class AnimatedCharacter(
       .orElse(clips.headOption.map(_._2))
 
 object AnimatedCharacter:
+
+  // S3D→GL conversion matrix: (x,y,z) → (x, z, -y)
+  // Pre-multiplied into bone transforms so the shader just does boneTransform * s3d_vertex.
+  // JOML constructor is column-major: (col0, col1, col2, col3)
+  val s3dToGlMatrix = Matrix4f(
+    1f, 0f, 0f, 0f,   // col 0
+    0f, 0f, -1f, 0f,  // col 1
+    0f, 1f, 0f, 0f,   // col 2
+    0f, 0f, 0f, 1f,   // col 3
+  )
+
+  // GL→S3D conversion matrix (inverse of s3dToGlMatrix): (x,y,z) → (x, -z, y)
+  val glToS3dMatrix = Matrix4f(
+    1f, 0f, 0f, 0f,   // col 0
+    0f, 0f, 1f, 0f,   // col 1
+    0f, -1f, 0f, 0f,  // col 2
+    0f, 0f, 0f, 1f,   // col 3
+  )
 
   /** Compute world-space bone transforms for a given animation clip and frame. */
   def computeBoneTransforms(
