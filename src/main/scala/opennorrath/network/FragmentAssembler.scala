@@ -29,10 +29,8 @@ class FragmentAssembler:
         if group.isComplete then
           groups.remove(frag.seq)
           val assembled = group.assemble()
-          println(s"[FragAssembler] Reassembled ${frag.total} fragments (${assembled.length}B) opcode=${WorldOpcodes.name(group.opcode)}")
           Some(InboundPacket(packet.seq, packet.arsp, packet.arq, group.opcode, assembled))
         else
-          println(s"[FragAssembler] Fragment ${frag.current + 1}/${frag.total} for seq=${frag.seq}")
           None
 
   /** Split a large payload into fragment packets for sending.

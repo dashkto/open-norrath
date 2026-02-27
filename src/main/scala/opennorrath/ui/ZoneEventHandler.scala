@@ -21,7 +21,7 @@ class ZoneEventHandler(chatPanel: TextPanel, characters: scala.collection.Map[In
       val name = player.get.name
       val (channel, target, msg) = parseCommand(text)
       session.get.client.sendChat(name, target, channel, 0, msg)
-      chatPanel.addLine(formatOutgoing(channel, target, msg), channelColor(channel))
+      // Server echoes the message back via OP_ChannelMessage — no client-side echo needed
     else
       chatPanel.addLine(text)
 
@@ -106,16 +106,19 @@ class ZoneEventHandler(chatPanel: TextPanel, characters: scala.collection.Map[In
   // Chat formatting
   // ===========================================================================
 
-  private def formatChat(msg: ChatMessage): String = msg.channel match
-    case ChatMessage.Say     => s"${msg.sender} says, '${msg.message}'"
-    case ChatMessage.Shout   => s"${msg.sender} shouts, '${msg.message}'"
-    case ChatMessage.OOC     => s"${msg.sender} says out of character, '${msg.message}'"
-    case ChatMessage.Auction => s"${msg.sender} auctions, '${msg.message}'"
-    case ChatMessage.Tell    => s"${msg.sender} tells you, '${msg.message}'"
-    case ChatMessage.Group   => s"${msg.sender} tells the group, '${msg.message}'"
-    case ChatMessage.Guild   => s"${msg.sender} tells the guild, '${msg.message}'"
-    case ChatMessage.GMSay   => s"[GM] ${msg.sender}: ${msg.message}"
-    case _                   => s"${msg.sender}: ${msg.message}"
+  private def formatChat(msg: ChatMessage): String =
+    val isMe = player.exists(_.name.equalsIgnoreCase(msg.sender))
+    if isMe then formatOutgoing(msg.channel, "", msg.message)
+    else msg.channel match
+      case ChatMessage.Say     => s"${msg.sender} says, '${msg.message}'"
+      case ChatMessage.Shout   => s"${msg.sender} shouts, '${msg.message}'"
+      case ChatMessage.OOC     => s"${msg.sender} says out of character, '${msg.message}'"
+      case ChatMessage.Auction => s"${msg.sender} auctions, '${msg.message}'"
+      case ChatMessage.Tell    => s"${msg.sender} tells you, '${msg.message}'"
+      case ChatMessage.Group   => s"${msg.sender} tells the group, '${msg.message}'"
+      case ChatMessage.Guild   => s"${msg.sender} tells the guild, '${msg.message}'"
+      case ChatMessage.GMSay   => s"[GM] ${msg.sender}: ${msg.message}"
+      case _                   => s"${msg.sender}: ${msg.message}"
 
   private def formatOutgoing(channel: Int, target: String, msg: String): String = channel match
     case ChatMessage.Say     => s"You say, '$msg'"

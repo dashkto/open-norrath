@@ -98,7 +98,6 @@ object ItemIcons:
       glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w.get(0), h.get(0), 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels)
 
       stbi_image_free(pixels)
-      println(s"[ItemIcons] Loaded dragitem$sheet.tga (${w.get(0)}x${h.get(0)})")
       textureId
     finally stack.pop()
 

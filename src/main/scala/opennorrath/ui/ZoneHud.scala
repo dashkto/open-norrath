@@ -26,7 +26,6 @@ class ZoneHud(ctx: GameContext, characters: scala.collection.Map[Int, ZoneCharac
   private var fpsAccum = 0f
   private var fpsFrames = 0
   private var fpsDisplay = 0f
-  private var msDisplay = 0f
   private val FpsUpdateInterval = 0.5f // refresh the counter twice per second
 
   def target: Option[ZoneCharacter] = targetPanel.target
@@ -142,11 +141,10 @@ class ZoneHud(ctx: GameContext, characters: scala.collection.Map[Int, ZoneCharac
     fpsFrames += 1
     if fpsAccum >= FpsUpdateInterval then
       fpsDisplay = fpsFrames.toFloat / fpsAccum
-      msDisplay = (fpsAccum / fpsFrames) * 1000f
       fpsAccum = 0f
       fpsFrames = 0
 
-    val label = f"${fpsDisplay.toInt} fps  $msDisplay%.1f ms"
+    val label = s"${fpsDisplay.toInt} fps"
     val padding = 8f
     val flags = ImGuiWindowFlags.NoDecoration | ImGuiWindowFlags.NoInputs |
       ImGuiWindowFlags.NoBackground | ImGuiWindowFlags.AlwaysAutoResize |
