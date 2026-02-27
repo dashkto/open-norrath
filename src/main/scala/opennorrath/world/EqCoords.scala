@@ -46,6 +46,12 @@ object EqCoords:
   inline def glToServer(glX: Float, glY: Float, glZ: Float): (Float, Float, Float) =
     (glX, -glZ, glY) // (serverY, serverX, serverZ)
 
+  /** Convert GL position back to S3D coordinates (inverse of s3dToGl).
+    * GL(x,y,z) → S3D(x=glX, y=-glZ, z=glY)
+    */
+  inline def glToS3d(glX: Float, glY: Float, glZ: Float): (Float, Float, Float) =
+    (glX, -glZ, glY)
+
   // ---------------------------------------------------------------------------
   // Heading conversion
   // ---------------------------------------------------------------------------

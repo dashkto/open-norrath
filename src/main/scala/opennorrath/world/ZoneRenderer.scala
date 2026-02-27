@@ -56,16 +56,15 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings(),
   // Load objects and collect brazier emitters for flame particles
   private val (objectInstances, brazierEmitters) = loadObjects()
 
-  // Load character build templates (zone + global models) and global animation tracks
-  private var cachedGlobalTrackDefs: List[Fragment12_TrackDef] = Nil
-  private var cachedGlobalWld: Option[WldFile] = None
+  // Load character build templates (zone + global models)
   val characterBuilds: Map[String, ZoneRenderer.CharBuild] = loadCharacterBuilds()
 
-  /** Return cached global animation TrackDefs (loaded during character init). */
-  def loadGlobalAnimationTracks(): List[Fragment12_TrackDef] = cachedGlobalTrackDefs
+  // Equipment models from persistent store
+  private val equipmentModels: Map[Int, ZoneRenderer.EquipModel] = EquipmentModels.models
 
-  // Equipment models from gequip*.s3d (IT number → mesh data)
-  private val equipmentModels: Map[Int, ZoneRenderer.EquipModel] = loadEquipmentModels()
+  // Merge store textures so resolveTexture() finds global character and equipment textures
+  textureMap ++= GlobalCharacters.textures
+  textureMap ++= EquipmentModels.textures
 
   /** Return (spawnId, modelMatrix, headHeight) for each live spawn — used for nameplates. */
   def spawnNameplateData: Iterable[(Int, Matrix4f, Float)] =
@@ -394,12 +393,15 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings(),
     mesh.cleanup()
     objectInstances.foreach(_.glMesh.cleanup())
     zoneCharacters.values.foreach(zc => if zc.hasRendering then zc.animChar.glMesh.cleanup())
-    equipmentModels.values.foreach(_.glMesh.cleanup())
+    // Equipment glMeshes owned by EquipmentModels store — don't clean up here
     particleSystem.foreach(_.cleanup())
     if sphereInited then
       glDeleteBuffers(sphereVbo)
       glDeleteVertexArrays(sphereVao)
-    textureMap.values.foreach(glDeleteTextures(_))
+    // Only delete locally-owned textures, not store textures
+    val storeTexIds = GlobalCharacters.textures.values.toSet ++ EquipmentModels.textures.values.toSet
+    for texId <- textureMap.values if !storeTexIds.contains(texId) do
+      glDeleteTextures(texId)
     glDeleteTextures(fallbackTexture)
 
   private[opennorrath] def loadTextures(s3dEntries: List[PfsEntry], applyColorKey: Boolean = true): Unit =
@@ -505,10 +507,8 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings(),
   private def loadCharacterBuilds(): Map[String, ZoneRenderer.CharBuild] =
     val builds = scala.collection.mutable.Map[String, ZoneRenderer.CharBuild]()
 
-    // Load global data first (tracks + per-race character models)
-    val (globalTracks, globalBuilds) = loadGlobalData()
-    cachedGlobalTrackDefs = globalTracks
-    for build <- globalBuilds do builds(build.key) = build
+    // Start with global character models from persistent store
+    builds ++= GlobalCharacters.characterBuilds
 
     // Load zone-specific characters (may override globals with zone-specific variants)
     val chrS3dPath = s3dPath.replace(".s3d", "_chr.s3d")
@@ -520,84 +520,12 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings(),
         val chrWld = WldFile(entry.data)
         val actors = chrWld.fragmentsOfType[Fragment14_Actor]
         println(s"  Zone character actors: ${actors.size} (${actors.map(_.name.replace("_ACTORDEF", "").toLowerCase).mkString(", ")})")
-        val zoneBuilds = ZoneRenderer.buildCharacters(chrWld, actors, cachedGlobalTrackDefs)
+        val zoneBuilds = ZoneRenderer.buildCharacters(chrWld, actors, GlobalCharacters.trackDefs)
         for build <- zoneBuilds do builds(build.key) = build
       }
 
     println(s"  Character models: ${builds.size} (${builds.keys.toSeq.sorted.mkString(", ")})")
     builds.toMap
-
-  /** Load animation tracks and character models from all global*_chr*.s3d files.
-    *
-    * EQ stores character animations across multiple global S3D archives:
-    *   global_chr.s3d    — Old-style anims for many races (DWF, ELF, BAF, HOM, etc.)
-    *   global{N}_chr.s3d — Additional old-style animation tracks (global2..global7)
-    *   global{code}_chr.s3d — Per-race files with Luclin-era skeletons + animations
-    *     e.g. globalbaf_chr.s3d has BAF rest-pose + C01ABAF* Luclin animations
-    *
-    * Per-race files (matching global{letters}_chr.s3d) are loaded fully including textures,
-    * since they contain the skeleton + mesh for that race. Animation-only files (global_chr.s3d,
-    * global{N}_chr.s3d) load only the WLD for track extraction.
-    *
-    * Returns (allTracks, charBuilds) where charBuilds are models from per-race global files.
-    */
-  private def loadGlobalData(): (List[Fragment12_TrackDef], List[ZoneRenderer.CharBuild]) =
-    val assetsDir = Path.of(s3dPath).getParent
-    if assetsDir == null then return (Nil, Nil)
-    val globalFiles = Files.list(assetsDir).toArray.map(_.asInstanceOf[Path])
-      .filter { p =>
-        val name = p.getFileName.toString.toLowerCase
-        name.startsWith("global") && name.contains("_chr") && name.endsWith(".s3d")
-      }.sorted
-    if globalFiles.isEmpty then return (Nil, Nil)
-
-    // Classic models + BMP textures live in global_chr.s3d.
-    // Per-race files (globalhum_chr.s3d etc.) contain Luclin-era models with DDS textures
-    // we can't load, so we only extract animation tracks from them.
-    val trackDefs = List.newBuilder[Fragment12_TrackDef]
-    var classicData: Option[(WldFile, List[Fragment14_Actor])] = None
-
-    for file <- globalFiles do
-      try
-        val fileName = file.getFileName.toString.toLowerCase
-        if fileName == "global_chr.s3d" then
-          // Classic models: load fully with BMP textures
-          val fileEntries = PfsArchive.load(file)
-          loadTextures(fileEntries, applyColorKey = false)
-          fileEntries.find(_.extension == "wld").foreach { wldEntry =>
-            val fileWld = WldFile(wldEntry.data)
-            trackDefs ++= fileWld.fragmentsOfType[Fragment12_TrackDef]
-            val actors = fileWld.fragmentsOfType[Fragment14_Actor]
-            cachedGlobalWld = Some(fileWld)
-            if actors.nonEmpty then classicData = Some((fileWld, actors))
-          }
-        else
-          // All other files: extract tracks only (WLD)
-          val fileEntries = PfsArchive.load(file, extensionFilter = Some(Set("wld")))
-          fileEntries.find(_.extension == "wld").foreach { wldEntry =>
-            val fileWld = WldFile(wldEntry.data)
-            trackDefs ++= fileWld.fragmentsOfType[Fragment12_TrackDef]
-          }
-      catch case e: Exception =>
-        println(s"  Warning: failed to load ${file.getFileName}: ${e.getMessage}")
-
-    val allTracks = trackDefs.result()
-    println(s"  Global animations: ${allTracks.size} tracks from ${globalFiles.length} files")
-
-    // Build classic character models from global_chr.s3d actors
-    val buildList = classicData match
-      case Some((wld, actors)) =>
-        ZoneRenderer.buildCharacters(wld, actors, allTracks, quiet = true)
-      case None => Nil
-
-    if buildList.nonEmpty then
-      println(s"  Global character models: ${buildList.size} (${buildList.map(_.key).sorted.mkString(", ")})")
-    (allTracks, buildList)
-
-  private def loadEquipmentModels(): Map[Int, ZoneRenderer.EquipModel] =
-    val assetsDir = Path.of(s3dPath).getParent
-    if assetsDir == null then return Map.empty
-    ZoneRenderer.loadEquipmentModels(assetsDir, entries => loadTextures(entries, applyColorKey = false))
 
   private def buildModelMatrix(placement: Fragment15_ObjectInstance): Matrix4f =
     val pos = placement.position

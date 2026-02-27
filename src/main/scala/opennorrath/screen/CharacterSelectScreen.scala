@@ -29,7 +29,7 @@ class CharacterSelectScreen(
   override def show(): Unit =
     glfwSetInputMode(ctx.window, GLFW_CURSOR, GLFW_CURSOR_NORMAL)
     glClearColor(0.08f, 0.08f, 0.12f, 1f)
-    preview = CharacterPreview("assets/EverQuest")
+    preview = CharacterPreview()
 
   override def update(dt: Float): Unit =
     // Keyboard navigation

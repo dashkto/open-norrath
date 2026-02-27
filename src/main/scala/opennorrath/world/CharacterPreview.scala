@@ -1,21 +1,20 @@
 package opennorrath.world
 
 import opennorrath.animation.{AnimCode, AnimatedCharacter}
-import opennorrath.archive.PfsArchive
 import opennorrath.render.{Mesh, Shader, Texture}
-import opennorrath.wld.*
+import opennorrath.wld.MaterialType
 import org.joml.{Matrix4f, Vector3f}
 import org.lwjgl.opengl.GL11.*
 import org.lwjgl.opengl.GL20.glVertexAttrib3f
-import java.nio.file.{Path, Files}
 
-/** Loads global character models and renders a single character preview.
+/** Renders a single character preview using persistent GlobalCharacters and EquipmentModels stores.
   * Used by the character select screen to show a 3D model of the selected character.
   */
-class CharacterPreview(assetsDir: String):
+class CharacterPreview:
 
-  // Texture management
-  private val textureMap = scala.collection.mutable.Map[String, Int]()
+  // Combined texture lookup from persistent stores
+  private val textureMap: scala.collection.Map[String, Int] =
+    GlobalCharacters.textures ++ EquipmentModels.textures
   private val fallbackTexture = Texture.createCheckerboard(64, 8)
 
   // Shader + matrices
@@ -37,15 +36,9 @@ class CharacterPreview(assetsDir: String):
   private var weaponPrimary: Int = 0
   private var weaponSecondary: Int = 0
 
-  // Load global character models
-  val characterBuilds: Map[String, ZoneRenderer.CharBuild] = loadGlobalCharacters()
-
-  // Load equipment models from gequip*.s3d (shared with ZoneRenderer)
-  private val equipmentModels: Map[Int, ZoneRenderer.EquipModel] =
-    val dir = Path.of(assetsDir)
-    if Files.isDirectory(dir) then
-      ZoneRenderer.loadEquipmentModels(dir, entries => loadTextures(entries))
-    else Map.empty
+  // Read from persistent stores
+  val characterBuilds: Map[String, ZoneRenderer.CharBuild] = GlobalCharacters.characterBuilds
+  private val equipmentModels: Map[Int, ZoneRenderer.EquipModel] = EquipmentModels.models
 
   def setCharacter(modelCode: String, equipment: Array[Int] = Array.fill(9)(0)): Unit =
     if modelCode == currentCode && java.util.Arrays.equals(equipment, currentEquipment) then return
@@ -163,64 +156,4 @@ class CharacterPreview(assetsDir: String):
     currentChar.foreach(_.glMesh.cleanup())
     shader.cleanup()
     glDeleteTextures(fallbackTexture)
-    textureMap.values.foreach(glDeleteTextures)
-
-  private def loadTextures(entries: List[opennorrath.archive.PfsEntry]): Unit =
-    for entry <- entries if entry.extension == "bmp" do
-      val key = entry.name.toLowerCase
-      if !textureMap.contains(key) then
-        try textureMap(key) = Texture.loadFromBytes(entry.data, applyColorKey = false)
-        catch case _: Exception => ()
-
-  private def loadGlobalCharacters(): Map[String, ZoneRenderer.CharBuild] =
-    val dir = Path.of(assetsDir)
-    if !Files.isDirectory(dir) then return Map.empty
-
-    val globalFiles = Files.list(dir).toArray.map(_.asInstanceOf[Path])
-      .filter { p =>
-        val name = p.getFileName.toString.toLowerCase
-        name.startsWith("global") && name.contains("_chr") && name.endsWith(".s3d")
-      }.sorted
-    if globalFiles.isEmpty then return Map.empty
-
-    // Classic models + BMP textures live in global_chr.s3d.
-    // Per-race files (globalhum_chr.s3d etc.) contain Luclin-era models with DDS textures
-    // we can't load, so we only extract animation tracks from them.
-    val trackDefs = List.newBuilder[Fragment12_TrackDef]
-    var classicData: Option[(WldFile, List[Fragment14_Actor])] = None
-
-    for file <- globalFiles do
-      try
-        val fileName = file.getFileName.toString.toLowerCase
-        if fileName == "global_chr.s3d" then
-          // Classic models: load fully with BMP textures
-          val fileEntries = PfsArchive.load(file)
-          loadTextures(fileEntries)
-          fileEntries.find(_.extension == "wld").foreach { wldEntry =>
-            val fileWld = WldFile(wldEntry.data)
-            trackDefs ++= fileWld.fragmentsOfType[Fragment12_TrackDef]
-            val actors = fileWld.fragmentsOfType[Fragment14_Actor]
-            if actors.nonEmpty then classicData = Some((fileWld, actors))
-          }
-        else
-          // All other files: extract tracks only (WLD)
-          val fileEntries = PfsArchive.load(file, extensionFilter = Some(Set("wld")))
-          fileEntries.find(_.extension == "wld").foreach { wldEntry =>
-            val fileWld = WldFile(wldEntry.data)
-            trackDefs ++= fileWld.fragmentsOfType[Fragment12_TrackDef]
-          }
-      catch case e: Exception =>
-        println(s"  Warning: failed to load ${file.getFileName}: ${e.getMessage}")
-
-    val allTracks = trackDefs.result()
-    println(s"  CharacterPreview: ${allTracks.size} tracks from ${globalFiles.length} files")
-
-    val builds = scala.collection.mutable.Map[String, ZoneRenderer.CharBuild]()
-    classicData.foreach { (wld, actors) =>
-      for build <- ZoneRenderer.buildCharacters(wld, actors, allTracks, quiet = true) do
-        builds(build.key) = build
-    }
-
-    if builds.nonEmpty then
-      println(s"  CharacterPreview: ${builds.size} models (${builds.keys.toSeq.sorted.mkString(", ")})")
-    builds.toMap
+    // Textures owned by GlobalCharacters/EquipmentModels stores — don't delete here

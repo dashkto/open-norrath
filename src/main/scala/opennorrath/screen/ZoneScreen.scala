@@ -36,6 +36,7 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
   private var wasAirborne = false          // track airborne state for fall animation
   private var jumpAnimTimer = 0f          // countdown for crouch animation on jump
   private var zoning = false              // true after server requests zone change
+  private var zoneDeniedUntil = 0L       // cooldown (millis) after zone change denial
   private var zonePoints = Vector.empty[ZonePointData]
   private val ZoneLineRadius = 30f       // trigger radius in EQ units (~30 feet)
 
@@ -77,6 +78,7 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
     case ZoneEvent.Error(msg) if zoning =>
       println(s"[Zone] Zone change aborted: $msg")
       zoning = false
+      zoneDeniedUntil = System.currentTimeMillis() + 3000
     case ZoneEvent.ZonePointsLoaded(points) =>
       // OP_SendZonePoints contains only destination coords (target_x/y/z from the
       // zone_points DB table), NOT trigger locations. The trigger coords (y/x/z) stay
@@ -218,7 +220,6 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
           zone.initSpawnRendering(playerZc)
           val (fo, mh) = zone.modelMetrics(playerZc.modelCode, playerZc.size)
           player.foreach { pc => pc.feetOffset = fo; pc.modelHeight = mh; pc.zoneChar = Some(playerZc) }
-          println(f"  Player model ${playerZc.modelCode}: feetOffset=$fo%.2f modelHeight=$mh%.2f (size=${playerZc.size}%.1f)")
         }
       }
     }
@@ -306,8 +307,20 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
         else
           posUpdateTimer = PosUpdateInterval
 
-    // TODO: Client must detect zone lines and initiate OP_ZoneChange.
-    // The server does NOT auto-detect zone line crossings from position updates.
+    // Zone line detection — check if player is inside a BSP zone line region
+    if camCtrl.attached && !zone.zoneLineBsp.isEmpty && System.currentTimeMillis() >= zoneDeniedUntil then
+      player.foreach { pc => pc.zoneChar.foreach { zc =>
+        val pos = zc.position
+        val (s3dX, s3dY, s3dZ) = EqCoords.glToS3d(pos.x, pos.y - pc.feetOffset, pos.z)
+        val hit = zone.zoneLineBsp.check(s3dX, s3dY, s3dZ)
+          .orElse(zone.zoneLineBsp.checkSphere(s3dX, s3dY, s3dZ))
+        hit.foreach { info =>
+          // Send zoneId=0 — server resolves target from player position via zone_points table
+          println(s"[Zone] Zone line hit: '${info.regionName}' param1=${info.param1} param2=${info.param2}")
+          Game.zoneSession.foreach(_.client.sendZoneChange(0))
+          zoning = true
+        }
+      }}
 
     // Left-click targeting — only change target if we hit something
     if ctx.input.isActionPressed(GameAction.Target) && !camCtrl.freeLook && !ImGui.getIO().getWantCaptureMouse() then
