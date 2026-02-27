@@ -14,7 +14,7 @@ import opennorrath.animation.AnimCode
 import opennorrath.render.Shader
 import opennorrath.state.{PlayerCharacter, ZoneCharacter}
 import opennorrath.world.{CameraController, EqCoords, SpellEffectSystem, TargetingSystem, ZoneRenderer}
-import opennorrath.network.{InventoryItem, NetCommand, NetworkThread, PlayerPosition, PlayerProfileData, SpawnData, WorldClient, WorldEvent, ZoneEvent, ZonePointData}
+import opennorrath.network.{InventoryItem, NetCommand, NetworkThread, PlayerPosition, PlayerProfileData, SpawnAppearanceChange, SpawnData, WorldClient, WorldEvent, ZoneEvent, ZonePointData, ZoneState}
 import opennorrath.ui.{NameplateRenderer, ZoneHud}
 
 class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData] = None, profile: Option[PlayerProfileData] = None) extends Screen:
@@ -40,6 +40,8 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
   private var zoneDeniedUntil = 0L       // cooldown (millis) after zone change denial
   private var zoningStartedAt = 0L       // millis when zoning started (for timeout)
   private val ZoningTimeoutMs = 15000L   // give up if world ZoneServerInfo never arrives
+  private var campComplete = false              // true after server acknowledges camp (OP_LogoutReply)
+  private var campTimer = 0f                    // countdown until OP_Logout is sent
   private var zonePoints = Vector.empty[ZonePointData]
   private val ZoneLineRadius = 30f       // trigger radius in EQ units (~30 feet)
 
@@ -97,6 +99,16 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
       zonePoints = points
       for p <- points do
         println(f"[Zone] Zone point #${p.iterator}: target=${p.targetZoneId} dest=(${p.x}%.1f,${p.y}%.1f,${p.z}%.1f)")
+    case ZoneEvent.AppearanceChanged(change) if change.appearanceType == SpawnAppearanceChange.Animation =>
+      zoneCharacters.get(change.spawnId).foreach { zc =>
+        zc.sitting = change.parameter == SpawnAppearanceChange.AnimSit
+        zc.dead = change.parameter == SpawnAppearanceChange.AnimDead
+      }
+    case ZoneEvent.AnimationTriggered(anim) =>
+      for
+        (code, duration) <- animActionToCode(anim.action)
+        zc <- zoneCharacters.get(anim.spawnId)
+      do zc.playTimedAnimation(code, duration)
     case ZoneEvent.DamageDealt(info) if info.damage != 0 =>
       // Attacker plays attack animation, target plays get-hit animation
       val attackAnim = if java.util.concurrent.ThreadLocalRandom.current().nextBoolean()
@@ -105,6 +117,12 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
       zoneCharacters.get(info.targetId).foreach { zc =>
         if info.damage > 0 then zc.playTimedAnimation(AnimCode.GetHit.code, 0.4f)
       }
+      // Auto-stand (and cancel camp) when player takes damage
+      val myId = Game.zoneSession.map(_.client.mySpawnId).getOrElse(-1)
+      if info.targetId == myId && info.damage > 0 then
+        zoneCharacters.get(myId).foreach { zc =>
+          if zc.sitting then standUp(zc)
+        }
     case ZoneEvent.EntityDied(info) =>
       zoneCharacters.get(info.spawnId).foreach { zc =>
         zc.dead = true
@@ -127,12 +145,63 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
             zone.updateSpawnEquipment(zc)
           }
         }
+    case ZoneEvent.StateChanged(ZoneState.Disconnected) =>
+      campComplete = true
     case _ => ()
 
   private val spellListener: ZoneEvent => Unit =
     case ZoneEvent.SpellActionTriggered(action) if action.spellId > 0 =>
       spellEffects.trigger(action.targetId, action.spellId)
     case _ => ()
+
+  /** Map OP_Animation action byte to (AnimCode, duration).
+    * Values from EQEmu Animation enum in zone/common.h. */
+  private def animActionToCode(action: Int): Option[(String, Float)] = action match
+    // Combat — these also come via DamageDealt, but OP_Animation can trigger independently
+    case 1  => Some((AnimCode.Attack1.code, 0.5f))      // Kick
+    case 2  => Some((AnimCode.Attack2.code, 0.5f))      // Piercing
+    case 3  => Some((AnimCode.Slash2H.code, 0.5f))      // 2H Slashing
+    case 4  => Some((AnimCode.Weapon2H.code, 0.5f))     // 2H Weapon
+    case 5  => Some((AnimCode.GetHit.code, 0.5f))       // 1H Weapon
+    case 6  => Some((AnimCode.DualWield.code, 0.5f))    // Dual Wield
+    case 7  => Some((AnimCode.Bash.code, 0.5f))         // Slam/Bash
+    case 8  => Some((AnimCode.HandToHand.code, 0.5f))   // Hand to Hand
+    case 9  => Some((AnimCode.AttackOff.code, 0.5f))    // Shoot Bow
+    case 11 => Some((AnimCode.RoundKick.code, 0.5f))    // Round Kick
+    // Casting
+    case 42 => Some((AnimCode.CastPullBack.code, 2.5f)) // Buff cast
+    case 43 => Some((AnimCode.CastLoop.code, 2.5f))     // Heal cast
+    case 44 => Some((AnimCode.SpellCast.code, 0.8f))    // Damage cast (finish)
+    // Monk specials
+    case 45 => Some((AnimCode.FlyingKick.code, 0.5f))
+    case 46 => Some((AnimCode.TigerClaw.code, 0.5f))
+    case 47 => Some((AnimCode.EagleStrike.code, 0.5f))
+    // Emotes (T prefix)
+    case 29 => Some((AnimCode.Wave.code, 2.0f))
+    case 30 => Some((AnimCode.Rude.code, 2.0f))
+    case 31 => Some((AnimCode.Yawn.code, 2.0f))
+    // Social emotes (S prefix) — action 48..70 maps to S01..S20 with gaps
+    case 48 => Some((AnimCode.Agree.code, 2.0f))
+    case 49 => Some((AnimCode.Amaze.code, 2.0f))
+    case 50 => Some((AnimCode.Plead.code, 2.0f))
+    case 51 => Some((AnimCode.Clap.code, 2.0f))
+    case 52 => Some((AnimCode.Bleed.code, 2.0f))
+    case 54 => Some((AnimCode.Chuckle.code, 2.0f))
+    case 55 => Some((AnimCode.Burp.code, 2.0f))
+    case 58 => Some((AnimCode.Dance.code, 2.0f))
+    case 59 => Some((AnimCode.Veto.code, 2.0f))
+    case 60 => Some((AnimCode.Glare.code, 2.0f))
+    case 61 => Some((AnimCode.Peer.code, 2.0f))
+    case 62 => Some((AnimCode.KneelEmote.code, 2.0f))
+    case 63 => Some((AnimCode.Laugh.code, 2.0f))
+    case 64 => Some((AnimCode.Point.code, 2.0f))
+    case 65 => Some((AnimCode.Shrug.code, 2.0f))
+    case 66 => Some((AnimCode.HandRaise.code, 2.0f))
+    case 67 => Some((AnimCode.Salute.code, 2.0f))
+    case 68 => Some((AnimCode.Shiver.code, 2.0f))
+    case 69 => Some((AnimCode.TapFoot.code, 2.0f))
+    case 70 => Some((AnimCode.Bow.code, 2.0f))
+    case _  => None
 
   private val MaxTabTargetDist = 200f
 
@@ -235,6 +304,26 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
   override def update(dt: Float): Unit =
     Game.zoneSession.foreach(_.client.dispatchEvents())
 
+    // Camp complete — server acknowledged logout, return to character select
+    if campComplete then
+      Game.zoneSession.foreach(_.stop())
+      Game.zoneSession = None
+      Game.worldSession match
+        case Some(ws) =>
+          Game.setScreen(CharacterSelectScreen(ctx, ws.client.characters))
+        case None =>
+          Game.setScreen(LoginScreen(ctx))
+      return
+
+    // Camp timer — after ~30s, send OP_Logout so server responds with OP_LogoutReply
+    Game.zoneSession.foreach { session =>
+      if session.client.camping && !campComplete then
+        campTimer += dt
+        if campTimer >= 30f then
+          session.client.sendLogout()
+          session.client.camping = false
+    }
+
     // When zoning, poll world server for new zone address instead of normal updates
     if zoning then
       if System.currentTimeMillis() - zoningStartedAt > ZoningTimeoutMs then
@@ -274,6 +363,24 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
     hud.update(ctx.input)
     if hud.isEscapeOpen then return
 
+    // Sit toggle (Q) and auto-stand on movement
+    if camCtrl.attached && !ImGui.getIO().getWantTextInput() then
+      player.foreach { pc => pc.zoneChar.foreach { zc =>
+        val wantMove = ctx.input.isActionHeld(GameAction.MoveForward) ||
+          ctx.input.isActionHeld(GameAction.MoveBackward) ||
+          ctx.input.isActionHeld(GameAction.StrafeLeft) ||
+          ctx.input.isActionHeld(GameAction.StrafeRight)
+        if zc.sitting && wantMove then
+          standUp(zc)
+        else if ctx.input.isActionPressed(GameAction.Sit) then
+          if zc.sitting then standUp(zc)
+          else
+            zc.sitting = true
+            Game.zoneSession.foreach { s =>
+              s.client.setAppearance(s.client.mySpawnId, SpawnAppearanceChange.Animation, SpawnAppearanceChange.AnimSit)
+            }
+      }}
+
     camCtrl.update(ctx.input, dt)
 
     // Update player model position/heading and animation
@@ -289,8 +396,7 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
             }
           case None =>
             zoneCharacters.get(pid).foreach { zc =>
-              zc.position.set(camCtrl.playerPos)
-              zc.heading = camCtrl.playerHeading
+              zc.position.set(camCtrl.camera.position)
               zone.updateSpawnPosition(zc)
             }
       }
@@ -299,26 +405,28 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
     if camCtrl.attached then
       posUpdateTimer += dt
       if posUpdateTimer >= PosUpdateInterval then
-        val pp = camCtrl.playerPos
-        val hdeg = camCtrl.playerHeadingDeg
-        val posChanged = pp.distanceSquared(lastSentPos) > 0.01f
-        val headingChanged = Math.abs(hdeg - lastSentHeading) > 1f
-        if posChanged || headingChanged then
-          posUpdateTimer = 0f
-          lastSentPos.set(pp)
-          lastSentHeading = hdeg
-          Game.zoneSession.foreach { session =>
-            val (sy, sx, sz) = EqCoords.glToServer(pp.x, pp.y, pp.z)
-            session.client.sendPosition(PlayerPosition(
-              spawnId = session.client.mySpawnId,
-              y = sy, x = sx, z = sz,
-              heading = hdeg,
-              deltaY = 0, deltaX = 0, deltaZ = 0, deltaHeading = 0,
-              animation = if camCtrl.playerMoving then 1 else 0,
-            ))
-          }
-        else
-          posUpdateTimer = PosUpdateInterval
+        player.foreach { pc =>
+          val pp = pc.position
+          val hdeg = pc.headingDeg
+          val posChanged = pp.distanceSquared(lastSentPos) > 0.01f
+          val headingChanged = Math.abs(hdeg - lastSentHeading) > 1f
+          if posChanged || headingChanged then
+            posUpdateTimer = 0f
+            lastSentPos.set(pp)
+            lastSentHeading = hdeg
+            Game.zoneSession.foreach { session =>
+              val (sy, sx, sz) = EqCoords.glToServer(pp.x, pp.y, pp.z)
+              session.client.sendPosition(PlayerPosition(
+                spawnId = session.client.mySpawnId,
+                y = sy, x = sx, z = sz,
+                heading = hdeg,
+                deltaY = 0, deltaX = 0, deltaZ = 0, deltaHeading = 0,
+                animation = if pc.moving then 1 else 0,
+              ))
+            }
+          else
+            posUpdateTimer = PosUpdateInterval
+        }
 
     // Zone line detection — check if player is inside a BSP zone line region
     if camCtrl.attached && !zone.zoneLineBsp.isEmpty && System.currentTimeMillis() >= zoneDeniedUntil then
@@ -382,6 +490,16 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
     glDisable(GL_BLEND)
 
     hud.render()
+
+  /** Stand up and cancel camping if active. */
+  private def standUp(zc: ZoneCharacter): Unit =
+    zc.sitting = false
+    Game.zoneSession.foreach { s =>
+      s.client.setAppearance(s.client.mySpawnId, SpawnAppearanceChange.Animation, SpawnAppearanceChange.AnimStand)
+      if s.client.camping then
+        s.client.camping = false
+        campTimer = 0f
+    }
 
   /** Reconnect to world server for zone-to-zone transition.
     * EQ protocol requires: disconnect both zone+world, reconnect to world,

@@ -5,7 +5,7 @@ import scala.compiletime.uninitialized
 import org.joml.{Matrix4f, Vector3f}
 
 import opennorrath.animation.{AnimCode, AnimatedCharacter}
-import opennorrath.network.{SpawnData, TintColor, TintProfile}
+import opennorrath.network.{SpawnAppearanceChange, SpawnData, TintColor, TintProfile}
 import opennorrath.ui.EqData
 import opennorrath.world.{EqCoords, ZoneRenderer}
 
@@ -120,7 +120,7 @@ class ZoneCharacter(
     // State priority: dead > airborne > sitting > moving > fidget > idle
     if dead then return AnimCode.Death1.code
     if airborne then return AnimCode.Fall.code
-    if sitting then return AnimCode.Sit.code
+    if sitting then return AnimCode.Sitting.code
     if moving then
       fidgetTimer = ZoneCharacter.randomFidgetDelay()
       return if speed > ZoneCharacter.RunThreshold then AnimCode.Run.code else AnimCode.Walk.code
@@ -223,5 +223,8 @@ object ZoneCharacter:
       Array.copy(s.equipment, 0, zc.equipment, 0, math.min(s.equipment.length, 9))
       for i <- 0 until math.min(s.equipColors.slots.length, 9) do
         zc.equipColors(i) = s.equipColors.slots(i)
+      // Initialize animation state from spawn data
+      zc.sitting = s.standState == SpawnAppearanceChange.AnimSit
+      zc.dead = s.standState == SpawnAppearanceChange.AnimDead
       zc
     }

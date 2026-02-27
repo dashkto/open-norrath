@@ -199,9 +199,19 @@ class ZoneClient extends PacketHandler:
   def setAppearance(spawnId: Int, appearanceType: Int, parameter: Int): Unit =
     queueAppPacket(ZoneOpcodes.SpawnAppearance, ZoneCodec.encodeSpawnAppearance(spawnId, appearanceType, parameter))
 
+  /** Whether a camp is in progress (client waiting to send OP_Logout). */
+  var camping: Boolean = false
+
   /** Camp / logout. Called from game thread. */
   def camp(): Unit =
+    println("[Zone] Sending OP_Camp")
+    camping = true
     queueAppPacket(ZoneOpcodes.Camp, ZoneCodec.encodeCamp)
+
+  /** Send OP_Logout after camp timer expires. Called from game thread. */
+  def sendLogout(): Unit =
+    println("[Zone] Sending OP_Logout (camp timer expired)")
+    queueAppPacket(ZoneOpcodes.Logout, ZoneCodec.encodeLogout)
 
   /** Move/swap an inventory item. Called from game thread. */
   def sendMoveItem(fromSlot: Int, toSlot: Int, stackCount: Int = 0): Unit =
@@ -473,10 +483,13 @@ class ZoneClient extends PacketHandler:
         }
 
       case ZoneOpcodes.LogoutReply =>
+        println("[Zone] Received OP_LogoutReply — camp complete")
         state = ZoneState.Disconnected
         emit(ZoneEvent.StateChanged(state))
 
-      case _ => ()
+      case other =>
+        val name = ZoneOpcodes.name(other)
+        println(f"[Zone] Unhandled opcode: 0x${other & 0xFFFF}%04X ($name) ${pkt.payload.length} bytes")
 
   def tick(): Unit =
     // Build pending app packets

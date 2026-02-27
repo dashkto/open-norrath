@@ -101,6 +101,7 @@ object ZoneCodec:
 
   /** OP_Camp: empty payload. */
   def encodeCamp: Array[Byte] = Array.emptyByteArray
+  def encodeLogout: Array[Byte] = Array.emptyByteArray
 
   /** OP_ReqNewZone: empty payload. */
   def encodeReqNewZone: Array[Byte] = Array.emptyByteArray

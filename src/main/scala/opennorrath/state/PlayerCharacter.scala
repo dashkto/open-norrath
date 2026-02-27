@@ -40,15 +40,50 @@ class PlayerCharacter(
   /** Whether auto-attack is currently active. */
   var autoAttacking: Boolean = false
 
-  /** Teleport to the given GL-space position (server/feet-level). Stored as model-origin in ZC. */
+  /** Feet-level GL position — the single source of truth for where the player is. */
+  val position: Vector3f = Vector3f()
+
+  /** Player heading as EQ byte (0-255, CCW from east) for model rotation. */
+  var heading: Int = 0
+
+  /** Player heading in degrees (0-360, CCW from east) for server packets. */
+  var headingDeg: Float = 0f
+
+  /** Whether the player is currently moving (for animation and network sync). */
+  var moving: Boolean = false
+
+  /** Update heading fields from camera yaw (degrees, CW). */
+  def updateHeading(yaw: Float): Unit =
+    val h = -yaw % 360f
+    headingDeg = if h < 0 then h + 360f else h
+    heading = ((headingDeg * 256f / 360f).toInt % 256 + 256) % 256
+
+  /** Read ZoneCharacter model-origin position back to feet-level. */
+  def syncFromZoneChar(): Unit =
+    zoneChar.foreach { zc =>
+      position.set(zc.position.x, zc.position.y - feetOffset, zc.position.z)
+    }
+
+  /** Write current state to ZoneCharacter for rendering. */
+  def syncToZoneChar(): Unit =
+    zoneChar.foreach { zc =>
+      zc.position.set(position.x, position.y + feetOffset, position.z)
+      zc.heading = heading
+      zc.moving = moving
+      zc.airborne = airborne
+      zc.speed = if moving then runSpeed else 0f
+    }
+
+  /** Teleport to the given GL-space position (feet-level). */
   def teleportTo(glPos: Vector3f): Unit =
+    position.set(glPos)
     zoneChar.foreach(_.position.set(glPos.x, glPos.y + feetOffset, glPos.z))
 
   /** Base run speed in GL units/sec. Can be modified by buffs (SoW etc).
     * EQEmu speed hack detection (Project Speedie, disabled by default) thresholds:
     * 125 units/sec normal, 140 speed-buffed, 160 bard. Only logs, doesn't reject.
     */
-  var runSpeed: Float = 25f
+  var runSpeed: Float = 25f // tested: 25 GL units/sec matches standard unbuffed player run speed
 
   /** Zone collision mesh for ground detection. */
   var collision: Option[ZoneCollision] = None

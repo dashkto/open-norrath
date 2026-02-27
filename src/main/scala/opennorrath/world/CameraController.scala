@@ -11,6 +11,8 @@ import opennorrath.state.PlayerCharacter
 
 /** Manages camera state, freelook cursor toggling, and projection.
   * Starts attached to the player position; Shift+T detaches for free flight.
+  * Player position/heading/moving state lives in PlayerCharacter; this class
+  * reads and writes it, then positions the camera eye accordingly.
   */
 class CameraController(window: Long, screenW: Int, screenH: Int):
 
@@ -25,13 +27,12 @@ class CameraController(window: Long, screenW: Int, screenH: Int):
   var camera: Camera = Camera()
   var freeLook = false
   var attached = true
-  var playerMoving = false
 
-  /** Optional reference to the player character — updated with position/heading/moving. */
+  /** Optional reference to the player character — owns position/heading/moving. */
   var player: Option[PlayerCharacter] = None
 
-  /** Player foot position in GL space (eye = playerPos + eyeHeight on Y). */
-  val playerPos = Vector3f()
+  /** Fallback position when no player (debug/test mode). */
+  private val fallbackPos = Vector3f()
   private val eyeProbe = Vector3f()   // reusable for camera collision raycast
   private val camProbe = Vector3f()
 
@@ -44,16 +45,6 @@ class CameraController(window: Long, screenW: Int, screenH: Int):
 
   def viewMatrix: Matrix4f = camera.viewMatrix
 
-  /** Player heading in degrees (0-360, CCW from east) for server packets. */
-  def playerHeadingDeg: Float =
-    val h = -camera.yaw % 360f
-    if h < 0 then h + 360f else h
-
-  /** Player heading as EQ byte (0-255, CCW from east) for model rotation. */
-  def playerHeading: Int =
-    val deg = playerHeadingDeg
-    ((deg * 256f / 360f).toInt % 256 + 256) % 256
-
   def initFromSpawn(spawn: Option[SpawnData], profile: Option[PlayerProfileData]): Unit =
     val (footPos, startYaw) = spawn match
       case Some(s) =>
@@ -63,7 +54,12 @@ class CameraController(window: Long, screenW: Int, screenH: Int):
           (EqCoords.serverToGl(pp.y, pp.x, pp.z), EqCoords.profileHeadingToYaw(pp.heading))
         case None =>
           (Vector3f(-150f, 50f, -460f), 30f)
-    playerPos.set(footPos)
+    fallbackPos.set(footPos)
+    player.foreach { pc =>
+      pc.position.set(footPos)
+      pc.updateHeading(startYaw)
+      pc.syncToZoneChar()
+    }
     val eyePos = Vector3f(footPos).add(0f, eyeHeight, 0f)
     camera = Camera(
       position = eyePos,
@@ -71,10 +67,6 @@ class CameraController(window: Long, screenW: Int, screenH: Int):
       pitch = -5f,
       speed = 100f,
     )
-    // Sync initial position to ZoneCharacter (model-origin space)
-    player.foreach { pc =>
-      pc.zoneChar.foreach(zc => zc.position.set(footPos.x, footPos.y + pc.feetOffset, footPos.z))
-    }
     println(s"Camera: pos=$eyePos yaw=$startYaw attached=$attached")
 
   def update(input: InputManager, dt: Float): Unit =
@@ -102,13 +94,12 @@ class CameraController(window: Long, screenW: Int, screenH: Int):
         zoomDist = Math.max(MinZoom, Math.min(MaxZoom, zoomDist - scroll * ZoomStep)).toFloat
 
     if attached then
-      // Sync from ZoneCharacter (model-origin space → feet-level for camera)
-      player.foreach { pc =>
-        pc.zoneChar.foreach { zc =>
-          playerPos.set(zc.position.x, zc.position.y - pc.feetOffset, zc.position.z)
-        }
-      }
-      playerMoving = false
+      val pos = player.map(_.position).getOrElse(fallbackPos)
+
+      // Sync from ZoneCharacter (model-origin space → feet-level)
+      player.foreach(_.syncFromZoneChar())
+
+      var moved = false
       if !ImGui.getIO().getWantCaptureKeyboard() then
         // Horizontal movement along camera yaw direction
         val yawRad = Math.toRadians(camera.yaw).toFloat
@@ -127,32 +118,38 @@ class CameraController(window: Long, screenW: Int, screenH: Int):
         if dx != 0f || dz != 0f then
           player match
             case Some(pc) =>
-              playerMoving = pc.tryMove(playerPos, dx, dz)
+              moved = pc.tryMove(pos, dx, dz)
             case None =>
-              playerPos.x += dx
-              playerPos.z += dz
-              playerMoving = true
+              pos.x += dx
+              pos.z += dz
+              moved = true
         if input.isActionPressed(GameAction.Jump) then
           player.foreach(_.jump())
       // Gravity (feet-level space)
-      player.foreach(_.applyGravity(playerPos, dt))
+      player.foreach(_.applyGravity(pos, dt))
+
+      // Update player heading and moving state
+      player.foreach { pc =>
+        pc.updateHeading(camera.yaw)
+        pc.moving = moved
+      }
 
       // Position camera: at eye height above feet, pulled back by zoomDist along camera yaw
-      val eyeY = playerPos.y + eyeHeight
+      val eyeY = pos.y + eyeHeight
       if zoomDist <= 0f then
-        camera.position.set(playerPos.x, eyeY, playerPos.z)
+        camera.position.set(pos.x, eyeY, pos.z)
       else
         val yawRad2 = Math.toRadians(camera.yaw).toFloat
         val offX = -Math.cos(yawRad2).toFloat * zoomDist
         val offZ = -Math.sin(yawRad2).toFloat * zoomDist
-        val desiredX = playerPos.x + offX
+        val desiredX = pos.x + offX
         val desiredY = eyeY + zoomDist * 0.3f
-        val desiredZ = playerPos.z + offZ
+        val desiredZ = pos.z + offZ
         // Prevent camera from clipping through zone geometry
         val col = player.flatMap(_.collision)
         col match
           case Some(c) =>
-            eyeProbe.set(playerPos.x, eyeY, playerPos.z)
+            eyeProbe.set(pos.x, eyeY, pos.z)
             camProbe.set(desiredX, desiredY, desiredZ)
             val hitDist = c.raycast(eyeProbe, camProbe)
             if hitDist > 0f then
@@ -161,25 +158,18 @@ class CameraController(window: Long, screenW: Int, screenH: Int):
               val t = (hitDist - 0.5f) / totalDist  // back off slightly
               if t > 0f then
                 camera.position.set(
-                  playerPos.x + offX * t,
+                  pos.x + offX * t,
                   eyeY + (desiredY - eyeY) * t,
-                  playerPos.z + offZ * t,
+                  pos.z + offZ * t,
                 )
               else
-                camera.position.set(playerPos.x, eyeY, playerPos.z)
+                camera.position.set(pos.x, eyeY, pos.z)
             else
               camera.position.set(desiredX, desiredY, desiredZ)
           case None =>
             camera.position.set(desiredX, desiredY, desiredZ)
-      // Sync state to ZoneCharacter (feet-level → model-origin space)
-      player.foreach { pc =>
-        pc.zoneChar.foreach { zc =>
-          zc.position.set(playerPos.x, playerPos.y + pc.feetOffset, playerPos.z)
-          zc.heading = playerHeading
-          zc.moving = playerMoving
-          zc.airborne = pc.airborne
-          zc.speed = if playerMoving then pc.runSpeed else 0f
-        }
-      }
+
+      // Sync state to ZoneCharacter for rendering
+      player.foreach(_.syncToZoneChar())
     else if !ImGui.getIO().getWantCaptureKeyboard() then
       camera.processMovement(input, dt)

@@ -425,7 +425,13 @@ object SpawnAppearanceChange:
   val Invis = 3
   val PVP = 4
   val Light = 5
-  val Animation = 14     // Stand=100, Sit=110, Crouch=111, Dead=120, Loot=105
+  val Animation = 14
+  // Animation parameter values
+  val AnimStand = 100
+  val AnimLoot = 105
+  val AnimSit = 110
+  val AnimCrouch = 111
+  val AnimDead = 120
   val Sneak = 15
   val SpawnID = 16
   val HPPercent = 17

@@ -174,6 +174,7 @@ class ZoneEventHandler(chatPanel: TextPanel, characters: scala.collection.Map[In
       case "/slowdown" => handleSlowDown(); true
       case "/attack" | "/a" => handleAttackToggle(); true
       case "/who" => handleWho(); true
+      case "/camp" => handleCamp(); true
       // Chat channel commands — pass through to parseCommand/sendChat
       case "/say" | "/s" | "/shout" | "/sho" | "/ooc" | "/auction" | "/auc"
            | "/tell" | "/t" | "/group" | "/g" | "/guild" | "/gu" => false
@@ -239,6 +240,10 @@ class ZoneEventHandler(chatPanel: TextPanel, characters: scala.collection.Map[In
       if enable then chatPanel.addLine("Auto-attack on.", Colors.text)
       else chatPanel.addLine("Auto-attack off.", Colors.text)
     }
+
+  private def handleCamp(): Unit =
+    Game.zoneSession.foreach(_.client.camp())
+    chatPanel.addLine("It will take about 30 seconds to camp.", Colors.gold)
 
   private def handleWho(): Unit =
     val myId = Game.zoneSession.map(_.client.mySpawnId).getOrElse(-1)

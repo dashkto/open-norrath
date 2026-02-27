@@ -5,33 +5,86 @@ import opennorrath.world.EqCoords
 import opennorrath.wld.*
 import org.joml.{Matrix4f, Quaternionf, Vector3f}
 
-/** Standard EQ 3-char animation codes. */
+/** Standard EQ 3-char animation codes found in S3D animation track names. */
 enum AnimCode(val code: String):
-  // Passive / idle
-  case Idle       extends AnimCode("P01")
-  case Passive    extends AnimCode("P02")
-  case Fidget     extends AnimCode("P03")
-  case SwimIdle   extends AnimCode("P06")
-  // Locomotion
-  case Walk       extends AnimCode("L01")
-  case Run        extends AnimCode("L02")
-  case WalkBack   extends AnimCode("L03")
-  case Sit        extends AnimCode("L05")
-  case Crouch     extends AnimCode("L06")
-  case Fall       extends AnimCode("L09")
-  // Combat
-  case Attack1    extends AnimCode("C01")
-  case Attack2    extends AnimCode("C02")
-  case GetHit     extends AnimCode("C05")
-  case AttackOff  extends AnimCode("C09")
-  case AttackRng  extends AnimCode("C10")
-  // Death
-  case Death1     extends AnimCode("D01")
-  case Death2     extends AnimCode("D02")
-  case DeadLoop   extends AnimCode("D05")
-  // Other
-  case Social     extends AnimCode("O01")
-  case SpellCast  extends AnimCode("T06")
+  // Combat (C prefix)
+  case Attack1      extends AnimCode("C01") // Kick
+  case Attack2      extends AnimCode("C02") // 1H Piercing
+  case Slash2H      extends AnimCode("C03") // 2H Slashing
+  case Weapon2H     extends AnimCode("C04") // 2H Blunt / 2H Weapon
+  case GetHit       extends AnimCode("C05") // 1H Weapon / Throw
+  case DualWield    extends AnimCode("C06") // Dual Wield
+  case Bash         extends AnimCode("C07") // Shield Bash / Slam
+  case HandToHand   extends AnimCode("C08") // Hand to Hand
+  case AttackOff    extends AnimCode("C09") // Shoot Bow
+  case AttackRng    extends AnimCode("C10") // Swim Attack
+  case RoundKick    extends AnimCode("C11") // Round Kick
+
+  // Damage / Death (D prefix)
+  case Death1       extends AnimCode("D01") // Damage / Hit 1
+  case Death2       extends AnimCode("D02") // Damage / Hit 2
+  case Falling      extends AnimCode("D03") // Falling damage
+  case Drowning     extends AnimCode("D04") // Drowning
+  case DeadLoop     extends AnimCode("D05") // Death / Dying
+
+  // Passive / Idle (P prefix)
+  case Idle         extends AnimCode("P01") // Standing idle
+  case Passive      extends AnimCode("P02") // Idle arms at sides
+  case Fidget       extends AnimCode("P03") // Shuffle feet / fidget
+  case Unknown_P04  extends AnimCode("P04")
+  case Kneel        extends AnimCode("P05") // Kneeling
+  case SwimIdle     extends AnimCode("P06") // Treading water idle
+  case Sitting      extends AnimCode("P07") // Sitting
+  case Unknown_P08  extends AnimCode("P08")
+
+  // Locomotion (L prefix)
+  case Walk         extends AnimCode("L01") // Walking
+  case Run          extends AnimCode("L02") // Running
+  case WalkBack     extends AnimCode("L03") // Walking backward / lunge
+  case JumpStand    extends AnimCode("L04") // Standing jump
+  case Fall         extends AnimCode("L05") // Falling
+  case Crouch       extends AnimCode("L06") // Crouch walk / duck walk
+  case Climb        extends AnimCode("L07") // Climbing ladder
+  case CrouchIdle   extends AnimCode("L08") // Crouching idle
+  case Swim         extends AnimCode("L09") // Swimming
+
+  // Social / Other (O prefix)
+  case Social       extends AnimCode("O01") // Social idle
+  case Cheer        extends AnimCode("O02") // Cheer emote
+  case Mourn        extends AnimCode("O03") // Mourn / disgust emote
+
+  // Triggered / Cast (T prefix)
+  case Wave         extends AnimCode("T01") // Wave emote
+  case Rude         extends AnimCode("T02") // Rude gesture
+  case Yawn         extends AnimCode("T03") // Yawn
+  case CastPullBack extends AnimCode("T04") // Spell cast pull back
+  case CastLoop     extends AnimCode("T05") // Spell cast loop
+  case SpellCast    extends AnimCode("T06") // Spell cast push forward
+  case FlyingKick   extends AnimCode("T07") // Monk flying kick
+  case TigerClaw    extends AnimCode("T08") // Monk tiger claw
+  case EagleStrike  extends AnimCode("T09") // Monk eagle strike
+
+  // Social emotes (S prefix)
+  case Agree        extends AnimCode("S01") // Nod yes
+  case Amaze        extends AnimCode("S02") // Amazed
+  case Plead        extends AnimCode("S03") // Pleading
+  case Clap         extends AnimCode("S04") // Clapping
+  case Bleed        extends AnimCode("S05") // Bleed / distress
+  case Chuckle      extends AnimCode("S06") // Chuckle
+  case Burp         extends AnimCode("S07") // Burp / cough
+  case Dance        extends AnimCode("S08") // Dance
+  case Veto         extends AnimCode("S09") // Disagree / veto
+  case Glare        extends AnimCode("S10") // Glare
+  case Peer         extends AnimCode("S11") // Peer
+  case KneelEmote   extends AnimCode("S12") // Kneel emote
+  case Laugh        extends AnimCode("S13") // Laugh
+  case Point        extends AnimCode("S14") // Point
+  case Shrug        extends AnimCode("S15") // Shrug / ponder
+  case HandRaise    extends AnimCode("S16") // Hand raise
+  case Salute       extends AnimCode("S17") // Salute
+  case Shiver       extends AnimCode("S18") // Shiver
+  case TapFoot      extends AnimCode("S19") // Tap foot
+  case Bow          extends AnimCode("S20") // Bow
 
 case class AnimationClip(code: String, frameCount: Int, boneTrackDefs: Array[Fragment12_TrackDef])
 
