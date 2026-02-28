@@ -1,7 +1,7 @@
 package opennorrath.ui
 
 import opennorrath.Game
-import opennorrath.network.{ChatMessage, FormattedMessage, MessageType, SpecialMessage, SpawnAppearanceChange, ZoneEvent}
+import opennorrath.network.{ChatMessage, FormattedMessage, MessageType, SpecialMessage, SpawnAppearanceChange, WhoAllPlayerEntry, ZoneEvent}
 import opennorrath.state.{PlayerCharacter, ZoneCharacter}
 
 /** Processes ZoneClient events — routes messages to the text panel
@@ -120,6 +120,17 @@ class ZoneEventHandler(chatPanel: TextPanel, characters: scala.collection.Map[In
 
     case ZoneEvent.ZoneDataReceived(info) =>
       chatPanel.addLine(s"You have entered ${info.zoneLongName}.", Colors.gold)
+
+    case ZoneEvent.WhoAllReceived(result) =>
+      if result.playerCount == 0 then
+        chatPanel.addLine("There are no players in EverQuest that match those who filters.", Colors.text)
+      else
+        chatPanel.addLine("Players in EverQuest:", Colors.text)
+        chatPanel.addLine("---------------------------", Colors.text)
+        for p <- result.players do
+          chatPanel.addLine(formatWhoAllEntry(p), Colors.text)
+        val noun = if result.playerCount == 1 then "player" else "players"
+        chatPanel.addLine(s"There ${if result.playerCount == 1 then "is" else "are"} ${result.playerCount} $noun in EverQuest.", Colors.text)
 
     case ZoneEvent.WeatherChanged(weather) =>
       weather.weatherType match
@@ -293,6 +304,37 @@ class ZoneEventHandler(chatPanel: TextPanel, characters: scala.collection.Map[In
       .orElse(player.filter(_ => Game.zoneSession.exists(_.client.mySpawnId == id)).map(_.name))
       .orElse(Game.zoneSession.flatMap(_.client.spawns.get(id)).map(s => ZoneCharacter.cleanName(s.name)))
       .getOrElse(s"#$id")
+
+  /** Format a WhoAll player entry for display.
+    * Mirrors the EQ client's display format based on formatString:
+    *   WHOALL_ALL:  " [LVL ClassName] Name (Race) ZONE  Guild"
+    *   WHOALL_ANON: " [ANONYMOUS] Name"
+    *   WHOALL_ROLE: " [ANONYMOUS] Name  Guild"
+    */
+  private def formatWhoAllEntry(p: WhoAllPlayerEntry): String =
+    // formatString constants from eq_constants.h:
+    // 5001 = WHOALL_ALL, 5003 = WHOALL_ANON, 5004 = WHOALL_ROLE, 5006 = WHOALL_GM
+    val isAnon = p.formatString == 5003
+    val isRole = p.formatString == 5004
+    val sb = StringBuilder(" ")
+    if isAnon then
+      sb ++= "[ANONYMOUS] "
+      sb ++= p.name
+    else if isRole then
+      sb ++= "[ANONYMOUS] "
+      sb ++= p.name
+      if p.guild.nonEmpty then sb ++= s"  ${p.guild}"
+    else
+      // Normal or GM format — show level/class/race/zone
+      if p.level > 0 then
+        val cls = EqData.className(p.classId)
+        sb ++= s"[${p.level} $cls] "
+      sb ++= p.name
+      if p.race > 0 then
+        val race = EqData.raceName(p.race)
+        sb ++= s" ($race)"
+      if p.guild.nonEmpty then sb ++= s"  ${p.guild}"
+    sb.result()
 
   /** Map con color code from GetLevelCon() to display color.
     * Green=2, Blue=4, Red=13, Yellow=15, LightBlue=18, White=20.

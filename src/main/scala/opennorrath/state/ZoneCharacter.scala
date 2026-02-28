@@ -39,6 +39,10 @@ class ZoneCharacter(
   def npcType: Int = spawn.npcType
   def size: Float = spawn.size
   def bodyTexture: Int = spawn.bodyTexture
+  // NOTE: flyMode == 1 is NOT the only way creatures fly. The server often sends
+  // flying NPCs (bats, wasps, etc.) at elevated Z positions with flyMode == 0.
+  // Do not use this flag to determine if a creature is airborne — only to decide
+  // whether the client should apply its own flyOffset elevation.
   def flying: Boolean = spawn.flyMode == 1
   var level: Int = spawn.level
   var face: Int = spawn.face

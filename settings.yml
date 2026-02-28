@@ -5,7 +5,7 @@ use_eqg: false
 
 # Rendering
 render:
-  # Max distance (EQ units) to render zone characters — further spawns are culled
+  # Max distance (GL units) to render zone characters — further spawns are culled
   character_distance: 1000
 
 # Debug rendering options

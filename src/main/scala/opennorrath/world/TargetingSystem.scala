@@ -34,7 +34,13 @@ class TargetingSystem:
       val cz = modelMatrix.m32()
       val hw = Math.max(width, depth) * 0.6f
       val minX = cx - hw; val maxX = cx + hw
-      val minY = cy - height * 0.5f; val maxY = cy + height * 0.5f
+      // AABB spans from model origin (feet) upward to head, NOT centered on origin.
+      // Centering on origin (cy ± h/2) puts half the hitbox below the feet — underground
+      // for ground characters, empty air for flying ones. This is especially bad for
+      // flying creatures: the server sends them at elevated positions (flyMode is often 0),
+      // so the model origin is already in the air. A centered hitbox extends into the gap
+      // below the model, making the upper body/head unclickable.
+      val minY = cy; val maxY = cy + height
       val minZ = cz - hw; val maxZ = cz + hw
 
       rayAABBIntersect(rayOrigin, rayDir, minX, minY, minZ, maxX, maxY, maxZ) match
@@ -55,7 +61,7 @@ class TargetingSystem:
       val hw = Math.max(width, depth) * 0.4f
 
       val x0 = cx - hw; val x1 = cx + hw
-      val y0 = cy - height * 0.5f; val y1 = cy + height * 0.5f
+      val y0 = cy; val y1 = cy + height  // feet to head (see pickSpawn comment)
       val z0 = cz - hw;  val z1 = cz + hw
 
       if !hitboxInited then

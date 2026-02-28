@@ -266,10 +266,10 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
               case Some((mat, h, w, d)) =>
                 val cx = mat.m30(); val cy = mat.m31(); val cz = mat.m32()
                 val hw = Math.max(w, d) * 0.6f
-                target.set(cx, cy, cz)
+                target.set(cx, cy + h * 0.5f, cz) // ray to model center, not feet
                 if !zone.collision.rayBlocked(cam, target) then true
                 else
-                  val y0 = cy - h * 0.5f; val y1 = cy + h * 0.5f
+                  val y0 = cy; val y1 = cy + h  // feet to head (see TargetingSystem.pickSpawn)
                   var found = false
                   var ci = 0
                   while ci < 8 && !found do

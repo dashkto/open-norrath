@@ -63,6 +63,7 @@ enum ZoneEvent:
   case EmoteReceived(msg: EmoteMessage)
   case MultiLineMsgReceived(text: String)
   case YellReceived(spawnId: Int)
+  case WhoAllReceived(result: WhoAllResponse)
 
   // Inventory — UI inventory panel
   case InventoryLoaded(items: Vector[InventoryItem])
@@ -225,6 +226,11 @@ class ZoneClient extends PacketHandler:
   /** Send face/hair/beard change to server. Called from game thread. */
   def sendFaceChange(data: FaceChangeData): Unit =
     queueAppPacket(ZoneOpcodes.FaceChange, ZoneCodec.encodeFaceChange(data))
+
+  /** Send a /who or /whoall request to the server. Called from game thread. */
+  def sendWhoAll(whom: String = ""): Unit =
+    if state == ZoneState.InZone then
+      queueAppPacket(ZoneOpcodes.WhoAllRequest, ZoneCodec.encodeWhoAllRequest(whom = whom))
 
   /** Whether a camp is in progress (client waiting to send OP_Logout). */
   var camping: Boolean = false
@@ -573,6 +579,9 @@ class ZoneClient extends PacketHandler:
 
       case ZoneOpcodes.MultiLineMsg =>
         ZoneCodec.decodeMultiLineMsg(pkt.payload).foreach(t => emit(ZoneEvent.MultiLineMsgReceived(t)))
+
+      case ZoneOpcodes.WhoAllResponse =>
+        ZoneCodec.decodeWhoAllResponse(pkt.payload).foreach(w => emit(ZoneEvent.WhoAllReceived(w)))
 
       case ZoneOpcodes.YellForHelp =>
         // Server broadcasts uint32 spawn ID of the player yelling

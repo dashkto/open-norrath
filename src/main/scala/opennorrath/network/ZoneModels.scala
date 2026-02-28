@@ -742,6 +742,37 @@ case class ZonePointData(
 // Zone Change — used for teleportation
 // =============================================================================
 
+// =============================================================================
+// WhoAll — decoded from OP_WhoAllResponse
+// =============================================================================
+
+/** A single player entry from the WhoAll response.
+  * The server sends variable-length records with null-terminated strings
+  * packed inline (not at fixed offsets). See WhoAllPlayer in eq_packet_structs.h.
+  */
+case class WhoAllPlayerEntry(
+  name: String,
+  guild: String,          // Empty if no guild or hidden (anon)
+  level: Int,
+  classId: Int,
+  race: Int,
+  zone: Int,              // Zone ID (0 if hidden)
+  account: String,        // Empty for non-GMs
+  formatString: Int,      // Controls display format (anon, roleplay, GM, etc.)
+  rankString: Int,        // GM rank string ID (0xFFFF = none)
+  zoneString: Int,        // Zone string ID (0xFFFF = hidden)
+)
+
+/** Full WhoAll response from the server. */
+case class WhoAllResponse(
+  playerCount: Int,
+  players: Vector[WhoAllPlayerEntry],
+)
+
+// =============================================================================
+// Zone Change — used for teleportation
+// =============================================================================
+
 /** Zone change request from OP_RequestClientZoneChange. */
 case class ZoneChangeRequest(
   zoneId: Int,

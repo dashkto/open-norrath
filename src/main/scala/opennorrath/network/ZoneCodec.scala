@@ -1492,6 +1492,98 @@ object ZoneCodec:
     Some((members.result(), leader))
 
   // ===========================================================================
+  // WhoAll — OP_WhoAllRequest / OP_WhoAllResponse
+  // ===========================================================================
+
+  /** OP_WhoAllRequest: Who_All_Struct (140 bytes).
+    * Sends search filters to the server. 0xFFFF means "no filter" for each field.
+    */
+  def encodeWhoAllRequest(whom: String = "", wrace: Int = -1, wclass: Int = -1,
+                          lvllow: Int = -1, lvlhigh: Int = -1,
+                          gmlookup: Int = -1, guildid: Int = -1): Array[Byte] =
+    val buf = ByteBuffer.allocate(140).order(ByteOrder.LITTLE_ENDIAN)
+    putFixedString(buf, whom, 64)
+    buf.putShort((wrace & 0xFFFF).toShort)
+    buf.putShort((wclass & 0xFFFF).toShort)
+    buf.putShort((lvllow & 0xFFFF).toShort)
+    buf.putShort((lvlhigh & 0xFFFF).toShort)
+    buf.putShort((gmlookup & 0xFFFF).toShort)
+    buf.putShort((guildid & 0xFFFF).toShort)
+    // remaining 64 bytes are zeroed by allocate()
+    buf.array()
+
+  /** OP_WhoAllResponse: WhoAllReturnStruct (variable length).
+    *
+    * Wire layout — header (58 bytes):
+    *   uint32  id                    (requesting client's spawn ID)
+    *   uint16  playerineqstring      (string table ID for header)
+    *   char    line[27]              (separator line "----...")
+    *   uint8   unknown35             (0x0A)
+    *   uint16  unknown36             (0)
+    *   uint16  playersinzonestring   (string table ID)
+    *   uint16  unknown44[5]          (0s)
+    *   uint32  unknown52             (total player count)
+    *   uint32  unknown56             (1)
+    *   uint16  playercount           (number of player records following)
+    *
+    * Per-player record (variable length):
+    *   uint16  formatstring
+    *   uint16  pidstring
+    *   char[]  name                  (null-terminated, variable length)
+    *   uint16  rankstring
+    *   char[]  guild                 (null-terminated, variable length)
+    *   uint16  unknown_gm            (GM admin level, 0xFFFF = not GM)
+    *   uint16  unknown80             (0xFFFF)
+    *   uint16  flag                  (LFG flag, 0xFFFF = none)
+    *   uint16  zonestring
+    *   uint32  zone                  (zone ID)
+    *   uint16  class_
+    *   uint16  level
+    *   uint16  race
+    *   char[]  account               (null-terminated, variable length)
+    *   uint16  ending                (211)
+    */
+  def decodeWhoAllResponse(data: Array[Byte]): Option[WhoAllResponse] =
+    // Header is 58 bytes minimum
+    if data.length < 58 then return None
+    val buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
+    buf.getInt()   // id (requester spawn ID)
+    buf.getShort() // playerineqstring
+    buf.position(buf.position() + 27) // line[27]
+    buf.get()      // unknown35
+    buf.getShort() // unknown36
+    buf.getShort() // playersinzonestring
+    for _ <- 0 until 5 do buf.getShort() // unknown44[5]
+    buf.getInt()   // unknown52
+    buf.getInt()   // unknown56
+    val playerCount = buf.getShort() & 0xFFFF
+
+    val players = Vector.newBuilder[WhoAllPlayerEntry]
+    for _ <- 0 until playerCount do
+      if buf.remaining() < 4 then return Some(WhoAllResponse(playerCount, players.result()))
+      val formatString = buf.getShort() & 0xFFFF
+      val pidString = buf.getShort() & 0xFFFF
+      val name = readNullStrFromBuffer(buf)
+      val rankString = buf.getShort() & 0xFFFF
+      val guild = readNullStrFromBuffer(buf)
+      buf.getShort() // unknown_gm
+      buf.getShort() // unknown80
+      buf.getShort() // flag
+      val zoneString = buf.getShort() & 0xFFFF
+      val zone = buf.getInt()
+      val classId = buf.getShort() & 0xFFFF
+      val level = buf.getShort() & 0xFFFF
+      val race = buf.getShort() & 0xFFFF
+      val account = readNullStrFromBuffer(buf)
+      buf.getShort() // ending (211)
+      players += WhoAllPlayerEntry(
+        name = name, guild = guild, level = level, classId = classId,
+        race = race, zone = zone, account = account,
+        formatString = formatString, rankString = rankString, zoneString = zoneString,
+      )
+    Some(WhoAllResponse(playerCount, players.result()))
+
+  // ===========================================================================
   // Helpers
   // ===========================================================================
 
@@ -1507,6 +1599,15 @@ object ZoneCodec:
     while i < data.length && data(i) != 0 do
       sb += data(i).toChar
       i += 1
+    sb.result()
+
+  /** Read a null-terminated string from the current ByteBuffer position, advancing past the null. */
+  private def readNullStrFromBuffer(buf: ByteBuffer): String =
+    val sb = StringBuilder()
+    while buf.hasRemaining do
+      val b = buf.get()
+      if b == 0 then return sb.result()
+      sb += b.toChar
     sb.result()
 
   private def putFixedString(buf: ByteBuffer, s: String, len: Int): Unit =

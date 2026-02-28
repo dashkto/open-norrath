@@ -39,7 +39,7 @@ object ClientCommands:
     Command("loc",      Nil,       "/loc",        "Show your current location",    handleLoc),
     Command("tp",       Nil,       "/tp x y z",   "Teleport to coordinates",       handleTp),
     Command("camp",     Nil,       "/camp",       "Log out (30 second timer)",     handleCamp),
-    Command("who",      Nil,       "/who",        "List players in zone",          handleWho),
+    Command("who",      Nil,       "/who [name]",  "List players (server query)",   handleWho),
     Command("attack",   List("a"), "/attack",     "Toggle auto-attack",            handleAttack),
     Command("speedup",  Nil,       "/speedup",    "Increase run speed",            handleSpeedUp),
     Command("slowdown", Nil,       "/slowdown",   "Reset run speed to default",    handleSlowDown),
@@ -97,16 +97,13 @@ object ClientCommands:
   // --- /who ----------------------------------------------------------------
 
   private def handleWho(ctx: Context, args: Array[String]): Unit =
-    val myId = Game.zoneSession.map(_.client.mySpawnId).getOrElse(-1)
-    val players = ctx.characters.values.filter(zc => zc.npcType == 0 && zc.spawnId != myId).toVector.sortBy(_.level)
-    if players.isEmpty then
-      ctx.print("No other players in zone.", Colors.textDim)
-    else
-      ctx.print(s"Players in zone:", Colors.gold)
-      for pc <- players do
-        val cls = EqData.className(pc.classId)
-        ctx.print(s"  [${pc.level} $cls] ${pc.displayName}")
-      ctx.print(s"${players.size} player(s) found.", Colors.gold)
+    // Send server-side /who request — results come back via OP_WhoAllResponse
+    val whom = args.mkString(" ")
+    Game.zoneSession match
+      case Some(session) =>
+        session.client.sendWhoAll(whom)
+      case None =>
+        ctx.print("Not connected to zone server.", Colors.danger)
 
   // --- /attack (alias: /a) -------------------------------------------------
 
