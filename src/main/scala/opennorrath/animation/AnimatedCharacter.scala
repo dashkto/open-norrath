@@ -146,7 +146,10 @@ class AnimatedCharacter(
       world.getTranslation(Vector3f())
     }
 
-  def play(code: String, playReverse: Boolean = false): Unit =
+  /** Whether the current animation should stop at the last frame instead of looping. */
+  private var freezeOnLastFrame: Boolean = false
+
+  def play(code: String, playReverse: Boolean = false, freezeOnLastFrame: Boolean = false): Unit =
     clips.get(code).foreach { clip =>
       // Snapshot current raw bone transforms for cross-fade blending.
       // Always snapshot when we have cached transforms, even if a transition is
@@ -156,6 +159,7 @@ class AnimatedCharacter(
         transitionTime = 0f
       currentClip = Some(clip)
       reverse = playReverse
+      this.freezeOnLastFrame = freezeOnLastFrame
       currentFrame = if playReverse then clip.frameCount - 1 else 0
       frameTime = 0f
       needsInit = true
@@ -172,19 +176,31 @@ class AnimatedCharacter(
     currentClip match
       case None => return
       case Some(clip) =>
-        frameTime += deltaTime
-        val frameDuration = 1f / fps
-        while frameTime >= frameDuration do
-          frameTime -= frameDuration
-          currentFrame =
-            if reverse then (currentFrame - 1 + clip.frameCount) % clip.frameCount
-            else (currentFrame + 1) % clip.frameCount
-          needsInit = true // force recompute on frame boundaries (lerp endpoints change)
+        val lastFrame = clip.frameCount - 1
+        // When clamped (e.g., death animation), freeze on the last frame
+        val atEnd = freezeOnLastFrame &&
+          (if reverse then currentFrame == 0 else currentFrame == lastFrame)
+
+        if !atEnd then
+          frameTime += deltaTime
+          val frameDuration = 1f / fps
+          while frameTime >= frameDuration do
+            frameTime -= frameDuration
+            if freezeOnLastFrame then
+              // Advance but don't wrap past the end
+              val next = if reverse then currentFrame - 1 else currentFrame + 1
+              currentFrame = if reverse then math.max(next, 0) else math.min(next, lastFrame)
+            else
+              currentFrame =
+                if reverse then (currentFrame - 1 + clip.frameCount) % clip.frameCount
+                else (currentFrame + 1) % clip.frameCount
+            needsInit = true
 
         val nextFrame =
-          if reverse then (currentFrame - 1 + clip.frameCount) % clip.frameCount
+          if freezeOnLastFrame then currentFrame // hold on last frame — no interpolation past end
+          else if reverse then (currentFrame - 1 + clip.frameCount) % clip.frameCount
           else (currentFrame + 1) % clip.frameCount
-        val t = frameTime / frameDuration
+        val t = if atEnd then 0f else frameTime / (1f / fps)
 
         // Interpolate bone transforms between current and next frame in S3D space.
         // Raw transforms are in S3D world space (bone-local → model root).

@@ -106,6 +106,9 @@ class ZoneHud(ctx: GameContext, characters: scala.collection.Map[Int, ZoneCharac
     chatPanel = TextPanel("Main", onSubmit = text => {
       eventHandler.submitChat(text)
     })
+    // Item link tooltips — look up by item ID across all inventory slots
+    chatPanel.itemLookup = itemId =>
+      pc.flatMap(_.inventory.items.values.find(_.id == itemId))
     eventHandler = ZoneEventHandler(chatPanel, characters, pc)
     pc.foreach(_.onSystemMessage = msg => chatPanel.addLine(msg))
     // Give group panel access to target and player name for invite button
@@ -120,6 +123,8 @@ class ZoneHud(ctx: GameContext, characters: scala.collection.Map[Int, ZoneCharac
       // Drag spell onto gem → memorize (tell server so it persists across relogs)
       bar.onMemorizeSpell = (gemSlot, spellId) =>
         Game.zoneSession.foreach(_.client.sendMemorizeSpell(gemSlot, spellId))
+      bar.onForgetSpell = (gemSlot, spellId) =>
+        Game.zoneSession.foreach(_.client.sendForgetSpell(gemSlot, spellId))
     }
 
     // Wire spell scribing: right-click scroll → move to cursor → send OP_MemorizeSpell

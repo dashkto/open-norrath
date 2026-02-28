@@ -281,6 +281,12 @@ class ZoneClient extends PacketHandler:
       queueAppPacket(ZoneOpcodes.MemorizeSpell,
         ZoneCodec.encodeMemorizeSpell(gemSlot, spellId, 1))
 
+  /** Unmemorize (forget) a spell from a gem slot. Called from game thread. */
+  def sendForgetSpell(gemSlot: Int, spellId: Int): Unit =
+    if state == ZoneState.InZone then
+      queueAppPacket(ZoneOpcodes.MemorizeSpell,
+        ZoneCodec.encodeMemorizeSpell(gemSlot, spellId, 2))
+
   /** Cast a memorized spell from a gem slot. Called from game thread.
     * @param gemSlot  gem slot 0-7
     * @param spellId  spell ID memorized in that slot

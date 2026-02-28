@@ -27,6 +27,9 @@ class SpellBarPanel(player: PlayerCharacter) extends Panel:
     /** Callback to memorize a spell into a gem slot. Set by ZoneHud. Parameters: (gemSlot, spellId). */
     var onMemorizeSpell: (Int, Int) => Unit = (_, _) => ()
 
+    /** Callback to unmemorize a spell from a gem slot. Set by ZoneHud. Parameters: (gemSlot, spellId). */
+    var onForgetSpell: (Int, Int) => Unit = (_, _) => ()
+
     private val GemSlots = 8
 
     override protected def renderContent(): Unit =
@@ -51,6 +54,11 @@ class SpellBarPanel(player: PlayerCharacter) extends Panel:
             // Left-click to cast
             if hasMem && ImGui.isItemClicked(0) then
                 onCastSpell(i, spellId)
+
+            // Right-click to unmemorize
+            if hasMem && ImGui.isItemClicked(1) then
+                player.memSpells(i) = -1
+                onForgetSpell(i, spellId)
 
             // Drag source — allow re-dragging memorized spells to other gem slots
             if hasMem && ImGui.beginDragDropSource(ImGuiDragDropFlags.None) then

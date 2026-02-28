@@ -385,7 +385,7 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
         zc.interpolate(dt)
         zone.updateSpawnPosition(zc)
         if zc.updateAnimation(dt) then
-          zone.playSpawnAnimation(zc, zc.currentAnimCode)
+          zone.playSpawnAnimation(zc, zc.currentAnimCode, freezeOnLastFrame = zc.dead)
 
     spellEffects.update(dt, camCtrl.viewMatrix, zoneCharacters)
 
@@ -421,7 +421,7 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
             pc.zoneChar.foreach { zc =>
               zone.updateSpawnPosition(zc)
               if zc.updateAnimation(dt) then
-                zone.playSpawnAnimation(zc, zc.currentAnimCode)
+                zone.playSpawnAnimation(zc, zc.currentAnimCode, freezeOnLastFrame = zc.dead)
             }
           case None =>
             zoneCharacters.get(pid).foreach { zc =>

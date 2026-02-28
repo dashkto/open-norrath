@@ -164,9 +164,9 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings(),
         buildSpawnMatrix(zc.build, zc.position, zc.facingHeading, zc.effectiveSize, zc.animChar.modelMatrix)
 
   /** Force a specific animation clip on a spawn, ignoring movement state. */
-  def playSpawnAnimation(zc: ZoneCharacter, animCode: String, reverse: Boolean = false): Unit =
+  def playSpawnAnimation(zc: ZoneCharacter, animCode: String, reverse: Boolean = false, freezeOnLastFrame: Boolean = false): Unit =
     if zc.hasRendering && zc.animChar.clips.contains(animCode) then
-      zc.animChar.play(animCode, playReverse = reverse)
+      zc.animChar.play(animCode, playReverse = reverse, freezeOnLastFrame = freezeOnLastFrame)
 
   /** Update a spawn's equipment texture overrides.
     * Parses base texture names to determine body part, then constructs variant names
