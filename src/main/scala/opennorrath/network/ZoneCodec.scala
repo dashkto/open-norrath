@@ -148,6 +148,49 @@ object ZoneCodec:
     buf.putInt(itemType)       // type: 1=food, 2=water
     buf.array()
 
+  /** OP_LootRequest / OP_EndLootRequest: 2-byte uint16 corpse entity ID. */
+  def encodeLootRequest(corpseId: Int): Array[Byte] =
+    val buf = ByteBuffer.allocate(2).order(ByteOrder.LITTLE_ENDIAN)
+    buf.putShort(corpseId.toShort)
+    buf.array()
+
+  /** OP_LootItem: 12-byte LootingItem_Struct. */
+  def encodeLootItem(corpseId: Int, lootSlot: Int): Array[Byte] =
+    val buf = ByteBuffer.allocate(12).order(ByteOrder.LITTLE_ENDIAN)
+    buf.putShort(corpseId.toShort) // lootee (corpse entity ID)
+    buf.putShort(0.toShort)        // looter (0 from client)
+    buf.putShort(lootSlot.toShort) // slot_id
+    buf.putShort(0.toShort)        // unknown padding
+    buf.putInt(1)                  // auto_loot (1 = server finds empty inventory slot)
+    buf.array()
+
+  /** OP_ShopRequest: Merchant_Click_Struct (12 bytes).
+    * Client sends to request opening a merchant's shop window.
+    */
+  def encodeMerchantClick(npcId: Int, playerId: Int): Array[Byte] =
+    val buf = ByteBuffer.allocate(12).order(ByteOrder.LITTLE_ENDIAN)
+    buf.putShort((npcId & 0xFFFF).toShort)    // npcid
+    buf.putShort((playerId & 0xFFFF).toShort)  // playerid
+    buf.put(0.toByte)                           // command (0 = open)
+    buf.put(0.toByte); buf.put(0.toByte); buf.put(0.toByte) // unknown[3]
+    buf.putFloat(0f)                            // rate (server fills this in)
+    buf.array()
+
+  /** OP_ShopPlayerBuy: Merchant_Sell_Struct (16 bytes).
+    * Client sends to purchase an item from a merchant.
+    */
+  def encodeMerchantBuy(npcId: Int, playerId: Int, slot: Int, quantity: Int): Array[Byte] =
+    val buf = ByteBuffer.allocate(16).order(ByteOrder.LITTLE_ENDIAN)
+    buf.putShort((npcId & 0xFFFF).toShort)     // npcid
+    buf.putShort((playerId & 0xFFFF).toShort)   // playerid
+    buf.putShort((slot & 0xFFFF).toShort)       // itemslot
+    buf.put(0.toByte)                            // IsSold
+    buf.put(0.toByte)                            // unknown001
+    buf.put((quantity & 0xFF).toByte)            // quantity
+    buf.put(0.toByte); buf.put(0.toByte); buf.put(0.toByte) // unknown004[3]
+    buf.putInt(0)                                // price (server calculates)
+    buf.array()
+
   /** OP_SetServerFilter: 36 bytes of filter flags (all zeros = accept all). */
   def encodeServerFilter: Array[Byte] = new Array[Byte](36)
 
@@ -705,6 +748,15 @@ object ZoneCodec:
     val buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
     Some(ManaChange(buf.getShort() & 0xFFFF, buf.getShort() & 0xFFFF))
 
+  /** Decode OP_BeginCast: BeginCast_Struct (8 bytes). */
+  def decodeBeginCast(data: Array[Byte]): Option[BeginCast] =
+    if data.length < 8 then return None
+    val buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
+    val casterId = buf.getShort() & 0xFFFF
+    val spellId = buf.getShort() & 0xFFFF
+    val castTime = buf.getShort() & 0xFFFF
+    Some(BeginCast(casterId, spellId, castTime))
+
   /** Decode OP_Damage: Damage_Struct (24 bytes). */
   def decodeDamage(data: Array[Byte]): Option[DamageInfo] =
     if data.length < 24 then return None
@@ -968,6 +1020,61 @@ object ZoneCodec:
     val slotId = buf.getShort() & 0xFFFF
     Some((slotId, SpellBuff(buffType, bLevel, bardMod, spellId, duration, counters)))
 
+  /** Decode OP_MoneyOnCorpse: moneyOnCorpseStruct (20 bytes).
+    * response: 0=someone else looting, 1=success, 2=not allowed.
+    */
+  def decodeMoneyOnCorpse(data: Array[Byte]): Option[LootResponse] =
+    if data.length < 20 then return None
+    val buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
+    val response = buf.get() & 0xFF
+    buf.get(); buf.get(); buf.get() // unknown1, unknown2, unknown3
+    val platinum = buf.getInt()
+    val gold = buf.getInt()
+    val silver = buf.getInt()
+    val copper = buf.getInt()
+    Some(LootResponse(response, platinum, gold, silver, copper))
+
+  /** Decode OP_ShopRequest response: Merchant_Click_Struct (12 bytes).
+    * Server sends back with command=1 and rate filled in when merchant is ready.
+    */
+  def decodeMerchantClick(data: Array[Byte]): Option[MerchantOpen] =
+    if data.length < 12 then return None
+    val buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
+    val npcId = buf.getShort() & 0xFFFF
+    val playerId = buf.getShort() & 0xFFFF
+    val command = buf.get() & 0xFF
+    buf.get(); buf.get(); buf.get() // unknown[3]
+    val rate = buf.getFloat()
+    // command=1 means merchant is open and ready
+    if command == 1 then Some(MerchantOpen(npcId, rate))
+    else None
+
+  /** Decode OP_ShopInventoryPacket.
+    * Mac wire format (mac.cpp ENCODE(OP_ShopInventoryPacket)):
+    *   byte[0] = item count (uint8)
+    *   byte[1] = padding
+    *   byte[2..] = zlib compressed MerchantItemsPacket_Struct entries
+    * Each MerchantItemsPacket_Struct = uint16 itemtype + Item_Struct (362 bytes).
+    */
+  def decodeShopInventory(data: Array[Byte]): Vector[InventoryItem] =
+    if data.length < 3 then return Vector.empty
+    val itemCount = data(0) & 0xFF
+    val compressed = data.drop(2)
+    PacketCrypto.inflatePacket(compressed, maxSize = 262144) match
+      case Some(raw) =>
+        val entrySize = 2 + 360 // uint16 itemtype + Item_Struct
+        val items = Vector.newBuilder[InventoryItem]
+        for i <- 0 until itemCount do
+          val offset = i * entrySize
+          if offset + entrySize <= raw.length then
+            // Skip the 2-byte itemtype prefix, decode the Item_Struct
+            val item = decodeItem(raw, offset + 2)
+            if item.name.nonEmpty then items += item
+        items.result()
+      case None =>
+        println(s"[Zone] Failed to inflate OP_ShopInventoryPacket (${compressed.length} compressed bytes)")
+        Vector.empty
+
   /** Decode OP_SpawnDoor: DoorSpawns_Struct — count(u16) + Door_Struct[count] (44 bytes each). */
   def decodeDoors(data: Array[Byte]): Vector[DoorData] =
     if data.length < 2 then return Vector.empty
@@ -1149,6 +1256,9 @@ object ZoneCodec:
     buf.getShort()                        // 0186: unknown
     val slots = buf.getInt()              // 0188: bitmask of valid equipment slots
 
+    buf.position(base + 192)
+    val price = buf.getInt()              // 0192: price in copper
+
     // Common union stats (itemClass == 0)
     buf.position(base + 228)
     val aStr = buf.get()                  // 0228
@@ -1224,6 +1334,7 @@ object ZoneCodec:
       charges = charges,
       stackable = common && stackable == 1,
       itemType = if common then itemType else ItemType.Misc,
+      price = price,
       idFileNum = idFileNum,
       bagSlots = bagSlots,
       bagSize = bagSize,

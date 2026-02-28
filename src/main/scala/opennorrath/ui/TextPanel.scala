@@ -29,7 +29,8 @@ class TextPanel(
   val defaultWidth = 450f
   val defaultHeight = 200f
   override def fontScale: Float = Spacing.fontScaleSmall
-  override def extraFlags: Int = ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse
+  override def extraFlags: Int = ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoScrollWithMouse |
+    ImGuiWindowFlags.NoNavInputs  // prevent Tab from focusing the input field
 
   private val maxLines = 200
   private val lines = ArrayBuffer.empty[TextLine]

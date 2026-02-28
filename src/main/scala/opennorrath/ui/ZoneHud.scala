@@ -4,7 +4,7 @@ import imgui.{ImGui, ImVec2}
 import imgui.flag.{ImGuiCond, ImGuiWindowFlags}
 
 import opennorrath.{Game, GameAction, InputManager}
-import opennorrath.network.ZoneEvent
+import opennorrath.network.{SpawnData, ZoneEvent}
 import opennorrath.screen.GameContext
 import opennorrath.state.{GameClock, PlayerCharacter, ZoneCharacter}
 
@@ -20,6 +20,8 @@ class ZoneHud(ctx: GameContext, characters: scala.collection.Map[Int, ZoneCharac
   private var statsPanel: StatsPanel = StatsPanel()
   val targetPanel = TargetPanel()
   private val groupPanel = GroupPanel(characters)
+  private val lootPanel = LootPanel()
+  private val merchantPanel = MerchantPanel()
   private var chatPanel: TextPanel = null
   private var eventHandler: ZoneEventHandler = null
 
@@ -49,6 +51,36 @@ class ZoneHud(ctx: GameContext, characters: scala.collection.Map[Int, ZoneCharac
       groupPanel.leader = leader
     case _ => ()
 
+  val lootListener: ZoneEvent => Unit =
+    case ZoneEvent.LootOpened(corpseId, resp) =>
+      if resp.response == 1 then
+        lootPanel.open(corpseId, resp)
+        // Server auto-loots money — update local totals
+        player.foreach { pc =>
+          pc.platinum += resp.platinum
+          pc.gold += resp.gold
+          pc.silver += resp.silver
+          pc.copper += resp.copper
+        }
+      // response 0 = someone else looting, 2 = not allowed (server sends error text)
+    case ZoneEvent.LootItemReceived(item) =>
+      lootPanel.addItem(item)
+    case ZoneEvent.LootClosed =>
+      lootPanel.close()
+    case _ => ()
+
+  val merchantListener: ZoneEvent => Unit =
+    case ZoneEvent.MerchantOpened(open, items) =>
+      // Look up merchant name from zone characters (displayName is cleaned: no trailing digits, _ → space)
+      val name = characters.get(open.merchantId)
+        .map(_.displayName).getOrElse("Merchant")
+      merchantPanel.open(open, items, name)
+    case ZoneEvent.MerchantItemAdded(item) =>
+      merchantPanel.addItem(item)
+    case ZoneEvent.MerchantClosed =>
+      merchantPanel.close()
+    case _ => ()
+
   def init(pc: Option[PlayerCharacter]): Unit =
     player = pc
     charInfoPanel = pc.map(CharacterInfoPanel(_))
@@ -66,6 +98,8 @@ class ZoneHud(ctx: GameContext, characters: scala.collection.Map[Int, ZoneCharac
       session.client.addListener(eventHandler.listener)
       session.client.addListener(spawnRemovedListener)
       session.client.addListener(groupListener)
+      session.client.addListener(lootListener)
+      session.client.addListener(merchantListener)
       // Seed group from player profile (loaded before zone entry)
       session.client.profile.foreach { p =>
         if p.groupMembers.nonEmpty then
@@ -129,6 +163,16 @@ class ZoneHud(ctx: GameContext, characters: scala.collection.Map[Int, ZoneCharac
         Game.zoneSession.foreach(_.client.autoAttack(false))
     }
 
+  /** Request to loot a corpse. Called from ZoneScreen on right-click. */
+  def requestLoot(corpseId: Int): Unit =
+    if !lootPanel.visible then
+      Game.zoneSession.foreach(_.client.requestLoot(corpseId))
+
+  /** Request to open a merchant's shop. Called from ZoneScreen on right-click. */
+  def openMerchant(npcId: Int): Unit =
+    if !merchantPanel.visible then
+      Game.zoneSession.foreach(_.client.openMerchant(npcId))
+
   /** Call each frame with the current delta time to keep the FPS counter updated. */
   def render(dt: Float = 0f): Unit =
     charInfoPanel.foreach(_.render())
@@ -138,6 +182,8 @@ class ZoneHud(ctx: GameContext, characters: scala.collection.Map[Int, ZoneCharac
     inventoryPanel.render()
     statsPanel.render()
     spellBookPanel.foreach(_.render())
+    lootPanel.render()
+    merchantPanel.render()
     chatPanel.render()
     escapeMenu.render()
     renderFpsCounter(dt)
@@ -175,4 +221,6 @@ class ZoneHud(ctx: GameContext, characters: scala.collection.Map[Int, ZoneCharac
       session.client.removeListener(eventHandler.listener)
       session.client.removeListener(spawnRemovedListener)
       session.client.removeListener(groupListener)
+      session.client.removeListener(lootListener)
+      session.client.removeListener(merchantListener)
     }

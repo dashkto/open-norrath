@@ -80,8 +80,8 @@ class ZoneEventHandler(chatPanel: TextPanel, characters: scala.collection.Map[In
     case ZoneEvent.ExpChanged(_) =>
       () // Server sends its own "You gain experience" text via OP_SpecialMesg
 
-    case ZoneEvent.LevelChanged(lvl) =>
-      chatPanel.addLine(s"You have reached level ${lvl.level}!", Colors.gold)
+    case ZoneEvent.LevelChanged(_) =>
+      () // Server sends the formatted level-up message via OP_SpecialMesg
 
     case ZoneEvent.SkillChanged(sk) =>
       val name = EqData.skillName(sk.skillId)

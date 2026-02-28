@@ -102,6 +102,25 @@ class SpellEffectSystem:
     val preset = presetForEffect(effName)
     activeEffects += ActiveEffect(spawnId, preset, age = 0f, spawnAccum = 0f)
 
+  /** Start a casting particle effect on the caster for the given duration.
+    * Uses a gentler version of the spell's preset — fewer particles, slower,
+    * to visually distinguish "casting" from "spell landed".
+    */
+  def triggerCast(casterId: Int, spellId: Int, castTimeMs: Int): Unit =
+    if castTimeMs <= 0 then return
+    val animIdx = SpellData.spellAnim(spellId)
+    val effName = SpellData.effectName(animIdx)
+    val base = presetForEffect(effName)
+    // Gentler casting version: fewer particles, longer lifetime, smaller
+    val castPreset = base.copy(
+      particleCount = (base.particleCount * 0.4f).toInt.max(5),
+      spawnRate = base.spawnRate * 0.4f,
+      size = base.size * 0.6f,
+      velocityY = base.velocityY * 0.5f,
+      effectDuration = castTimeMs / 1000f,
+    )
+    activeEffects += ActiveEffect(casterId, castPreset, age = 0f, spawnAccum = 0f)
+
   def update(dt: Float, viewMatrix: Matrix4f, characters: scala.collection.Map[Int, ZoneCharacter]): Unit =
     // Age and kill particles
     for p <- particles if p.alive do

@@ -16,7 +16,7 @@ import opennorrath.render.Shader
 import opennorrath.state.{GameClock, PlayerCharacter, ZoneCharacter}
 import opennorrath.world.{CameraController, EqCoords, SpellEffectSystem, TargetingSystem, ZoneRenderer}
 import opennorrath.network.{InventoryItem, NetCommand, NetworkThread, PlayerPosition, PlayerProfileData, SpawnAppearanceChange, SpawnData, WorldClient, WorldEvent, ZoneEvent, ZonePointData, ZoneState}
-import opennorrath.ui.{NameplateRenderer, ZoneHud}
+import opennorrath.ui.{EqClass, NameplateRenderer, ZoneHud}
 
 class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData] = None, profile: Option[PlayerProfileData] = None) extends Screen:
 
@@ -48,6 +48,15 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
   private var campTimer = 0f                    // countdown until OP_Logout is sent
   private var zonePoints = Vector.empty[ZonePointData]
   private val ZoneLineRadius = 30f       // trigger radius in EQ units (~30 feet)
+
+  // Right-click interaction — distinguish click vs free-look drag.
+  // Store mouse position at press time because cursor is hidden during free-look,
+  // making mousePos unreliable on the release frame.
+  private var rightMouseWasDown = false
+  private var rightDragAccum = 0f
+  private var rightClickX = 0f
+  private var rightClickY = 0f
+  private val RightClickThreshold = 5f   // total pixel movement to count as drag
 
   // --- Spawn rendering ---
 
@@ -169,6 +178,8 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
   private val spellListener: ZoneEvent => Unit =
     case ZoneEvent.SpellActionTriggered(action) if action.spellId > 0 =>
       spellEffects.trigger(action.targetId, action.spellId)
+    case ZoneEvent.BeginCastTriggered(cast) =>
+      spellEffects.triggerCast(cast.casterId, cast.spellId, cast.castTime)
     case _ => ()
 
   /** Map OP_Animation action byte to (AnimCode, duration).
@@ -474,6 +485,32 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
         camCtrl.projection, camCtrl.viewMatrix, zone.spawnHitData).foreach { id =>
         hud.setTarget(zoneCharacters.get(id))
       }
+
+    // Right-click interaction — detect click (not drag) on right mouse release.
+    // FreeLook uses the same button; track accumulated mouse movement to distinguish.
+    // Store mousePos at press time because cursor is hidden during free-look.
+    val rightHeld = ctx.input.isActionHeld(GameAction.FreeLook)
+    if ctx.input.isActionPressed(GameAction.FreeLook) then
+      rightDragAccum = 0f
+      val (px, py) = ctx.input.mousePos
+      rightClickX = px
+      rightClickY = py
+    if rightHeld then
+      val (dx, dy) = ctx.input.mouseDelta
+      rightDragAccum += Math.abs(dx) + Math.abs(dy)
+    if rightMouseWasDown && !rightHeld && rightDragAccum < RightClickThreshold then
+      if !ImGui.getIO().getWantCaptureMouse() then
+        targeting.pickSpawn(rightClickX, rightClickY, ctx.windowWidth.toFloat, ctx.windowHeight.toFloat,
+          camCtrl.projection, camCtrl.viewMatrix, zone.spawnHitData).foreach { id =>
+          zoneCharacters.get(id).foreach { zc =>
+            println(s"[Zone] Right-click on ${zc.name} (id=$id npcType=${zc.npcType} classId=${zc.classId})")
+            if zc.dead then // corpse — npcType stays as original, dead flag is set by EntityDied
+              hud.requestLoot(id)
+            else if zc.classId == EqClass.Merchant.code || zc.classId == EqClass.DiscordMerchant.code then
+              hud.openMerchant(id)
+          }
+        }
+    rightMouseWasDown = rightHeld
 
     // Tab target — raycast against zone collision mesh for LOS
     if ctx.input.isActionPressed(GameAction.TabTarget) && !ImGui.getIO().getWantTextInput() then

@@ -213,7 +213,7 @@ class ZoneCharacter(
       position.y += velocity.y * dt
       position.z += velocity.z * dt
     else
-      val t = Math.min(10f * dt, 1f)
+      val t = Math.min(20f * dt, 1f)
       position.x += (serverPos.x - position.x) * t
       position.y += (serverPos.y - position.y) * t
       position.z += (serverPos.z - position.z) * t

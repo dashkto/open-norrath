@@ -1,25 +1,61 @@
 package opennorrath.ui
 
+/** EQ class IDs as received on the Mac wire protocol.
+  * IMPORTANT: The Mac patch (mac.cpp) remaps class IDs before sending to the client:
+  *   - Player classes 1-15: unchanged
+  *   - GM variants: server 20-34 → wire 17-31 (class - 3)
+  *   - Banker: server 40 → wire 16
+  *   - Merchant: server 41 → wire 32
+  * These codes reflect what we actually receive, NOT the server-internal values.
+  */
+enum EqClass(val code: Int, val displayName: String, val abbrev: String):
+  case Warrior      extends EqClass(1,  "Warrior",      "WAR")
+  case Cleric       extends EqClass(2,  "Cleric",       "CLR")
+  case Paladin      extends EqClass(3,  "Paladin",      "PAL")
+  case Ranger       extends EqClass(4,  "Ranger",       "RNG")
+  case ShadowKnight extends EqClass(5,  "Shadow Knight", "SHD")
+  case Druid        extends EqClass(6,  "Druid",        "DRU")
+  case Monk         extends EqClass(7,  "Monk",         "MNK")
+  case Bard         extends EqClass(8,  "Bard",         "BRD")
+  case Rogue        extends EqClass(9,  "Rogue",        "ROG")
+  case Shaman       extends EqClass(10, "Shaman",       "SHM")
+  case Necromancer  extends EqClass(11, "Necromancer",   "NEC")
+  case Wizard       extends EqClass(12, "Wizard",       "WIZ")
+  case Magician     extends EqClass(13, "Magician",     "MAG")
+  case Enchanter    extends EqClass(14, "Enchanter",    "ENC")
+  case Beastlord    extends EqClass(15, "Beastlord",    "BST")
+  // Special NPC classes (remapped by Mac patch)
+  case Banker       extends EqClass(16, "Banker",          "BNK")  // server 40 → wire 16
+  // GM variants (server 20-34 → wire 17-31, offset by -3)
+  case WarriorGM      extends EqClass(17, "Warrior",      "WAR")
+  case ClericGM       extends EqClass(18, "Cleric",       "CLR")
+  case PaladinGM      extends EqClass(19, "Paladin",      "PAL")
+  case RangerGM       extends EqClass(20, "Ranger",       "RNG")
+  case ShadowKnightGM extends EqClass(21, "Shadow Knight", "SHD")
+  case DruidGM        extends EqClass(22, "Druid",        "DRU")
+  case MonkGM         extends EqClass(23, "Monk",         "MNK")
+  case BardGM         extends EqClass(24, "Bard",         "BRD")
+  case RogueGM        extends EqClass(25, "Rogue",        "ROG")
+  case ShamanGM       extends EqClass(26, "Shaman",       "SHM")
+  case NecromancerGM  extends EqClass(27, "Necromancer",   "NEC")
+  case WizardGM       extends EqClass(28, "Wizard",       "WIZ")
+  case MagicianGM     extends EqClass(29, "Magician",     "MAG")
+  case EnchanterGM    extends EqClass(30, "Enchanter",    "ENC")
+  case BeastlordGM    extends EqClass(31, "Beastlord",    "BST")
+  // Merchant (server 41 → wire 32)
+  case Merchant        extends EqClass(32, "Merchant",        "MRC")
+  case DiscordMerchant extends EqClass(59, "Discord Merchant", "DMC")  // TODO: verify wire value
+  case Corpse          extends EqClass(62, "Corpse",          "CRP")   // TODO: verify wire value
+
+object EqClass:
+  private val byCode: Map[Int, EqClass] = values.map(v => v.code -> v).toMap
+  def fromCode(code: Int): Option[EqClass] = byCode.get(code)
+
 /** Shared EverQuest class/race name lookups used across multiple screens. */
 object EqData:
 
-  def className(id: Int): String = id match
-    case 1  => "Warrior"
-    case 2  => "Cleric"
-    case 3  => "Paladin"
-    case 4  => "Ranger"
-    case 5  => "Shadow Knight"
-    case 6  => "Druid"
-    case 7  => "Monk"
-    case 8  => "Bard"
-    case 9  => "Rogue"
-    case 10 => "Shaman"
-    case 11 => "Necromancer"
-    case 12 => "Wizard"
-    case 13 => "Magician"
-    case 14 => "Enchanter"
-    case 15 => "Beastlord"
-    case _  => s"Class($id)"
+  def className(id: Int): String =
+    EqClass.fromCode(id).map(_.displayName).getOrElse(s"Class($id)")
 
   def raceName(id: Int): String = id match
     case 1   => "Human"
@@ -39,28 +75,16 @@ object EqData:
     case _   => s"Race($id)"
 
   /** Short class abbreviation for compact displays. */
-  def classAbbrev(id: Int): String = id match
-    case 1  => "WAR"
-    case 2  => "CLR"
-    case 3  => "PAL"
-    case 4  => "RNG"
-    case 5  => "SHD"
-    case 6  => "DRU"
-    case 7  => "MNK"
-    case 8  => "BRD"
-    case 9  => "ROG"
-    case 10 => "SHM"
-    case 11 => "NEC"
-    case 12 => "WIZ"
-    case 13 => "MAG"
-    case 14 => "ENC"
-    case 15 => "BST"
-    case _  => "???"
+  def classAbbrev(id: Int): String =
+    EqClass.fromCode(id).map(_.abbrev).getOrElse("???")
 
-  /** Whether this class uses mana. */
-  def usesMana(classId: Int): Boolean = classId match
-    case 1 | 7 | 8 | 9 => false // WAR, MNK, BRD, ROG
-    case _              => true
+  /** Whether this class uses mana. Non-caster player classes and special NPC classes don't. */
+  def usesMana(classId: Int): Boolean = EqClass.fromCode(classId) match
+    case Some(EqClass.Warrior | EqClass.Monk | EqClass.Bard | EqClass.Rogue |
+              EqClass.WarriorGM | EqClass.MonkGM | EqClass.BardGM | EqClass.RogueGM |
+              EqClass.Banker | EqClass.Merchant | EqClass.DiscordMerchant | EqClass.Corpse) => false
+    case Some(_) => true
+    case None    => false
 
   /** Map race ID + gender to 3-char S3D model code (lowercase).
     * Gender: 0=male, 1=female, 2=neutral (uses male code).

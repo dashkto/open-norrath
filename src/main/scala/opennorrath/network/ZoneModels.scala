@@ -394,6 +394,15 @@ case class StaminaInfo(
   fatigue: Int,   // Fatigue level (0–100)
 )
 
+/** Begin-cast notification from OP_BeginCast (8 bytes).
+  * Sent when any entity starts casting a spell — used for cast bar / animation.
+  */
+case class BeginCast(
+  casterId: Int,   // Spawn ID of caster
+  spellId: Int,    // Spell being cast
+  castTime: Int,   // Cast time in milliseconds
+)
+
 // =============================================================================
 // Chat — used by UI for chat window
 // =============================================================================
@@ -526,6 +535,12 @@ case class FormattedMessage(stringId: Int, msgType: Int, arguments: Vector[Strin
 
 /** Emote text from OP_Emote. Broadcast contains sender name prepended to message. */
 case class EmoteMessage(message: String)
+
+/** Loot response from OP_MoneyOnCorpse (20 bytes).
+  * response: 0=someone else looting, 1=success, 2=not allowed.
+  * Money fields are only meaningful when response == 1.
+  */
+case class LootResponse(response: Int, platinum: Int, gold: Int, silver: Int, copper: Int)
 
 // =============================================================================
 // Spawn Appearance — used by rendering for state changes
@@ -741,6 +756,16 @@ case class ZoneChangeResult(
 )
 
 // =============================================================================
+// Merchant — decoded from OP_ShopRequest / OP_ShopInventoryPacket
+// =============================================================================
+
+/** Server response to OP_ShopRequest (Merchant_Click_Struct, 12 bytes). */
+case class MerchantOpen(
+  merchantId: Int,        // NPC spawn ID
+  rate: Float,            // Price modifier from server (faction/charisma adjusted)
+)
+
+// =============================================================================
 // Inventory Items — decoded from OP_CharInventory
 // =============================================================================
 
@@ -827,6 +852,7 @@ case class InventoryItem(
   charges: Int,
   stackable: Boolean,
   itemType: ItemType = ItemType.OneHandSlash,  // EQ item type (from ItemType field at offset 253)
+  price: Int = 0,          // Item price in copper (offset 192 in Item_Struct)
   idFileNum: Int = 0,      // IT number from IDFile (e.g., "IT27" → 27) — used for weapon model lookup
   // Container fields (itemClass == 1 only; 0 for all other items)
   bagSlots: Int = 0,       // number of slots this bag has (4, 6, 8, or 10)

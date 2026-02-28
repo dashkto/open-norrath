@@ -41,6 +41,7 @@ enum ZoneEvent:
   case EquipmentChanged(change: WearChangeInfo)
   case AnimationTriggered(anim: AnimationInfo)
   case SpellActionTriggered(action: SpellAction)
+  case BeginCastTriggered(cast: BeginCast)
 
   // Combat — UI displays these
   case DamageDealt(info: DamageInfo)
@@ -82,6 +83,16 @@ enum ZoneEvent:
 
   // Group
   case GroupUpdated(members: Vector[String], leader: String)
+
+  // Loot — corpse looting flow
+  case LootOpened(corpseId: Int, response: LootResponse)
+  case LootItemReceived(item: InventoryItem)
+  case LootClosed
+
+  // Merchant — buy from NPC merchants
+  case MerchantOpened(open: MerchantOpen, items: Vector[InventoryItem])
+  case MerchantClosed
+  case MerchantItemAdded(item: InventoryItem)
 
   // Zone transitions
   case ZoneChangeRequested(req: ZoneChangeRequest)
@@ -257,6 +268,48 @@ class ZoneClient extends PacketHandler:
   def sendConsume(slot: Int, itemType: Int): Unit =
     queueAppPacket(ZoneOpcodes.Consume, ZoneCodec.encodeConsume(slot, itemType))
 
+  // Merchant state — tracks whether we're waiting for shop inventory
+  private var pendingMerchant: Option[MerchantOpen] = None
+  private var merchantItems: Vector[InventoryItem] = Vector.empty
+  var activeMerchantId: Int = 0
+
+  /** Open a merchant's shop. Called from game thread. */
+  def openMerchant(npcId: Int): Unit =
+    println(s"[Zone] Sending OP_ShopRequest for npcId=$npcId playerId=$mySpawnId")
+    queueAppPacket(ZoneOpcodes.ShopRequest,
+      ZoneCodec.encodeMerchantClick(npcId, mySpawnId))
+
+  /** Buy an item from the open merchant. Called from game thread. */
+  def buyFromMerchant(slot: Int, quantity: Int): Unit =
+    if activeMerchantId != 0 then
+      queueAppPacket(ZoneOpcodes.ShopPlayerBuy,
+        ZoneCodec.encodeMerchantBuy(activeMerchantId, mySpawnId, slot, quantity))
+
+  /** Close the merchant window. Called from game thread. */
+  def closeMerchant(): Unit =
+    if activeMerchantId != 0 then
+      queueAppPacket(ZoneOpcodes.ShopEnd, Array.emptyByteArray)
+      activeMerchantId = 0
+      pendingMerchant = None
+      merchantItems = Vector.empty
+
+  /** Tracks which corpse we're currently requesting loot from. */
+  var lootingCorpseId: Int = 0
+
+  /** Request to open a corpse for looting. Called from game thread. */
+  def requestLoot(corpseId: Int): Unit =
+    lootingCorpseId = corpseId
+    queueAppPacket(ZoneOpcodes.LootRequest, ZoneCodec.encodeLootRequest(corpseId))
+
+  /** Loot a specific item from the open corpse. Called from game thread. */
+  def lootItem(corpseId: Int, lootSlot: Int): Unit =
+    queueAppPacket(ZoneOpcodes.LootItem, ZoneCodec.encodeLootItem(corpseId, lootSlot))
+
+  /** Close the loot window. Called from game thread. */
+  def endLoot(corpseId: Int): Unit =
+    queueAppPacket(ZoneOpcodes.EndLootRequest, ZoneCodec.encodeLootRequest(corpseId))
+    lootingCorpseId = 0
+
   // ===========================================================================
   // PacketHandler implementation — called from network thread
   // ===========================================================================
@@ -403,12 +456,15 @@ class ZoneClient extends PacketHandler:
       case ZoneOpcodes.Action =>
         ZoneCodec.decodeAction(pkt.payload).foreach(a => emit(ZoneEvent.SpellActionTriggered(a)))
 
+      case ZoneOpcodes.BeginCast =>
+        ZoneCodec.decodeBeginCast(pkt.payload).foreach(c => emit(ZoneEvent.BeginCastTriggered(c)))
+
       // --- Stats ---
 
       case ZoneOpcodes.HPUpdate =>
         ZoneCodec.decodeHPUpdate(pkt.payload).foreach(hp => emit(ZoneEvent.HPChanged(hp)))
 
-      case ZoneOpcodes.ManaChange =>
+      case ZoneOpcodes.ManaChange | ZoneOpcodes.ManaUpdate =>
         ZoneCodec.decodeManaChange(pkt.payload).foreach(m => emit(ZoneEvent.ManaChanged(m)))
 
       case ZoneOpcodes.ExpUpdate =>
@@ -512,11 +568,79 @@ class ZoneClient extends PacketHandler:
           emit(ZoneEvent.InventoryMoved(from, to))
         }
 
-      case ZoneOpcodes.ItemPacket | ZoneOpcodes.MerchantItemPacket |
-           ZoneOpcodes.TradeItemPacket | ZoneOpcodes.LootItemPacket |
+      case ZoneOpcodes.ItemPacket |
+           ZoneOpcodes.TradeItemPacket |
            ZoneOpcodes.ObjectItemPacket | ZoneOpcodes.SummonedItem |
            ZoneOpcodes.ContainerPacket | ZoneOpcodes.BookPacket =>
         handleItemPacket(pkt.opcode, pkt.payload)
+
+      // --- Merchant ---
+
+      case ZoneOpcodes.ShopRequest =>
+        // Server response to our OP_ShopRequest: Merchant_Click_Struct (12 bytes)
+        // command=1 means merchant is ready; shop inventory follows in OP_ShopInventoryPacket
+        println(s"[Zone] Received OP_ShopRequest response (${pkt.payload.length} bytes)")
+        ZoneCodec.decodeMerchantClick(pkt.payload) match
+          case Some(open) =>
+            println(s"[Zone] Merchant open: npcId=${open.merchantId} rate=${open.rate}")
+            pendingMerchant = Some(open)
+            merchantItems = Vector.empty
+          case None =>
+            // Dump raw bytes for debugging
+            val hex = pkt.payload.take(16).map(b => f"${b & 0xFF}%02X").mkString(" ")
+            println(s"[Zone] OP_ShopRequest decode failed (${pkt.payload.length} bytes): $hex")
+
+      case ZoneOpcodes.ShopInventoryPacket =>
+        // Concatenated Item_Structs for merchant inventory (data.length / 360 items)
+        val items = ZoneCodec.decodeShopInventory(pkt.payload)
+        println(s"[Zone] Received OP_ShopInventoryPacket: ${items.size} items (${pkt.payload.length} bytes)")
+        pendingMerchant match
+          case Some(open) =>
+            activeMerchantId = open.merchantId
+            merchantItems = items
+            emit(ZoneEvent.MerchantOpened(open, items))
+            pendingMerchant = None
+          case None =>
+            println(s"[Zone] OP_ShopInventoryPacket without pending ShopRequest (${items.size} items)")
+
+      case ZoneOpcodes.MerchantItemPacket =>
+        // Individual merchant item update, or looted item (ItemPacketTrade → OP_MerchantItemPacket)
+        if pkt.payload.length >= 360 then
+          val item = ZoneCodec.decodeItem(pkt.payload, 0)
+          println(s"[Zone] OP_MerchantItemPacket: '${item.name}' equipSlot=${item.equipSlot} activeMerchant=$activeMerchantId")
+          if item.name.nonEmpty && activeMerchantId != 0 then
+            emit(ZoneEvent.MerchantItemAdded(item))
+          else if item.name.nonEmpty then
+            handleItemPacket(pkt.opcode, pkt.payload)
+
+      case ZoneOpcodes.ShopPlayerBuy =>
+        // Server echo of buy result — Merchant_Sell_Struct (16 bytes).
+        // IsSold (byte 6): 1 = success, 0 = failed (not enough money, etc).
+        // Actual inventory updates and error messages come via separate packets.
+        ()
+
+      case ZoneOpcodes.ShopEndConfirm =>
+        activeMerchantId = 0
+        pendingMerchant = None
+        merchantItems = Vector.empty
+        emit(ZoneEvent.MerchantClosed)
+
+      // Loot item packets go to loot panel, not inventory
+      case ZoneOpcodes.LootItemPacket =>
+        if pkt.payload.length >= 360 then
+          val item = ZoneCodec.decodeItem(pkt.payload, 0)
+          if item.name.nonEmpty then emit(ZoneEvent.LootItemReceived(item))
+
+      case ZoneOpcodes.MoneyOnCorpse =>
+        ZoneCodec.decodeMoneyOnCorpse(pkt.payload).foreach { resp =>
+          emit(ZoneEvent.LootOpened(lootingCorpseId, resp))
+        }
+
+      case ZoneOpcodes.LootComplete =>
+        emit(ZoneEvent.LootClosed)
+
+      case ZoneOpcodes.LootRequest | ZoneOpcodes.LootItem =>
+        () // Server echoes these back as ACKs — ignore
 
       case ZoneOpcodes.Stamina =>
         ZoneCodec.decodeStamina(pkt.payload).foreach(s => emit(ZoneEvent.StaminaChanged(s)))
