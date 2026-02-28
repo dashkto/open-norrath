@@ -6,7 +6,7 @@ import imgui.flag.{ImGuiCond, ImGuiWindowFlags}
 import opennorrath.{Game, GameAction, InputManager}
 import opennorrath.network.ZoneEvent
 import opennorrath.screen.GameContext
-import opennorrath.state.{PlayerCharacter, ZoneCharacter}
+import opennorrath.state.{GameClock, PlayerCharacter, ZoneCharacter}
 
 /** Owns all ImGui panels and event wiring for the zone screen. */
 class ZoneHud(ctx: GameContext, characters: scala.collection.Map[Int, ZoneCharacter]):
@@ -145,14 +145,19 @@ class ZoneHud(ctx: GameContext, characters: scala.collection.Map[Int, ZoneCharac
       fpsAccum = 0f
       fpsFrames = 0
 
-    val label = s"${fpsDisplay.toInt} fps"
     val padding = 8f
     val flags = ImGuiWindowFlags.NoDecoration | ImGuiWindowFlags.NoInputs |
       ImGuiWindowFlags.NoBackground | ImGuiWindowFlags.AlwaysAutoResize |
       ImGuiWindowFlags.NoSavedSettings | ImGuiWindowFlags.NoFocusOnAppearing |
       ImGuiWindowFlags.NoNav
 
-    // Pin to top-right corner
+    // Game time + FPS in a single string, pinned to top-right corner
+    val label = if GameClock.isSynced then
+      val t = GameClock.now
+      val ampm = if t.hour <= 12 then "AM" else "PM"
+      val h12 = if t.hour <= 12 then t.hour else t.hour - 12
+      f"$h12%d:${t.minute}%02d $ampm | ${fpsDisplay.toInt}%d fps"
+    else s"${fpsDisplay.toInt} fps"
     val textSize = ImGui.calcTextSize(label)
     val x = ctx.windowWidth - textSize.x - padding * 2
     ImGui.setNextWindowPos(x, padding, ImGuiCond.Always)

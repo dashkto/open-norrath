@@ -37,6 +37,7 @@ class ZoneCharacter(
   def bodyTexture: Int = spawn.bodyTexture
   def flying: Boolean = spawn.flyMode == 1
   var level: Int = spawn.level
+  var face: Int = spawn.face
 
   val modelCode: String = EqData.raceModelCode(spawn.race, spawn.gender).get
   val displayName: String = ZoneCharacter.cleanName(name)
@@ -118,7 +119,7 @@ class ZoneCharacter(
       case None => ()
 
     // State priority: dead > airborne > sitting > moving > fidget > idle
-    if dead then return AnimCode.Death1.code
+    if dead then return AnimCode.Damage1.code
     if airborne then return AnimCode.Fall.code
     if sitting then return AnimCode.Sitting.code
     if moving then

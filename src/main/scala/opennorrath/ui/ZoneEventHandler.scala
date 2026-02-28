@@ -1,9 +1,8 @@
 package opennorrath.ui
 
 import opennorrath.Game
-import opennorrath.network.{ChatMessage, PlayerPosition, SpawnAppearanceChange, ZoneEvent}
+import opennorrath.network.{ChatMessage, FormattedMessage, SpecialMessage, SpawnAppearanceChange, ZoneEvent}
 import opennorrath.state.{PlayerCharacter, ZoneCharacter}
-import opennorrath.world.EqCoords
 
 /** Processes ZoneClient events — routes messages to the text panel
   * and updates PlayerCharacter. Registers as a ZoneClient listener.
@@ -32,6 +31,28 @@ class ZoneEventHandler(chatPanel: TextPanel, characters: scala.collection.Map[In
   private def handle(event: ZoneEvent): Unit = event match
     case ZoneEvent.ChatReceived(msg) =>
       chatPanel.addLine(formatChat(msg), channelColor(msg.channel))
+
+    case ZoneEvent.SpecialMsgReceived(msg) =>
+      if msg.message.nonEmpty then
+        chatPanel.addLine(msg.message, msgTypeColor(msg.msgType))
+
+    case ZoneEvent.FormattedMsgReceived(msg) =>
+      val text = EqStringTable.format(msg.stringId, msg.arguments)
+        .getOrElse(s"[${msg.stringId}] ${msg.arguments.mkString(", ")}")
+      if text.nonEmpty then
+        chatPanel.addLine(text, msgTypeColor(msg.msgType))
+
+    case ZoneEvent.EmoteReceived(msg) =>
+      chatPanel.addLine(msg.message, Colors.textDim)
+
+    case ZoneEvent.MultiLineMsgReceived(text) =>
+      // Multi-line text uses backtick (`) as line separator in EQ
+      for line <- text.split('`') if line.nonEmpty do
+        chatPanel.addLine(line, Colors.text)
+
+    case ZoneEvent.YellReceived(spawnId) =>
+      val name = spawnName(spawnId)
+      chatPanel.addLine(s"$name yells for help!", Colors.coral)
 
     case ZoneEvent.DamageDealt(info) =>
       val src = spawnName(info.sourceId)
@@ -141,6 +162,29 @@ class ZoneEventHandler(chatPanel: TextPanel, characters: scala.collection.Map[In
     case ChatMessage.GMSay   => Colors.gold
     case _                   => Colors.text
 
+  /** Map MT_* msg_type codes (from OP_SpecialMesg / OP_FormattedMessage) to display colors.
+    * Values from EQMacDocker/Server/common/eq_constants.h.
+    */
+  private def msgTypeColor(msgType: Int): (Float, Float, Float, Float) = msgType match
+    case 256     => Colors.text       // MT_Say
+    case 257     => Colors.violet     // MT_Tell
+    case 258     => Colors.secondary2 // MT_Group
+    case 259     => Colors.heal       // MT_Guild
+    case 260     => Colors.secondary  // MT_OOC
+    case 261     => Colors.heal       // MT_Auction
+    case 262     => Colors.coral      // MT_Shout
+    case 263     => Colors.rose       // MT_Emote
+    case 264     => Colors.teal       // MT_Spells
+    case 265 | 266 | 267 | 268 => Colors.text // MT_YouHitOther / OtherHitsYou / misses
+    case 269     => Colors.sky        // MT_Broadcasts
+    case 270     => Colors.teal       // MT_Skills
+    case 271     => Colors.amber      // MT_Disciplines
+    case 273     => Colors.text       // MT_DefaultText
+    case 275     => Colors.sand       // MT_MerchantOffer
+    case 301     => Colors.gold       // MT_CritMelee
+    case 302     => Colors.gold       // MT_SpellCrits
+    case _       => Colors.text
+
   // ===========================================================================
   // Input parsing
   // ===========================================================================
@@ -165,101 +209,13 @@ class ZoneEventHandler(chatPanel: TextPanel, characters: scala.collection.Map[In
         (ChatMessage.Say, "", text) // Default to say
 
   // ===========================================================================
-  // Client commands
+  // Client commands — delegates to ClientCommands registry
   // ===========================================================================
 
+  private val commandContext = ClientCommands.Context(chatPanel, characters, player)
+
   private def tryClientCommand(text: String): Boolean =
-    if !text.startsWith("/") then return false
-    val parts = text.split("\\s+")
-    parts(0).toLowerCase match
-      case "/tp" => handleTp(parts.drop(1)); true
-      case "/loc" => handleLoc(); true
-      case "/speedup" => handleSpeedUp(); true
-      case "/slowdown" => handleSlowDown(); true
-      case "/attack" | "/a" => handleAttackToggle(); true
-      case "/who" => handleWho(); true
-      case "/camp" => handleCamp(); true
-      // Chat channel commands — pass through to parseCommand/sendChat
-      case "/say" | "/s" | "/shout" | "/sho" | "/ooc" | "/auction" | "/auc"
-           | "/tell" | "/t" | "/group" | "/g" | "/guild" | "/gu" => false
-      case cmd =>
-        chatPanel.addLine(s"Unknown command: $cmd", Colors.danger)
-        true
-
-  private def handleLoc(): Unit =
-    player match
-      case Some(pc) =>
-        pc.zoneChar match
-          case Some(zc) =>
-            // ZC position is model-origin; subtract feetOffset for ground-level server coords
-            val pos = zc.position
-            val (sy, sx, sz) = EqCoords.glToServer(pos.x, pos.y - pc.feetOffset, pos.z)
-            chatPanel.addLine(f"Your Location is $sx%.2f, $sy%.2f, $sz%.2f", Colors.textDim)
-          case None =>
-            chatPanel.addLine("Position unknown", Colors.danger)
-      case None =>
-        chatPanel.addLine("Position unknown", Colors.danger)
-
-  private def handleTp(args: Array[String]): Unit =
-    if args.length != 3 then
-      chatPanel.addLine("Usage: /tp x y z", Colors.danger)
-      return
-    try
-      val sx = args(0).toFloat
-      val sy = args(1).toFloat
-      val sz = args(2).toFloat
-      player.foreach { pc =>
-        pc.teleportTo(EqCoords.serverToGl(sy, sx, sz))
-      }
-      Game.zoneSession.foreach { session =>
-        val client = session.client
-        client.sendPosition(PlayerPosition(
-          spawnId = client.mySpawnId,
-          y = sy, x = sx, z = sz,
-          heading = 0, deltaY = 0, deltaX = 0, deltaZ = 0, deltaHeading = 0,
-          animation = 0,
-        ))
-      }
-      chatPanel.addLine(s"Teleported to ($sx, $sy, $sz)", Colors.gold)
-    catch case _: NumberFormatException =>
-      chatPanel.addLine("Usage: /tp x y z (numbers required)", Colors.danger)
-
-  private def handleSpeedUp(): Unit =
-    player.foreach { pc =>
-      pc.runSpeed = 100f
-      chatPanel.addLine("Speed set to 100", Colors.gold)
-    }
-
-  private def handleSlowDown(): Unit =
-    player.foreach { pc =>
-      pc.runSpeed = 25f
-      chatPanel.addLine("Speed set to 25 (default)", Colors.gold)
-    }
-
-  private def handleAttackToggle(): Unit =
-    player.foreach { pc =>
-      val enable = !pc.autoAttacking
-      pc.autoAttacking = enable
-      Game.zoneSession.foreach(_.client.autoAttack(enable))
-      if enable then chatPanel.addLine("Auto-attack on.", Colors.text)
-      else chatPanel.addLine("Auto-attack off.", Colors.text)
-    }
-
-  private def handleCamp(): Unit =
-    Game.zoneSession.foreach(_.client.camp())
-    chatPanel.addLine("It will take about 30 seconds to camp.", Colors.gold)
-
-  private def handleWho(): Unit =
-    val myId = Game.zoneSession.map(_.client.mySpawnId).getOrElse(-1)
-    val players = characters.values.filter(zc => zc.npcType == 0 && zc.spawnId != myId).toVector.sortBy(_.level)
-    if players.isEmpty then
-      chatPanel.addLine("No other players in zone.", Colors.textDim)
-    else
-      chatPanel.addLine(s"Players in zone:", Colors.gold)
-      for pc <- players do
-        val cls = EqData.className(pc.classId)
-        chatPanel.addLine(s"  [${pc.level} $cls] ${pc.displayName}", Colors.text)
-      chatPanel.addLine(s"${players.size} player(s) found.", Colors.gold)
+    ClientCommands.tryExecute(text, commandContext)
 
   // ===========================================================================
   // Helpers

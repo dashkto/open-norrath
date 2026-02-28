@@ -37,6 +37,7 @@ enum ZoneEvent:
 
   // Appearance — rendering system updates models
   case AppearanceChanged(change: SpawnAppearanceChange)
+  case FaceChanged(change: FaceChangeData)
   case EquipmentChanged(change: WearChangeInfo)
   case AnimationTriggered(anim: AnimationInfo)
   case SpellActionTriggered(action: SpellAction)
@@ -56,6 +57,11 @@ enum ZoneEvent:
 
   // Chat — UI chat window
   case ChatReceived(msg: ChatMessage)
+  case SpecialMsgReceived(msg: SpecialMessage)
+  case FormattedMsgReceived(msg: FormattedMessage)
+  case EmoteReceived(msg: EmoteMessage)
+  case MultiLineMsgReceived(text: String)
+  case YellReceived(spawnId: Int)
 
   // Inventory — UI inventory panel
   case InventoryLoaded(items: Vector[InventoryItem])
@@ -199,6 +205,10 @@ class ZoneClient extends PacketHandler:
   /** Set spawn appearance (sit/stand/etc). Called from game thread. */
   def setAppearance(spawnId: Int, appearanceType: Int, parameter: Int): Unit =
     queueAppPacket(ZoneOpcodes.SpawnAppearance, ZoneCodec.encodeSpawnAppearance(spawnId, appearanceType, parameter))
+
+  /** Send face/hair/beard change to server. Called from game thread. */
+  def sendFaceChange(data: FaceChangeData): Unit =
+    queueAppPacket(ZoneOpcodes.FaceChange, ZoneCodec.encodeFaceChange(data))
 
   /** Whether a camp is in progress (client waiting to send OP_Logout). */
   var camping: Boolean = false
@@ -382,6 +392,11 @@ class ZoneClient extends PacketHandler:
           emit(ZoneEvent.EquipmentChanged(wc))
         }
 
+      case ZoneOpcodes.FaceChange =>
+        ZoneCodec.decodeFaceChange(pkt.payload).foreach { fc =>
+          emit(ZoneEvent.FaceChanged(fc))
+        }
+
       case ZoneOpcodes.Animation =>
         ZoneCodec.decodeAnimation(pkt.payload).foreach(a => emit(ZoneEvent.AnimationTriggered(a)))
 
@@ -409,6 +424,24 @@ class ZoneClient extends PacketHandler:
 
       case ZoneOpcodes.ChannelMessage =>
         ZoneCodec.decodeChannelMessage(pkt.payload).foreach(m => emit(ZoneEvent.ChatReceived(m)))
+
+      case ZoneOpcodes.SpecialMesg =>
+        ZoneCodec.decodeSpecialMesg(pkt.payload).foreach(m => emit(ZoneEvent.SpecialMsgReceived(m)))
+
+      case ZoneOpcodes.FormattedMessage =>
+        ZoneCodec.decodeFormattedMessage(pkt.payload).foreach(m => emit(ZoneEvent.FormattedMsgReceived(m)))
+
+      case ZoneOpcodes.Emote =>
+        ZoneCodec.decodeEmote(pkt.payload).foreach(m => emit(ZoneEvent.EmoteReceived(m)))
+
+      case ZoneOpcodes.MultiLineMsg =>
+        ZoneCodec.decodeMultiLineMsg(pkt.payload).foreach(t => emit(ZoneEvent.MultiLineMsgReceived(t)))
+
+      case ZoneOpcodes.YellForHelp =>
+        // Server broadcasts uint32 spawn ID of the player yelling
+        if pkt.payload.length >= 4 then
+          val spawnId = java.nio.ByteBuffer.wrap(pkt.payload).order(java.nio.ByteOrder.LITTLE_ENDIAN).getInt()
+          emit(ZoneEvent.YellReceived(spawnId))
 
       // --- Environment ---
 

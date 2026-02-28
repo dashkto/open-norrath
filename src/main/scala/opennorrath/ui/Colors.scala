@@ -53,6 +53,11 @@ object Colors:
   val violet  = hex("9B6EB7")
   val slate   = hex("6B7D8A")
   val coral   = hex("E86850")
+  val amber   = hex("D4A040")
+  val sky     = hex("5CACEE")
+  val rose    = hex("D4708A")
+  val teal    = hex("4DB8A4")
+  val sand    = hex("C8B88A")
   val error   = danger
   val success = heal
 

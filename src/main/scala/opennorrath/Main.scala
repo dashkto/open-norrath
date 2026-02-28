@@ -12,7 +12,7 @@ import org.lwjgl.opengl.GL11.*
 import org.lwjgl.system.MemoryUtil.NULL
 
 import opennorrath.screen.{GameContext, SplashScreen, ZoneScreen}
-import opennorrath.ui.{Fonts, ImGuiTheme, ItemIcons, SpellData}
+import opennorrath.ui.{EqStringTable, Fonts, ImGuiTheme, ItemIcons, SpellData}
 import opennorrath.world.{EquipmentModels, GlobalCharacters}
 
 object Main:
@@ -72,6 +72,7 @@ object Main:
     ImGuiTheme.apply()
     ItemIcons.init("assets/EverQuest")
     SpellData.init("assets/EverQuest")
+    EqStringTable.init("assets/EverQuest")
     GlobalCharacters.init("assets/EverQuest")
     EquipmentModels.init("assets/EverQuest")
 

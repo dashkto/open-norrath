@@ -12,7 +12,7 @@ enum AnimCode(val code: String):
   case Attack2      extends AnimCode("C02") // 1H Piercing
   case Slash2H      extends AnimCode("C03") // 2H Slashing
   case Weapon2H     extends AnimCode("C04") // 2H Blunt / 2H Weapon
-  case GetHit       extends AnimCode("C05") // 1H Weapon / Throw
+  case Weapon1H     extends AnimCode("C05") // 1H Weapon / Throw
   case DualWield    extends AnimCode("C06") // Dual Wield
   case Bash         extends AnimCode("C07") // Shield Bash / Slam
   case HandToHand   extends AnimCode("C08") // Hand to Hand
@@ -21,8 +21,8 @@ enum AnimCode(val code: String):
   case RoundKick    extends AnimCode("C11") // Round Kick
 
   // Damage / Death (D prefix)
-  case Death1       extends AnimCode("D01") // Damage / Hit 1
-  case Death2       extends AnimCode("D02") // Damage / Hit 2
+  case Damage1       extends AnimCode("D01") // Damage / Hit 1
+  case Damage2       extends AnimCode("D02") // Damage / Hit 2
   case Falling      extends AnimCode("D03") // Falling damage
   case Drowning     extends AnimCode("D04") // Drowning
   case DeadLoop     extends AnimCode("D05") // Death / Dying

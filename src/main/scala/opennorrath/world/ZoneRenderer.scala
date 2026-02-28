@@ -153,7 +153,7 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings(),
   def updateSpawnEquipment(zc: ZoneCharacter): Unit =
     if zc.hasRendering then
       zc.textureOverrides = ZoneRenderer.computeTextureOverrides(
-        zc.animChar.zoneMesh.groups, zc.build.key, zc.equipment, textureMap, zc.bodyTexture)
+        zc.animChar.zoneMesh.groups, zc.build.key, zc.equipment, textureMap, zc.bodyTexture, zc.face)
       if zc.equipment.length > 8 then
         zc.weaponPrimary = zc.equipment(7)
         zc.weaponSecondary = zc.equipment(8)
@@ -761,13 +761,14 @@ object ZoneRenderer:
     }
     target.mul(glToEq)
 
-  /** Compute texture overrides for equipment.
+  /** Compute texture overrides for equipment and face.
     * Maps base texture names to variant names based on equipment material IDs.
+    * For head textures ("he"), face value is used when no equipment overrides the slot.
     * Texture naming: {race:3}{bodyPart:2}{material:02d}{index:02d}.bmp
     */
   def computeTextureOverrides(groups: List[ZoneMeshGroup], buildKey: String,
       equipment: Array[Int], textureMap: scala.collection.Map[String, Int],
-      bodyTexture: Int = 0): Map[String, String] =
+      bodyTexture: Int = 0, face: Int = 0): Map[String, String] =
     val overrides = scala.collection.mutable.Map[String, String]()
     for group <- groups do
       val baseName = group.textureName.toLowerCase
@@ -777,7 +778,10 @@ object ZoneRenderer:
           val bodyPart = baseName.substring(3, 5)
           val slot = bodyPartToSlot.getOrElse(bodyPart, -1)
           if slot >= 0 && slot < equipment.length then
+            // For head textures, face value selects the head variant (face 0-7 → material 0-7).
+            // Equipment (helm) overrides face; bodyTexture applies to body parts, not head.
             val material = if equipment(slot) != 0 then equipment(slot)
+              else if bodyPart == "he" then face
               else if bodyTexture != 0 then bodyTexture
               else 0
             if material != 0 then

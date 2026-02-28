@@ -12,6 +12,7 @@ uniform sampler2DShadow shadowMap;  // hardware PCF via GL_COMPARE_REF_TO_TEXTUR
 uniform bool enableLighting = false; // false for screens that don't set up lighting
 uniform bool enableShadows = false; // false for screens without a shadow map bound (e.g. character preview)
 uniform vec3 lightDir;              // points FROM sun TOWARD scene (normalized by caller or here)
+uniform vec3 lightColor = vec3(1.0, 1.0, 1.0); // sun/moon tint (warm at dawn/dusk, cool at night)
 uniform float ambientStrength = 0.35;
 uniform float alphaMultiplier = 1.0;
 uniform bool alphaTest = false;
@@ -63,8 +64,9 @@ void main() {
     // Shadow (only when a shadow map is bound)
     float shadow = enableShadows ? computeShadow(FragPosLightSpace) : 0.0;
 
-    // Combine: ambient always on, diffuse attenuated by shadow
+    // Combine: ambient always on, diffuse attenuated by shadow, tinted by light color
     float lighting = ambientStrength + (1.0 - ambientStrength) * diff * (1.0 - shadow);
+    vec3 tintedLight = mix(vec3(1.0), lightColor, 1.0 - ambientStrength);
 
-    FragColor = vec4(texColor.rgb * lighting, texColor.a);
+    FragColor = vec4(texColor.rgb * lighting * tintedLight, texColor.a);
 }

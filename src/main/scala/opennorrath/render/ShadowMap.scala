@@ -52,7 +52,11 @@ class ShadowMap(sceneMin: Vector3f, sceneMax: Vector3f, lightDir: Vector3f, reso
   glBindFramebuffer(GL_FRAMEBUFFER, 0)
 
   /** Orthographic light-space matrix covering the scene AABB from lightDir. */
-  val lightSpaceMatrix: Matrix4f = computeLightSpaceMatrix(sceneMin, sceneMax, lightDir)
+  var lightSpaceMatrix: Matrix4f = computeLightSpaceMatrix(sceneMin, sceneMax, lightDir)
+
+  /** Recompute the light-space matrix for a new sun direction (day/night cycle). */
+  def updateLightDirection(newDir: Vector3f): Unit =
+    lightSpaceMatrix = computeLightSpaceMatrix(sceneMin, sceneMax, newDir)
 
   /** Compute an orthographic light-space matrix that tightly covers the scene AABB.
     * lightDir should point FROM the sun TOWARD the scene (the direction light travels).

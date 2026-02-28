@@ -117,6 +117,18 @@ object ZoneCodec:
     buf.putInt(parameter)
     buf.array()
 
+  /** OP_FaceChange: FaceChange_Struct (7 bytes). */
+  def encodeFaceChange(data: FaceChangeData): Array[Byte] =
+    val buf = ByteBuffer.allocate(7).order(ByteOrder.LITTLE_ENDIAN)
+    buf.put((data.hairColor & 0xFF).toByte)
+    buf.put((data.beardColor & 0xFF).toByte)
+    buf.put((data.eyeColor1 & 0xFF).toByte)
+    buf.put((data.eyeColor2 & 0xFF).toByte)
+    buf.put((data.hairStyle & 0xFF).toByte)
+    buf.put((data.beard & 0xFF).toByte)
+    buf.put((data.face & 0xFF).toByte)
+    buf.array()
+
   /** OP_Save: empty payload. */
   def encodeSave: Array[Byte] = Array.emptyByteArray
 
@@ -751,6 +763,68 @@ object ZoneCodec:
       message = readNullStr(msgBytes),
     ))
 
+  /** Decode OP_SpecialMesg: SpecialMesg_Struct.
+    * Wire format: 3-byte header + uint32 msg_type + uint32 target_spawn_id
+    * + null-term sayer + 12 unknown bytes + null-term message.
+    * The server often sends header as all zeros and an empty sayer field.
+    */
+  def decodeSpecialMesg(data: Array[Byte]): Option[SpecialMessage] =
+    if data.length < 12 then return None
+    val buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
+    buf.position(3) // skip 3-byte header
+    val msgType = buf.getInt()
+    val targetSpawnId = buf.getInt()
+    // Read null-terminated sayer name
+    val sayerStart = buf.position()
+    var i = sayerStart
+    while i < data.length && data(i) != 0 do i += 1
+    val sayer = if i > sayerStart then new String(data, sayerStart, i - sayerStart, StandardCharsets.US_ASCII) else ""
+    val afterSayer = i + 1 // skip null terminator
+    // Skip 12 unknown bytes after sayer
+    val msgStart = afterSayer + 12
+    if msgStart >= data.length then return Some(SpecialMessage(msgType, targetSpawnId, sayer, ""))
+    val message = readNullStr(data.drop(msgStart))
+    Some(SpecialMessage(msgType, targetSpawnId, sayer, message))
+
+  /** Decode OP_FormattedMessage: FormattedMessage_Struct.
+    * Wire format: uint16 unknown + uint16 string_id + uint16 type
+    * + sequence of null-terminated argument strings.
+    */
+  def decodeFormattedMessage(data: Array[Byte]): Option[FormattedMessage] =
+    if data.length < 6 then return None
+    val buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
+    buf.getShort() // unknown
+    val stringId = buf.getShort() & 0xFFFF
+    val msgType = buf.getShort() & 0xFFFF
+    // Remaining bytes are null-terminated argument strings
+    val args = Vector.newBuilder[String]
+    var pos = 6
+    while pos < data.length do
+      val start = pos
+      while pos < data.length && data(pos) != 0 do pos += 1
+      if pos > start then
+        args += new String(data, start, pos - start, StandardCharsets.US_ASCII)
+      pos += 1 // skip null terminator
+    Some(FormattedMessage(stringId, msgType, args.result()))
+
+  /** Decode OP_Emote: Emote_Struct.
+    * Broadcast wire format: uint16 unknown + variable-length message text
+    * (server prepends sender name to message before broadcast).
+    */
+  def decodeEmote(data: Array[Byte]): Option[EmoteMessage] =
+    if data.length < 3 then return None
+    // Skip 2-byte unknown header, read the rest as message
+    val message = readNullStr(data.drop(2))
+    if message.isEmpty then None
+    else Some(EmoteMessage(message))
+
+  /** Decode OP_MultiLineMsg: raw null-terminated string. */
+  def decodeMultiLineMsg(data: Array[Byte]): Option[String] =
+    if data.isEmpty then None
+    else
+      val text = readNullStr(data)
+      if text.isEmpty then None else Some(text)
+
   /** Decode OP_SpawnAppearance: SpawnAppearance_Struct (8 bytes). */
   def decodeSpawnAppearance(data: Array[Byte]): Option[SpawnAppearanceChange] =
     if data.length < 8 then return None
@@ -759,6 +833,20 @@ object ZoneCodec:
       spawnId = buf.getShort() & 0xFFFF,
       appearanceType = buf.getShort() & 0xFFFF,
       parameter = buf.getInt(),
+    ))
+
+  /** Decode OP_FaceChange: FaceChange_Struct (7 bytes). */
+  def decodeFaceChange(data: Array[Byte]): Option[FaceChangeData] =
+    if data.length < 7 then return None
+    val buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
+    Some(FaceChangeData(
+      hairColor = buf.get() & 0xFF,
+      beardColor = buf.get() & 0xFF,
+      eyeColor1 = buf.get() & 0xFF,
+      eyeColor2 = buf.get() & 0xFF,
+      hairStyle = buf.get() & 0xFF,
+      beard = buf.get() & 0xFF,
+      face = buf.get() & 0xFF,
     ))
 
   /** Decode OP_WearChange: WearChange_Struct (12 bytes). */

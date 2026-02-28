@@ -13,7 +13,7 @@ import imgui.ImGui
 import opennorrath.{Game, GameAction, WorldSession}
 import opennorrath.animation.AnimCode
 import opennorrath.render.Shader
-import opennorrath.state.{PlayerCharacter, ZoneCharacter}
+import opennorrath.state.{GameClock, PlayerCharacter, ZoneCharacter}
 import opennorrath.world.{CameraController, EqCoords, SpellEffectSystem, TargetingSystem, ZoneRenderer}
 import opennorrath.network.{InventoryItem, NetCommand, NetworkThread, PlayerPosition, PlayerProfileData, SpawnAppearanceChange, SpawnData, WorldClient, WorldEvent, ZoneEvent, ZonePointData, ZoneState}
 import opennorrath.ui.{NameplateRenderer, ZoneHud}
@@ -52,6 +52,8 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
   // --- Spawn rendering ---
 
   private val spawnListener: ZoneEvent => Unit =
+    case ZoneEvent.TimeReceived(time) =>
+      GameClock.sync(time)
     case ZoneEvent.SpawnsLoaded(spawns) =>
       for s <- spawns do spawnListener(ZoneEvent.SpawnAdded(s))
     case ZoneEvent.SpawnAdded(s) =>
@@ -81,6 +83,15 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
         zc.updateEquipment(wc.wearSlot, wc.material, wc.color)
         zone.updateSpawnEquipment(zc)
       }
+    case ZoneEvent.FaceChanged(fc) =>
+      // FaceChange has no spawn ID — server broadcasts the raw 7-byte struct.
+      // We can only apply it to our own character (self-initiated face changes).
+      for
+        session <- Game.zoneSession
+        zc <- zoneCharacters.get(session.client.mySpawnId)
+      do
+        zc.face = fc.face
+        zone.updateSpawnEquipment(zc)
     case ZoneEvent.ZoneChangeRequested(req) =>
       println(s"[Zone] Zone change requested → zoneId=${req.zoneId}")
       zoning = true
@@ -119,7 +130,12 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
         then AnimCode.Attack1.code else AnimCode.Attack2.code
       zoneCharacters.get(info.sourceId).foreach(_.playTimedAnimation(attackAnim, 0.5f))
       zoneCharacters.get(info.targetId).foreach { zc =>
-        if info.damage > 0 then zc.playTimedAnimation(AnimCode.GetHit.code, 0.4f)
+        if info.damage > 0 then
+          // D01/D02 are the actual damage-received flinch animations;
+          // C05 (GetHit) is misleadingly named — it's the 1H weapon attack anim.
+          val hitAnim = if java.util.concurrent.ThreadLocalRandom.current().nextBoolean()
+            then AnimCode.Damage1.code else AnimCode.Damage2.code
+          zc.playTimedAnimation(hitAnim, 0.4f)
       }
       // Auto-stand (and cancel camp) when player takes damage
       val myId = Game.zoneSession.map(_.client.mySpawnId).getOrElse(-1)
@@ -166,7 +182,7 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
     case 2  => Some((AnimCode.Attack2.code, 0.5f))      // Piercing
     case 3  => Some((AnimCode.Slash2H.code, 0.5f))      // 2H Slashing
     case 4  => Some((AnimCode.Weapon2H.code, 0.5f))     // 2H Weapon
-    case 5  => Some((AnimCode.GetHit.code, 0.5f))       // 1H Weapon
+    case 5  => Some((AnimCode.Weapon1H.code, 0.5f))      // 1H Weapon
     case 6  => Some((AnimCode.DualWield.code, 0.5f))    // Dual Wield
     case 7  => Some((AnimCode.Bash.code, 0.5f))         // Slam/Bash
     case 8  => Some((AnimCode.HandToHand.code, 0.5f))   // Hand to Hand
@@ -270,7 +286,6 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
 
   override def show(): Unit =
     glfwSetInputMode(ctx.window, GLFW_CURSOR, GLFW_CURSOR_NORMAL)
-    glClearColor(0.3f, 0.5f, 0.7f, 1.0f)
 
     player = Game.zoneSession.flatMap(_.client.profile).map(PlayerCharacter.fromProfile)
     hud.init(player)
@@ -479,12 +494,20 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
     glEnable(GL_DEPTH_TEST)
     glDisable(GL_BLEND)
 
+    // Compute sun direction once — used for both shadow pass and main pass.
+    // Must update the shadow map's light-space matrix BEFORE the shadow pass
+    // so the depth buffer and the main shader sample with the same projection.
+    val sunDir = GameClock.sunDirection
+    zone.shadowMap.updateLightDirection(sunDir)
+
     // --- Shadow map pre-pass: render depth from sun's perspective ---
     zone.shadowMap.bind()
     zone.drawShadowPass(shadowShader)
     zone.shadowMap.unbind(ctx.windowWidth, ctx.windowHeight)
 
     // --- Main color pass ---
+    val sky = GameClock.skyColor
+    glClearColor(sky.x, sky.y, sky.z, 1.0f)
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
 
     shader.use()
@@ -492,12 +515,13 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
     shader.setMatrix4f("view", camCtrl.viewMatrix)
     shader.setMatrix4f("model", model)
 
-    // Lighting uniforms — set once per frame
+    // Lighting uniforms — derived from game time (sun position, ambient, tint)
     shader.setBool("enableLighting", true)
     shader.setBool("enableShadows", true)
-    val sunDir = ZoneRenderer.SunDir
     shader.setVec3("lightDir", sunDir.x, sunDir.y, sunDir.z)
-    shader.setFloat("ambientStrength", 0.35f)
+    shader.setFloat("ambientStrength", GameClock.ambientStrength)
+    val lc = GameClock.lightColor
+    shader.setVec3("lightColor", lc.x, lc.y, lc.z)
     shader.setMatrix4f("lightSpaceMatrix", zone.shadowMap.lightSpaceMatrix)
 
     // Bind shadow map depth texture to unit 1 (diffuse tex0 stays on unit 0)

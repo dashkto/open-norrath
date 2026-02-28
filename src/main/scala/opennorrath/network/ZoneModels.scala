@@ -420,8 +420,33 @@ object ChatMessage:
   val Say = 8
   val GMSay = 11
 
+/** System message from OP_SpecialMesg. Server-generated text with msg_type color coding. */
+case class SpecialMessage(msgType: Int, targetSpawnId: Int, sayer: String, message: String)
+
+/** String-ID message from OP_FormattedMessage. Resolved via eqstr_us.txt client string table. */
+case class FormattedMessage(stringId: Int, msgType: Int, arguments: Vector[String])
+
+/** Emote text from OP_Emote. Broadcast contains sender name prepended to message. */
+case class EmoteMessage(message: String)
+
 // =============================================================================
 // Spawn Appearance — used by rendering for state changes
+// =============================================================================
+
+/** Face/hair/beard change from OP_FaceChange.
+  * 7 bytes, all uint8. No spawn ID — the server knows the sender, and broadcasts
+  * the same struct to other clients in the zone.
+  */
+case class FaceChangeData(
+  hairColor: Int,
+  beardColor: Int,
+  eyeColor1: Int,
+  eyeColor2: Int,
+  hairStyle: Int,
+  beard: Int,     // Face overlay / woad (barbarian only)
+  face: Int,
+)
+
 // =============================================================================
 
 /** Appearance change from OP_SpawnAppearance.
@@ -429,39 +454,86 @@ object ChatMessage:
   */
 case class SpawnAppearanceChange(
   spawnId: Int,
-  appearanceType: Int,    // What is changing
+  appearanceType: Int,    // What is changing (see AppearanceType)
   parameter: Int,         // New value
 )
 
+/** Appearance type codes from AT_* in eq_constants.h. */
+enum AppearanceType(val code: Int):
+  case Die         extends AppearanceType(0)   // Keel over and zone to bind
+  case WhoLevel    extends AppearanceType(1)   // Level shown on /who
+  case MaxHP       extends AppearanceType(2)   // Max HP value (sends 100 for 100%)
+  case Invis       extends AppearanceType(3)   // 0=visible, 1=invisible
+  case PVP         extends AppearanceType(4)   // 0=blue, 1=pvp (red)
+  case Light       extends AppearanceType(5)   // Light type (lightstone, shiny shield)
+  case Animation   extends AppearanceType(14)  // Stand/sit/loot state (see AnimState)
+  case Sneak       extends AppearanceType(15)  // 0=normal, 1=sneaking
+  case SpawnID     extends AppearanceType(16)  // Server assigns player spawn ID
+  case HPPercent   extends AppearanceType(17)  // HP percentage update
+  case LinkDead    extends AppearanceType(18)  // 0=normal, 1=linkdead
+  case FlyMode     extends AppearanceType(19)  // 0=ground, 1=flying, 2=levitate
+  case GM          extends AppearanceType(20)  // 0=normal, 1=GM
+  case Anon        extends AppearanceType(21)  // 0=normal, 1=anon, 2=roleplay
+  case GuildID     extends AppearanceType(22)  // Guild ID
+  case GuildRank   extends AppearanceType(23)  // 0=member, 1=officer, 2=leader
+  case AFK         extends AppearanceType(24)  // 0=normal, 1=afk
+  case Pet         extends AppearanceType(25)  // Owner entity ID, 0=charm break
+  case SummonedPC  extends AppearanceType(27)  // Summoned PC flag
+  case Split       extends AppearanceType(28)  // 0=normal, 1=autosplit on
+  case Size        extends AppearanceType(29)  // Spawn size
+  case NPC         extends AppearanceType(30)  // Make entity an NPC
+  case NPCName     extends AppearanceType(31)  // 0=normal name color, 1=NPC name color
+  case DamageState extends AppearanceType(44)  // Destructible object damage state (0-4)
+
+object AppearanceType:
+  private val byCode: Map[Int, AppearanceType] = values.map(v => v.code -> v).toMap
+  def fromCode(code: Int): Option[AppearanceType] = byCode.get(code)
+
+/** Animation state values for AppearanceType.Animation parameter.
+  * From AnimTypePositionEnum in eq_constants.h.
+  */
+enum AnimState(val code: Int):
+  case Stand  extends AnimState(100)
+  case Freeze extends AnimState(102)  // Stunned / rooted
+  case Loot   extends AnimState(105)
+  case Sit    extends AnimState(110)
+  case Crouch extends AnimState(111)
+  case Feign  extends AnimState(115)  // Feign death
+  case Dead   extends AnimState(120)  // Corpse
+
+object AnimState:
+  private val byCode: Map[Int, AnimState] = values.map(v => v.code -> v).toMap
+  def fromCode(code: Int): Option[AnimState] = byCode.get(code)
+
+// Back-compat: keep old constant access on the companion so existing code still compiles.
+// TODO: migrate callers to use AppearanceType / AnimState enums directly.
 object SpawnAppearanceChange:
-  // Appearance type constants
-  val Die = 0
-  val WhoLevel = 1
-  val MaxHP = 2          // Sends 100 for 100%
-  val Invis = 3
-  val PVP = 4
-  val Light = 5
-  val Animation = 14
-  // Animation parameter values
-  val AnimStand = 100
-  val AnimLoot = 105
-  val AnimSit = 110
-  val AnimCrouch = 111
-  val AnimDead = 120
-  val Sneak = 15
-  val SpawnID = 16
-  val HPPercent = 17
-  val LinkDead = 18
-  val FlyMode = 19       // 0=ground, 1=flying, 2=levitate
-  val GM = 20
-  val Anon = 21
-  val GuildID = 22
-  val GuildRank = 23
-  val AFK = 24
-  val Pet = 25
-  val Split = 28
-  val Size = 29
-  val NPCName = 31
+  val Die = AppearanceType.Die.code
+  val WhoLevel = AppearanceType.WhoLevel.code
+  val MaxHP = AppearanceType.MaxHP.code
+  val Invis = AppearanceType.Invis.code
+  val PVP = AppearanceType.PVP.code
+  val Light = AppearanceType.Light.code
+  val Animation = AppearanceType.Animation.code
+  val AnimStand = AnimState.Stand.code
+  val AnimLoot = AnimState.Loot.code
+  val AnimSit = AnimState.Sit.code
+  val AnimCrouch = AnimState.Crouch.code
+  val AnimDead = AnimState.Dead.code
+  val Sneak = AppearanceType.Sneak.code
+  val SpawnID = AppearanceType.SpawnID.code
+  val HPPercent = AppearanceType.HPPercent.code
+  val LinkDead = AppearanceType.LinkDead.code
+  val FlyMode = AppearanceType.FlyMode.code
+  val GM = AppearanceType.GM.code
+  val Anon = AppearanceType.Anon.code
+  val GuildID = AppearanceType.GuildID.code
+  val GuildRank = AppearanceType.GuildRank.code
+  val AFK = AppearanceType.AFK.code
+  val Pet = AppearanceType.Pet.code
+  val Split = AppearanceType.Split.code
+  val Size = AppearanceType.Size.code
+  val NPCName = AppearanceType.NPCName.code
 
 // =============================================================================
 // Equipment Visual — used by rendering for gear display
@@ -487,12 +559,14 @@ case class AnimationInfo(
 // Environment — used by rendering for atmosphere
 // =============================================================================
 
-/** Game time from OP_TimeOfDay. */
+/** Game time from OP_TimeOfDay.
+  * EQ time runs at 1 EQ minute = 3 real seconds (20x speed).
+  */
 case class GameTime(
-  hour: Int,              // 0-23
+  hour: Int,              // 1-24 (1=1am, 24=12am midnight)
   minute: Int,            // 0-59
-  day: Int,
-  month: Int,
+  day: Int,               // 1-28
+  month: Int,             // 1-12
   year: Int,
 )
 
