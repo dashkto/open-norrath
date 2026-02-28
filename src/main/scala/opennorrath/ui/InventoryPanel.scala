@@ -5,7 +5,7 @@ import imgui.`type`.ImBoolean
 import imgui.flag.{ImGuiCol, ImGuiCond, ImGuiDragDropFlags, ImGuiWindowFlags}
 
 import opennorrath.Game
-import opennorrath.network.InventoryItem
+import opennorrath.network.{InventoryItem, ItemType}
 import opennorrath.state.PlayerCharacter
 
 /** Inventory panel toggled with the "i" key.
@@ -23,6 +23,11 @@ class InventoryPanel(player: Option[PlayerCharacter] = None) extends Panel:
 
   visible = false
   private val pOpen = new ImBoolean(true)
+
+  /** Callback to scribe a spell scroll. Set by ZoneHud.
+    * Parameters: (inventorySlot, scrollSpellId).
+    */
+  var onScribeSpell: (Int, Int) => Unit = (_, _) => ()
 
   private def itemsBySlot: Map[Int, InventoryItem] =
     player.map(_.inventory.items).getOrElse(Map.empty)
@@ -265,6 +270,16 @@ class InventoryPanel(player: Option[PlayerCharacter] = None) extends Panel:
           if srcAllowed && dstAllowed then
             Game.zoneSession.foreach(_.client.sendMoveItem(sourceSlot, slotId))
       ImGui.endDragDropTarget()
+
+    // Right-click context menu for spell scrolls
+    item.foreach { it =>
+      if it.itemType == ItemType.Spell && it.scrollSpellId > 0 then
+        if ImGui.beginPopupContextItem(s"##ctx$slotId") then
+          val spellName = SpellData.spellName(it.scrollSpellId)
+          if ImGui.menuItem(s"Scribe: $spellName") then
+            onScribeSpell(slotId, it.scrollSpellId)
+          ImGui.endPopup()
+    }
 
   // ---------------------------------------------------------------------------
   // Tooltip

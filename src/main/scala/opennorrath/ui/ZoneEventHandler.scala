@@ -87,8 +87,16 @@ class ZoneEventHandler(chatPanel: TextPanel, characters: scala.collection.Map[In
       val name = EqData.skillName(sk.skillId)
       chatPanel.addLine(s"You have become better at $name! (${ sk.value })", Colors.secondary)
 
+    case ZoneEvent.SpellInterrupted(messageId, color, message) =>
+      // Resolve string table ID; fall back to inline message if present
+      val text = EqStringTable.get(messageId)
+        .orElse(Option.when(message.nonEmpty)(message))
+        .getOrElse("Your spell is interrupted.")
+      chatPanel.addLine(text, msgTypeColor(color))
+
     case ZoneEvent.SpellActionTriggered(action) =>
-      if action.spellId > 0 then
+      // buffUnknown: 1 = cast begin, 4 = spell landed. Only show chat for cast begin.
+      if action.spellId > 0 && action.buffUnknown == 1 then
         val src = spawnName(action.sourceId)
         val tgt = spawnName(action.targetId)
         if action.sourceId == action.targetId then

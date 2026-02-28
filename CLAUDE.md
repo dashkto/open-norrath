@@ -8,7 +8,7 @@
 
 ## Asset Paths
 
-- All original EverQuest client assets (models, textures, zones, sounds, etc.) are located at `/assets/EverQuest`
+- All original EverQuest client assets (models, textures, zones, sounds, etc.) are located at `/assets/EverQuest`.  These are expected to be the Titanium-based client files, which is a PC version, not Mac.
 
 ## Logging
 

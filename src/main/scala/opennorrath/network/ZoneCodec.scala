@@ -148,6 +148,58 @@ object ZoneCodec:
     buf.putInt(itemType)       // type: 1=food, 2=water
     buf.array()
 
+  /** Encode CastSpell_Struct (12 bytes):
+    * slot(uint16) + spell_id(uint16) + inventoryslot(uint16) + target_id(uint16) + spell_crc(uint32).
+    * inventoryslot = 0xFFFF for normal gem casts (non-clicky).
+    */
+  def encodeCastSpell(gemSlot: Int, spellId: Int, targetId: Int): Array[Byte] =
+    val buf = ByteBuffer.allocate(12).order(ByteOrder.LITTLE_ENDIAN)
+    buf.putShort(gemSlot.toShort)
+    buf.putShort(spellId.toShort)
+    buf.putShort(0xFFFF.toShort)     // inventoryslot: 0xFFFF = normal cast (not clicky item)
+    buf.putShort(targetId.toShort)
+    buf.putInt(0)                    // spell_crc: server doesn't validate this
+    buf.array()
+
+  /** Encode MemorizeSpell_Struct (12 bytes): slot(uint32) + spell_id(uint32) + scribing(uint32).
+    * scribing: 0=scribe to book, 1=memorize to gem, 2=forget.
+    */
+  def encodeMemorizeSpell(bookSlot: Int, spellId: Int, scribing: Int): Array[Byte] =
+    val buf = ByteBuffer.allocate(12).order(ByteOrder.LITTLE_ENDIAN)
+    buf.putInt(bookSlot)
+    buf.putInt(spellId)
+    buf.putInt(scribing)
+    buf.array()
+
+  /** Decode MemorizeSpell_Struct (12 bytes): slot(uint32) + spell_id(uint32) + scribing(uint32).
+    * Returns (bookSlot, spellId, scribing).
+    */
+  def decodeMemorizeSpell(data: Array[Byte]): Option[(Int, Int, Int)] =
+    if data.length < 12 then return None
+    val buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
+    val slot = buf.getInt()
+    val spellId = buf.getInt()
+    val scribing = buf.getInt()
+    Some((slot, spellId, scribing))
+
+  /** Decode InterruptCast_Struct: messageid(uint16) + color(uint16) + message(char[0]).
+    * messageid is an eqstr_us.txt string table ID. color is a message type code.
+    * The message field is variable-length (often empty — the string table provides the text).
+    * Returns (messageid, color, message).
+    */
+  def decodeInterruptCast(data: Array[Byte]): Option[(Int, Int, String)] =
+    if data.length < 4 then return None
+    val buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
+    val messageid = buf.getShort() & 0xFFFF
+    val color = buf.getShort() & 0xFFFF
+    val message = if data.length > 4 then
+      val msgBytes = new Array[Byte](data.length - 4)
+      buf.get(msgBytes)
+      val end = msgBytes.indexOf(0.toByte)
+      new String(msgBytes, 0, if end >= 0 then end else msgBytes.length, StandardCharsets.US_ASCII)
+    else ""
+    Some((messageid, color, message))
+
   /** OP_LootRequest / OP_EndLootRequest: 2-byte uint16 corpse entity ID. */
   def encodeLootRequest(corpseId: Int): Array[Byte] =
     val buf = ByteBuffer.allocate(2).order(ByteOrder.LITTLE_ENDIAN)
@@ -743,10 +795,24 @@ object ZoneCodec:
     else None
 
   /** Decode OP_ManaChange: ManaUpdate_Struct (4 bytes). */
-  def decodeManaChange(data: Array[Byte]): Option[ManaChange] =
+  /** Decode OP_ManaUpdate: ManaUpdate_Struct (4 bytes).
+    * Fields: uint16 spawn_id, uint16 cur_mana.
+    */
+  def decodeManaUpdate(data: Array[Byte]): Option[ManaChange] =
     if data.length < 4 then return None
     val buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
     Some(ManaChange(buf.getShort() & 0xFFFF, buf.getShort() & 0xFFFF))
+
+  /** Decode OP_ManaChange: ManaChange_Struct (4 bytes).
+    * Fields: uint16 new_mana, uint16 spell_id.
+    * Self-only packet — no spawnId. The spell_id is the last spell cast (for spell bar re-enable).
+    */
+  def decodeManaChange(data: Array[Byte]): Option[ManaChange] =
+    if data.length < 4 then return None
+    val buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
+    val newMana = buf.getShort() & 0xFFFF
+    // second field is spell_id, not mana — ignore it here
+    Some(ManaChange(0, newMana))
 
   /** Decode OP_BeginCast: BeginCast_Struct (8 bytes). */
   def decodeBeginCast(data: Array[Byte]): Option[BeginCast] =
@@ -951,7 +1017,9 @@ object ZoneCodec:
     buf.getShort() // spell_id_unused
     val aTap = buf.getShort().toInt
     val aSpellId = buf.getShort() & 0xFFFF
-    Some(SpellAction(aTarget, aSource, aLevel, aInstrument, aForce, aPushHeading, aPushUpAngle, aType, aSpellId, aTap))
+    buf.get() // unknown32
+    val buffUnknown = buf.get() & 0xFF // 1 = cast begin, 4 = spell landed/success
+    Some(SpellAction(aTarget, aSource, aLevel, aInstrument, aForce, aPushHeading, aPushUpAngle, aType, aSpellId, aTap, buffUnknown))
 
   /** Decode OP_TimeOfDay: TimeOfDay_Struct (6 bytes). */
   def decodeTimeOfDay(data: Array[Byte]): Option[GameTime] =
@@ -1005,11 +1073,15 @@ object ZoneCodec:
     val fatigue = buf.get() & 0xFF     // uint8: fatigue (0–100)
     Some(StaminaInfo(food, water, fatigue))
 
-  /** Decode OP_Buff: SpellBuffFade_Struct (12 bytes).
+  /** Decode OP_Buff: SpellBuffFade_Struct (20 bytes).
+    * Server sends this for buff add/update (bufffade=0) and remove (bufffade=1).
+    * For removes, the server sends two packets: one with buff data + bufffade=1,
+    * then one with spellId=0xFFFF (SPELL_UNKNOWN) + bufffade=1.
     * Returns (slotIndex, SpellBuff). */
   def decodeBuff(data: Array[Byte]): Option[(Int, SpellBuff)] =
-    if data.length < 12 then return None
+    if data.length < 20 then return None
     val buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
+    buf.getShort() // entityid (unused — always the player)
     val buffType = buf.get() & 0xFF
     val bLevel = buf.get() & 0xFF
     val bardMod = buf.get() & 0xFF
@@ -1018,6 +1090,8 @@ object ZoneCodec:
     val duration = buf.getShort() & 0xFFFF
     val counters = buf.getShort() & 0xFFFF
     val slotId = buf.getShort() & 0xFFFF
+    buf.getShort() // unk14
+    val buffFade = buf.getInt() // 1=remove, 0=update/add
     Some((slotId, SpellBuff(buffType, bLevel, bardMod, spellId, duration, counters)))
 
   /** Decode OP_MoneyOnCorpse: moneyOnCorpseStruct (20 bytes).
@@ -1284,6 +1358,10 @@ object ZoneCodec:
     val itemType = ItemType.fromCode(itemTypeRaw).getOrElse(ItemType.Misc)
     val magic = buf.get() & 0xFF          // 0254
 
+    // Effect1 at offset 266 — spell ID for scroll items (Scroll.Effect in mac_structs.h)
+    buf.position(base + 266)
+    val effect1 = buf.getShort()          // 0266: scroll spell ID (int16)
+
     // Stackable at offset 0276 (inside common union)
     buf.position(base + 276)
     val stackable = buf.get()             // 0276: 1=stackable, 3=normal, 0=not stackable
@@ -1336,6 +1414,7 @@ object ZoneCodec:
       itemType = if common then itemType else ItemType.Misc,
       price = price,
       idFileNum = idFileNum,
+      scrollSpellId = if common then effect1.toInt else 0,
       bagSlots = bagSlots,
       bagSize = bagSize,
       bagWR = bagWR,

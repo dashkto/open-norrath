@@ -106,10 +106,74 @@ class TargetingSystem:
       glDisable(GL_BLEND)
     }
 
+  // --- Debug sphere for last confirmed server position ---
+
+  private var sphereVao = 0
+  private var sphereVbo = 0
+  private var sphereInited = false
+  private val Segments = 16
+  // 3 rings × Segments line segments × 2 endpoints = 3 * Segments * 2 vertices
+  private val SphereVerts = 3 * Segments * 2
+  private val sphereBuf = BufferUtils.createFloatBuffer(SphereVerts * 3)
+
+  /** Draw a small wireframe sphere at the given world position (e.g., last server pos). */
+  def drawServerPosSphere(pos: Vector3f, shader: Shader, identity: Matrix4f): Unit =
+    if !sphereInited then
+      sphereVao = glGenVertexArrays()
+      sphereVbo = glGenBuffers()
+      glBindVertexArray(sphereVao)
+      glBindBuffer(GL_ARRAY_BUFFER, sphereVbo)
+      glBufferData(GL_ARRAY_BUFFER, SphereVerts.toLong * 3 * 4, GL_DYNAMIC_DRAW)
+      glVertexAttribPointer(0, 3, GL_FLOAT, false, 3 * 4, 0)
+      glEnableVertexAttribArray(0)
+      glBindVertexArray(0)
+      sphereInited = true
+
+    val cx = pos.x; val cy = pos.y; val cz = pos.z
+    val r = 0.5f
+
+    sphereBuf.clear()
+    for i <- 0 until Segments do
+      val a0 = (2 * Math.PI * i / Segments).toFloat
+      val a1 = (2 * Math.PI * ((i + 1) % Segments) / Segments).toFloat
+      val c0 = Math.cos(a0).toFloat; val s0 = Math.sin(a0).toFloat
+      val c1 = Math.cos(a1).toFloat; val s1 = Math.sin(a1).toFloat
+      // XZ ring (horizontal)
+      sphereBuf.put(cx + r * c0).put(cy).put(cz + r * s0)
+      sphereBuf.put(cx + r * c1).put(cy).put(cz + r * s1)
+      // XY ring (vertical, facing camera-ish)
+      sphereBuf.put(cx + r * c0).put(cy + r * s0).put(cz)
+      sphereBuf.put(cx + r * c1).put(cy + r * s1).put(cz)
+      // YZ ring (vertical, side)
+      sphereBuf.put(cx).put(cy + r * c0).put(cz + r * s0)
+      sphereBuf.put(cx).put(cy + r * c1).put(cz + r * s1)
+    sphereBuf.flip()
+
+    glBindBuffer(GL_ARRAY_BUFFER, sphereVbo)
+    glBufferSubData(GL_ARRAY_BUFFER, 0, sphereBuf)
+
+    glEnable(GL_BLEND)
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
+    glDisable(GL_DEPTH_TEST)
+    shader.setMatrix4f("model", identity)
+    glVertexAttrib3f(2, 1f, 0.2f, 0.2f) // red
+    shader.setFloat("alphaMultiplier", 0.6f)
+
+    glBindVertexArray(sphereVao)
+    glDrawArrays(GL_LINES, 0, SphereVerts)
+    glBindVertexArray(0)
+
+    shader.setFloat("alphaMultiplier", 1.0f)
+    glEnable(GL_DEPTH_TEST)
+    glDisable(GL_BLEND)
+
   def cleanup(): Unit =
     if hitboxInited then
       glDeleteBuffers(hitboxVbo)
       glDeleteVertexArrays(hitboxVao)
+    if sphereInited then
+      glDeleteBuffers(sphereVbo)
+      glDeleteVertexArrays(sphereVao)
 
   private def rayAABBIntersect(origin: Vector3f, dir: Vector3f,
                                minX: Float, minY: Float, minZ: Float,

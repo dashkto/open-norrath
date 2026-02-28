@@ -131,6 +131,21 @@ class AnimatedCharacter(
       Matrix4f(AnimatedCharacter.glToS3dMatrix).mul(cachedBoneTransforms(idx))
     }
 
+  /** GL world-space position for a named attachment point suffix (e.g., "R_POINT").
+    * Matches bones ending with the suffix (keys are full names like "HUMR_POINT").
+    * Used for spawning particles at bone locations. Returns None if bone not found
+    * or transforms haven't been computed yet.
+    */
+  def attachmentWorldPosition(suffix: String): Option[Vector3f] =
+    if cachedBoneTransforms == null then return None
+    // Keys are full bone names (e.g., "HUMR_POINT"); match by endsWith like equipment does
+    attachBoneIndices.collectFirst { case (key, idx) if key.endsWith(suffix) => idx }.map { idx =>
+      // modelMatrix × cachedBoneTransforms[idx] gives GL world-space;
+      // cachedBoneTransforms already have s3dToGl baked in.
+      val world = Matrix4f(modelMatrix).mul(cachedBoneTransforms(idx))
+      world.getTranslation(Vector3f())
+    }
+
   def play(code: String, playReverse: Boolean = false): Unit =
     clips.get(code).foreach { clip =>
       // Snapshot current raw bone transforms for cross-fade blending.

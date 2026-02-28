@@ -4,6 +4,7 @@ import org.joml.Vector3f
 import opennorrath.Game
 import opennorrath.animation.AnimCode
 import opennorrath.network.{InventoryItem, ItemType, PlayerProfileData, SpellBuff, ZoneEvent}
+import opennorrath.ui.SpellData
 import opennorrath.world.{Physics, ZoneCollision}
 
 /** Runtime state for the player's character while in a zone.
@@ -242,13 +243,47 @@ class PlayerCharacter(
   /** Known spells from the spell book. */
   val spellBook: scala.collection.mutable.ArrayBuffer[Int] = scala.collection.mutable.ArrayBuffer.empty
 
+  /** Memorized spell gem slots (8 slots, -1 = empty). Index = gem slot 0-7. */
+  val memSpells: Array[Int] = Array.fill(8)(-1)
+
   /** Active buffs — up to 15 slots. Slot index → SpellBuff. */
   val buffs: scala.collection.mutable.Map[Int, SpellBuff] = scala.collection.mutable.Map.empty
 
   def loadBuffs(initial: Array[SpellBuff]): Unit =
     buffs.clear()
     for (buff, i) <- initial.zipWithIndex do
-      buffs(i) = buff
+      if buff.spellId > 0 && buff.spellId != 0xFFFF then
+        buffs(i) = buff
+
+  /** Accumulator for client-side buff duration tick-down (1 tick = 6 seconds). */
+  private var buffTickAccum: Float = 0f
+
+  /** Refresh a buff's duration when the same spell lands on us again.
+    * The server doesn't send OP_Buff for same-caster refreshes — the client
+    * resets the duration from the OP_Action (spell landed) packet.
+    * Server adds +1 extraTick; we include that here to match server state.
+    */
+  def refreshBuff(spellId: Int, casterLevel: Int): Unit =
+    val newDuration = SpellData.calcBuffDuration(spellId, casterLevel) + 1 // +1 extraTick
+    if newDuration <= 1 then return // not a buff spell
+    buffs.find(_._2.spellId == spellId) match
+      case Some((slot, buff)) =>
+        buff.duration = newDuration
+        buffTickAccum = 0f // reset tick accumulator to sync with server
+      case None => // buff not in our list yet — it will come via profile or OP_Buff later
+
+  /** Tick down buff durations client-side. Call once per frame with delta time. */
+  def tickBuffs(dt: Float): Unit =
+    buffTickAccum += dt
+    if buffTickAccum >= 6f then
+      val ticks = (buffTickAccum / 6f).toInt
+      buffTickAccum -= ticks * 6f
+      val expired = scala.collection.mutable.ArrayBuffer.empty[Int]
+      for (slot, buff) <- buffs do
+        if buff.duration > 0 then
+          buff.duration -= ticks
+          if buff.duration <= 0 then expired += slot
+      expired.foreach(buffs.remove)
 
   // Consume_Struct type field (different from ItemType enum)
   private val ConsumeFood  = 1
@@ -350,6 +385,14 @@ class PlayerCharacter(
     case ZoneEvent.BuffUpdated(slot, buff) =>
       if buff.spellId == 0xFFFF then buffs.remove(slot)
       else buffs(slot) = buff
+    case ZoneEvent.SpellActionTriggered(action) =>
+      // buffUnknown == 4 means spell landed. If it's a beneficial spell targeting us,
+      // refresh the buff duration. The server doesn't send OP_Buff for same-caster
+      // refreshes — the client must reset duration from OP_Action.
+      val myId = Game.zoneSession.map(_.client.mySpawnId).getOrElse(-1)
+      if action.buffUnknown == 4 && action.targetId == myId && action.spellId > 0
+         && SpellData.isBeneficial(action.spellId) then
+        refreshBuff(action.spellId, action.level)
     case _ => ()
   }
 
@@ -367,4 +410,5 @@ object PlayerCharacter:
     pc.thirstLevel = pp.thirstLevel
     pc.loadBuffs(pp.buffs)
     pc.spellBook ++= pp.spellBook
+    pp.memSpells.copyToArray(pc.memSpells)
     pc

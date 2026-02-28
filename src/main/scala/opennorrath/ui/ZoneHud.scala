@@ -15,6 +15,7 @@ class ZoneHud(ctx: GameContext, characters: scala.collection.Map[Int, ZoneCharac
   private var charInfoPanel: Option[CharacterInfoPanel] = None
   private var buffPanel: Option[BuffPanel] = None
   private var spellBookPanel: Option[SpellBookPanel] = None
+  private var spellBarPanel: Option[SpellBarPanel] = None
   private val escapeMenu = EscapeMenu(ctx)
   private var inventoryPanel: InventoryPanel = InventoryPanel()
   private var statsPanel: StatsPanel = StatsPanel()
@@ -49,6 +50,10 @@ class ZoneHud(ctx: GameContext, characters: scala.collection.Map[Int, ZoneCharac
     case ZoneEvent.GroupUpdated(members, leader) =>
       groupPanel.members = members
       groupPanel.leader = leader
+      // Clear invite once we're in a group
+      if members.nonEmpty then groupPanel.clearInvite()
+    case ZoneEvent.GroupInviteReceived(inviterName) =>
+      groupPanel.showInvite(inviterName)
     case _ => ()
 
   val lootListener: ZoneEvent => Unit =
@@ -69,6 +74,14 @@ class ZoneHud(ctx: GameContext, characters: scala.collection.Map[Int, ZoneCharac
       lootPanel.close()
     case _ => ()
 
+  val spellListener: ZoneEvent => Unit =
+    case ZoneEvent.SpellScribed(spellId, bookSlot) =>
+      player.foreach { pc =>
+        if !pc.spellBook.contains(spellId) then
+          pc.spellBook += spellId
+      }
+    case _ => ()
+
   val merchantListener: ZoneEvent => Unit =
     case ZoneEvent.MerchantOpened(open, items) =>
       // Look up merchant name from zone characters (displayName is cleaned: no trailing digits, _ → space)
@@ -86,6 +99,7 @@ class ZoneHud(ctx: GameContext, characters: scala.collection.Map[Int, ZoneCharac
     charInfoPanel = pc.map(CharacterInfoPanel(_))
     buffPanel = pc.map(BuffPanel(_))
     spellBookPanel = pc.map(SpellBookPanel(_))
+    spellBarPanel = pc.map(SpellBarPanel(_))
     inventoryPanel = InventoryPanel(pc)
     statsPanel = StatsPanel(pc)
     targetPanel.player = pc
@@ -94,12 +108,39 @@ class ZoneHud(ctx: GameContext, characters: scala.collection.Map[Int, ZoneCharac
     })
     eventHandler = ZoneEventHandler(chatPanel, characters, pc)
     pc.foreach(_.onSystemMessage = msg => chatPanel.addLine(msg))
+    // Give group panel access to target and player name for invite button
+    groupPanel.target = () => targetPanel.target
+    pc.foreach(p => groupPanel.playerName = p.name)
+    // Wire spell bar actions
+    spellBarPanel.foreach { bar =>
+      // Left-click gem → cast spell on current target
+      bar.onCastSpell = (gemSlot, spellId) =>
+        val targetId = targetPanel.target.map(_.spawnId).getOrElse(0)
+        Game.zoneSession.foreach(_.client.sendCastSpell(gemSlot, spellId, targetId))
+      // Drag spell onto gem → memorize (tell server so it persists across relogs)
+      bar.onMemorizeSpell = (gemSlot, spellId) =>
+        Game.zoneSession.foreach(_.client.sendMemorizeSpell(gemSlot, spellId))
+    }
+
+    // Wire spell scribing: right-click scroll → move to cursor → send OP_MemorizeSpell
+    inventoryPanel.onScribeSpell = (slot, spellId) =>
+      pc.foreach { p =>
+        val bookSlot = p.spellBook.size  // Next empty book slot
+        Game.zoneSession.foreach(_.client.sendScribeSpell(slot, spellId, bookSlot))
+      }
+
     Game.zoneSession.foreach { session =>
+      // Wire group invite/accept/decline to client methods
+      groupPanel.onAcceptInvite = name => session.client.acceptGroupInvite(name)
+      groupPanel.onDeclineInvite = name => session.client.declineGroupInvite(name)
+      groupPanel.onInvitePlayer = name => session.client.inviteToGroup(name)
+      groupPanel.onDisband = () => session.client.disbandGroup()
       session.client.addListener(eventHandler.listener)
       session.client.addListener(spawnRemovedListener)
       session.client.addListener(groupListener)
       session.client.addListener(lootListener)
       session.client.addListener(merchantListener)
+      session.client.addListener(spellListener)
       // Seed group from player profile (loaded before zone entry)
       session.client.profile.foreach { p =>
         if p.groupMembers.nonEmpty then
@@ -175,6 +216,8 @@ class ZoneHud(ctx: GameContext, characters: scala.collection.Map[Int, ZoneCharac
 
   /** Call each frame with the current delta time to keep the FPS counter updated. */
   def render(dt: Float = 0f): Unit =
+    // Tick down buff durations client-side (1 tick = 6 sec)
+    player.foreach(_.tickBuffs(dt))
     charInfoPanel.foreach(_.render())
     buffPanel.foreach(_.render())
     targetPanel.render()
@@ -182,6 +225,7 @@ class ZoneHud(ctx: GameContext, characters: scala.collection.Map[Int, ZoneCharac
     inventoryPanel.render()
     statsPanel.render()
     spellBookPanel.foreach(_.render())
+    spellBarPanel.foreach(_.render())
     lootPanel.render()
     merchantPanel.render()
     chatPanel.render()
@@ -223,4 +267,5 @@ class ZoneHud(ctx: GameContext, characters: scala.collection.Map[Int, ZoneCharac
       session.client.removeListener(groupListener)
       session.client.removeListener(lootListener)
       session.client.removeListener(merchantListener)
+      session.client.removeListener(spellListener)
     }

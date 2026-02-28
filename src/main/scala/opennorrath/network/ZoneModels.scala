@@ -286,7 +286,7 @@ case class SpellBuff(
   level: Int,             // Caster level
   bardModifier: Int,      // Instrument modifier
   spellId: Int,
-  duration: Int,          // Ticks remaining
+  var duration: Int,      // Ticks remaining (ticked down client-side, 1 tick = 6 sec)
   counters: Int,          // Rune/disease/poison counters
 )
 
@@ -350,6 +350,7 @@ case class SpellAction(
   actionType: Int,        // 231 for spells
   spellId: Int,
   tapAmount: Int,         // For lifetap spells
+  buffUnknown: Int,       // 1 = cast begin, 4 = spell landed/success
 )
 
 // =============================================================================
@@ -363,7 +364,10 @@ case class HPUpdate(
   maxHp: Int,
 )
 
-/** Mana update from OP_ManaChange. */
+/** Mana update from OP_ManaChange or OP_ManaUpdate.
+  * For OP_ManaChange (self-only): spawnId is 0, curMana is the new mana value.
+  * For OP_ManaUpdate: spawnId is the entity, curMana is the current mana.
+  */
 case class ManaChange(
   spawnId: Int,
   curMana: Int,
@@ -854,6 +858,7 @@ case class InventoryItem(
   itemType: ItemType = ItemType.OneHandSlash,  // EQ item type (from ItemType field at offset 253)
   price: Int = 0,          // Item price in copper (offset 192 in Item_Struct)
   idFileNum: Int = 0,      // IT number from IDFile (e.g., "IT27" → 27) — used for weapon model lookup
+  scrollSpellId: Int = 0,  // Spell ID for scroll items (Effect1 at offset 266 in Item_Struct)
   // Container fields (itemClass == 1 only; 0 for all other items)
   bagSlots: Int = 0,       // number of slots this bag has (4, 6, 8, or 10)
   bagSize: Int = 0,        // max item size the bag accepts (0=tiny..4=giant)
@@ -868,7 +873,9 @@ case class InventoryItem(
     else (slots & (1 << slotId)) != 0
 
 object InventoryItem:
-  // Equipment slot constants (Mac client slot IDs)
+  // Equipment slot constants (Mac client slot IDs).
+  // In the Mac client, slot 0 is the cursor — there is no separate charm slot.
+  val Cursor    = 0
   val Charm     = 0
   val EarL      = 1
   val Head      = 2

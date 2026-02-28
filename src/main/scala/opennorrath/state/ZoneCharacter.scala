@@ -26,7 +26,11 @@ class ZoneCharacter(
   var animation: Int = 0,
 ):
   // --- Spawn delegates ---
-  def spawnId: Int = spawn.spawnId
+  /** Effective spawn ID. Overridden for the self-spawn where mySpawnId differs from
+    * the ZoneEntry spawnId (see ZoneScreen self-spawn setup).
+    */
+  var overrideSpawnId: Option[Int] = None
+  def spawnId: Int = overrideSpawnId.getOrElse(spawn.spawnId)
   def name: String = spawn.name
   def lastName: String = spawn.lastName
   def race: Int = spawn.race
@@ -158,6 +162,9 @@ class ZoneCharacter(
   /** Authoritative server position — we smoothly interpolate `position` toward this. */
   private val serverPos: Vector3f = Vector3f(position)
 
+  /** Read-only access to the last confirmed server position (for debug visualization). */
+  def lastServerPos: Vector3f = serverPos
+
   def hpFraction: Float =
     if maxHp > 0 then math.max(0f, math.min(1f, curHp.toFloat / maxHp.toFloat)) else 1f
 
@@ -202,16 +209,21 @@ class ZoneCharacter(
       ((h % 256) + 256) % 256
     else heading
 
-  /** Advance position along velocity or correct toward server position.
-    * When moving, purely extrapolates along velocity — correcting toward serverPos
-    * while moving causes convergence then snap, because serverPos is already stale
-    * by the time we receive it. When stopped, smoothly slides to the final position.
+  /** Blend position toward the extrapolated server position: serverPos + velocity × elapsed.
+    * This corrects toward where the entity *should* be right now (not where it was when the
+    * last update arrived). Prevents drift without rubber-banding backward toward a stale pos.
+    * When stopped, blends directly toward serverPos (the final resting position).
     */
   def interpolate(dt: Float): Unit =
     if moving then
-      position.x += velocity.x * dt
-      position.y += velocity.y * dt
-      position.z += velocity.z * dt
+      val elapsed = (System.nanoTime() - lastUpdateNanos) / 1e9f
+      val targetX = serverPos.x + velocity.x * elapsed
+      val targetY = serverPos.y + velocity.y * elapsed
+      val targetZ = serverPos.z + velocity.z * elapsed
+      val t = Math.min(5f * dt, 1f)
+      position.x += (targetX - position.x) * t
+      position.y += (targetY - position.y) * t
+      position.z += (targetZ - position.z) * t
     else
       val t = Math.min(20f * dt, 1f)
       position.x += (serverPos.x - position.x) * t

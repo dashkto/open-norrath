@@ -42,16 +42,19 @@ class SpellEffectSystem:
   private val presetForce  = EffectPreset(1.0f, 1.0f, 1.0f, 0.8f, 0.8f, 1.0f, 25, 22f, 0.6f, 1.0f, 0.8f, 7f,  1.0f)
   private val presetDefault = EffectPreset(0.9f, 0.9f, 1.0f, 0.5f, 0.5f, 0.7f, 15, 14f, 0.8f, 1.2f, 1.0f, 4f, 1.5f)
 
-  private def presetForEffect(effectName: String): EffectPreset =
-    val name = effectName.toLowerCase
-    if name.contains("heal") || name.contains("resto") || name.contains("cure") then presetHeal
-    else if name.contains("fire") || name.contains("flame") || name.contains("burn") || name.contains("immolat") then presetFire
-    else if name.contains("ice") || name.contains("frost") || name.contains("chill") || name.contains("hail") then presetIce
-    else if name.contains("fear") || name.contains("darkness") || name.contains("dead") || name.contains("lich") then presetFear
-    else if name.contains("poison") || name.contains("disease") || name.contains("crud") || name.contains("slime") || name.contains("venom") then presetPoison
-    else if name.contains("haste") || name.contains("clarity") || name.contains("breeze") || name.contains("rune") || name.contains("shield") then presetBuff
-    else if name.contains("force") || name.contains("blast") || name.contains("lightning") || name.contains("shock") then presetForce
-    else presetDefault
+  /** Pick a color preset based on the spell's resist type and beneficial flag.
+    * This uses actual spell data (field 85 = resistType, field 83 = goodEffect)
+    * rather than keyword-matching effect names.
+    */
+  private def presetForSpell(spellId: Int): EffectPreset =
+    if SpellData.isBeneficial(spellId) then presetBuff
+    else SpellData.resistType(spellId) match
+      case SpellData.ResistFire    => presetFire
+      case SpellData.ResistCold    => presetIce
+      case SpellData.ResistPoison  => presetPoison
+      case SpellData.ResistDisease => presetPoison // similar green tones
+      case SpellData.ResistMagic   => presetForce
+      case _                       => presetDefault
 
   // --- Active effects ---
 
@@ -60,6 +63,7 @@ class SpellEffectSystem:
     preset: EffectPreset,
     var age: Float,
     var spawnAccum: Float,
+    useAttachPoint: Boolean = false, // spawn particles at skeleton bone instead of feet
   )
 
   private val activeEffects = scala.collection.mutable.ArrayBuffer[ActiveEffect]()
@@ -73,10 +77,13 @@ class SpellEffectSystem:
     var r1: Float, var g1: Float, var b1: Float,
     var r2: Float, var g2: Float, var b2: Float,
     var alive: Boolean,
+    var implode: Boolean,   // converge toward target instead of drifting
+    var tx: Float, var ty: Float, var tz: Float, // target position for implode
+    var targetId: Int,      // spawnId to track for implode (0 = none)
   )
 
   private val particles = Array.fill(MaxParticles)(
-    Particle(0, 0, 0, 0, 0, 0, 0, 1, 2, 1, 1, 1, 1, 1, 1, alive = false)
+    Particle(0, 0, 0, 0, 0, 0, 0, 1, 2, 1, 1, 1, 1, 1, 1, alive = false, implode = false, 0, 0, 0, 0)
   )
 
   private val vertexData = new Array[Float](MaxParticles * 4 * 8)
@@ -97,10 +104,16 @@ class SpellEffectSystem:
   // --- Public API ---
 
   def trigger(spawnId: Int, spellId: Int): Unit =
-    val animIdx = SpellData.spellAnim(spellId)
-    val effName = SpellData.effectName(animIdx)
-    val preset = presetForEffect(effName)
-    activeEffects += ActiveEffect(spawnId, preset, age = 0f, spawnAccum = 0f)
+    // Skip landing effect if this entity already has an active casting effect —
+    // the server sends both OP_BeginCast and OP_Action for the caster
+    if activeEffects.exists(e => e.spawnId == spawnId && e.useAttachPoint) then return
+    val base = presetForSpell(spellId)
+    // Landing effect: many small particles imploding inward
+    val landPreset = base.copy(
+      spawnRate = base.spawnRate * 3f,
+      size = base.size * 0.4f,
+    )
+    activeEffects += ActiveEffect(spawnId, landPreset, age = 0f, spawnAccum = 0f)
 
   /** Start a casting particle effect on the caster for the given duration.
     * Uses a gentler version of the spell's preset — fewer particles, slower,
@@ -108,9 +121,7 @@ class SpellEffectSystem:
     */
   def triggerCast(casterId: Int, spellId: Int, castTimeMs: Int): Unit =
     if castTimeMs <= 0 then return
-    val animIdx = SpellData.spellAnim(spellId)
-    val effName = SpellData.effectName(animIdx)
-    val base = presetForEffect(effName)
+    val base = presetForSpell(spellId)
     // Gentler casting version: fewer particles, longer lifetime, smaller
     val castPreset = base.copy(
       particleCount = (base.particleCount * 0.4f).toInt.max(5),
@@ -119,13 +130,25 @@ class SpellEffectSystem:
       velocityY = base.velocityY * 0.5f,
       effectDuration = castTimeMs / 1000f,
     )
-    activeEffects += ActiveEffect(casterId, castPreset, age = 0f, spawnAccum = 0f)
+    activeEffects += ActiveEffect(casterId, castPreset, age = 0f, spawnAccum = 0f, useAttachPoint = true)
 
   def update(dt: Float, viewMatrix: Matrix4f, characters: scala.collection.Map[Int, ZoneCharacter]): Unit =
     // Age and kill particles
     for p <- particles if p.alive do
       p.life -= dt
       if p.life <= 0 then p.alive = false
+      else if p.implode then
+        // Track target's current position so particles follow a moving target
+        if p.targetId != 0 then
+          characters.get(p.targetId).foreach { zc =>
+            p.tx = zc.position.x; p.ty = zc.position.y + 1f; p.tz = zc.position.z
+          }
+        // Lerp toward target — t goes 0→1 over lifetime
+        val t = 1f - (p.life / p.maxLife).min(1f)
+        val ease = t * t // accelerate as they get closer
+        p.x = lerp(p.vx, p.tx, ease) // vx/vy/vz store the start position for implode
+        p.y = lerp(p.vy, p.ty, ease)
+        p.z = lerp(p.vz, p.tz, ease)
       else
         p.x += p.vx * dt
         p.y += p.vy * dt
@@ -142,9 +165,18 @@ class SpellEffectSystem:
       else
         characters.get(eff.spawnId).foreach { zc =>
           eff.spawnAccum += dt * eff.preset.spawnRate
-          while eff.spawnAccum >= 1f do
-            eff.spawnAccum -= 1f
-            spawnParticle(zc.position, eff.preset)
+          if eff.useAttachPoint && zc.hasRendering then
+            val rPos = zc.animChar.attachmentWorldPosition("R_POINT").getOrElse(zc.position)
+            val lPos = zc.animChar.attachmentWorldPosition("L_POINT")
+            while eff.spawnAccum >= 1f do
+              eff.spawnAccum -= 1f
+              spawnParticleExact(rPos, eff.preset)
+              lPos.foreach(spawnParticleExact(_, eff.preset))
+          else
+            val pos = zc.position
+            while eff.spawnAccum >= 1f do
+              eff.spawnAccum -= 1f
+              spawnParticleImplode(pos, eff.preset, eff.spawnId)
         }
 
     // Remove expired effects (iterate in reverse)
@@ -171,6 +203,49 @@ class SpellEffectSystem:
 
   // --- Internals ---
 
+  /** Spawn a floaty particle at the given position (casting hands). */
+  private def spawnParticleExact(pos: Vector3f, preset: EffectPreset): Unit =
+    val slot = particles.indexWhere(!_.alive)
+    if slot < 0 then return
+    val p = particles(slot)
+    p.x = pos.x; p.y = pos.y; p.z = pos.z
+    // Gentle float upward with slight random wander
+    p.vx = (rng.nextFloat() - 0.5f) * 0.3f
+    p.vy = preset.velocityY * 0.5f + rng.nextFloat() * 0.5f
+    p.vz = (rng.nextFloat() - 0.5f) * 0.3f
+    val life = preset.lifetime * 1.5f
+    p.life = life; p.maxLife = life
+    p.baseSize = preset.size * 0.5f
+    p.r1 = preset.r1; p.g1 = preset.g1; p.b1 = preset.b1
+    p.r2 = preset.r2; p.g2 = preset.g2; p.b2 = preset.b2
+    p.alive = true; p.implode = false
+
+  /** Spawn a particle on a sphere around the target that converges inward (landing). */
+  private def spawnParticleImplode(pos: Vector3f, preset: EffectPreset, spawnId: Int): Unit =
+    val slot = particles.indexWhere(!_.alive)
+    if slot < 0 then return
+    val p = particles(slot)
+    // Random point on a sphere of radius ~spread*2, centered 1 unit above feet
+    val radius = preset.spread * 2f + rng.nextFloat() * preset.spread
+    val theta = rng.nextFloat() * 2f * math.Pi.toFloat
+    val phi = math.acos(1f - 2f * rng.nextFloat()).toFloat
+    val sx = radius * math.sin(phi).toFloat * math.cos(theta).toFloat
+    val sy = radius * math.sin(phi).toFloat * math.sin(theta).toFloat
+    val sz = radius * math.cos(phi).toFloat
+    // Start position on sphere
+    p.x = pos.x + sx; p.y = pos.y + 1f + sy; p.z = pos.z + sz
+    // Store start position in velocity fields (reused as lerp origin for implode)
+    p.vx = p.x; p.vy = p.y; p.vz = p.z
+    // Target is model center (slightly above feet)
+    p.tx = pos.x; p.ty = pos.y + 1f; p.tz = pos.z
+    val life = preset.lifetime * (0.8f + rng.nextFloat() * 0.4f)
+    p.life = life; p.maxLife = life
+    p.baseSize = preset.size * (0.2f + rng.nextFloat() * 0.2f)
+    p.r1 = preset.r1; p.g1 = preset.g1; p.b1 = preset.b1
+    p.r2 = preset.r2; p.g2 = preset.g2; p.b2 = preset.b2
+    p.alive = true; p.implode = true; p.targetId = spawnId
+
+  /** Spawn a particle with random spread (general purpose). */
   private def spawnParticle(pos: Vector3f, preset: EffectPreset): Unit =
     val slot = particles.indexWhere(!_.alive)
     if slot < 0 then return
@@ -188,7 +263,7 @@ class SpellEffectSystem:
     p.baseSize = preset.size * (0.7f + rng.nextFloat() * 0.6f)
     p.r1 = preset.r1; p.g1 = preset.g1; p.b1 = preset.b1
     p.r2 = preset.r2; p.g2 = preset.g2; p.b2 = preset.b2
-    p.alive = true
+    p.alive = true; p.implode = false
 
   private def buildVertices(viewMatrix: Matrix4f): Unit =
     val right = Vector3f(viewMatrix.m00(), viewMatrix.m10(), viewMatrix.m20())

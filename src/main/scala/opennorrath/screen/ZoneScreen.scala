@@ -321,6 +321,7 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
       val myId = zc.mySpawnId
       selfSpawn.foreach { s =>
         ZoneCharacter.fromSpawn(s).foreach { playerZc =>
+          playerZc.overrideSpawnId = Some(myId)
           zoneCharacters(myId) = playerZc
           zone.initSpawnRendering(playerZc)
           val (fo, mh) = zone.modelMetrics(playerZc.modelCode, playerZc.size)
@@ -575,9 +576,10 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
     // Zone line sphere debug wireframes
     zone.drawZoneLineSpheres(shader)
 
-    // Target hitbox wireframe
+    // Target hitbox wireframe + server position debug sphere
     hud.target.foreach { zc =>
       targeting.drawTargetHitbox(zc.spawnId, shader, model, zone.spawnHitData)
+      targeting.drawServerPosSphere(zc.lastServerPos, shader, model)
     }
 
     // Spell particle effects (additive blending, before nameplates)

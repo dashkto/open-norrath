@@ -12,7 +12,7 @@ import org.lwjgl.opengl.GL11.*
 import org.lwjgl.system.MemoryUtil.NULL
 
 import opennorrath.screen.{GameContext, SplashScreen, ZoneScreen}
-import opennorrath.ui.{EqStringTable, Fonts, ImGuiTheme, ItemIcons, SpellData}
+import opennorrath.ui.{EqStringTable, Fonts, ImGuiTheme, ItemIcons, SpellData, SpellIcons}
 import opennorrath.world.{EquipmentModels, GlobalCharacters}
 
 object Main:
@@ -71,6 +71,7 @@ object Main:
     imGuiGl3.init("#version 330 core")
     ImGuiTheme.apply()
     ItemIcons.init("assets/EverQuest")
+    SpellIcons.init("assets/EverQuest")
     SpellData.init("assets/EverQuest")
     EqStringTable.init("assets/EverQuest")
     GlobalCharacters.init("assets/EverQuest")
@@ -87,6 +88,7 @@ object Main:
     EquipmentModels.cleanup()
     GlobalCharacters.cleanup()
     ItemIcons.cleanup()
+    SpellIcons.cleanup()
     imGuiGl3.shutdown()
     imGuiGlfw.shutdown()
     ImGui.destroyContext()

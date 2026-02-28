@@ -69,6 +69,10 @@ enum ZoneEvent:
   case InventoryItemUpdated(item: InventoryItem)
   case InventoryMoved(fromSlot: Int, toSlot: Int)
 
+  // Spells — spell book updates
+  case SpellScribed(spellId: Int, bookSlot: Int)
+  case SpellInterrupted(messageId: Int, color: Int, message: String)
+
   // Buffs — UI buff panel
   case BuffsLoaded(buffs: Array[SpellBuff])
   case BuffUpdated(slot: Int, buff: SpellBuff)
@@ -268,6 +272,35 @@ class ZoneClient extends PacketHandler:
     */
   def sendConsume(slot: Int, itemType: Int): Unit =
     queueAppPacket(ZoneOpcodes.Consume, ZoneCodec.encodeConsume(slot, itemType))
+
+  /** Memorize a spell into a gem slot. Called from game thread.
+    * Sends OP_MemorizeSpell with scribing=1 so the server persists the gem assignment.
+    */
+  def sendMemorizeSpell(gemSlot: Int, spellId: Int): Unit =
+    if state == ZoneState.InZone then
+      queueAppPacket(ZoneOpcodes.MemorizeSpell,
+        ZoneCodec.encodeMemorizeSpell(gemSlot, spellId, 1))
+
+  /** Cast a memorized spell from a gem slot. Called from game thread.
+    * @param gemSlot  gem slot 0-7
+    * @param spellId  spell ID memorized in that slot
+    * @param targetId spawn ID of the target (0 for self/untargeted)
+    */
+  def sendCastSpell(gemSlot: Int, spellId: Int, targetId: Int): Unit =
+    if state == ZoneState.InZone then
+      queueAppPacket(ZoneOpcodes.CastSpell, ZoneCodec.encodeCastSpell(gemSlot, spellId, targetId))
+
+  /** Scribe a spell scroll into the spell book. Called from game thread.
+    * Moves the scroll to cursor (slot 0), then sends OP_MemorizeSpell with scribing=0.
+    * The server checks cursor for the scroll, validates Effect == spellId, scribes, and deletes it.
+    */
+  def sendScribeSpell(scrollSlot: Int, spellId: Int, bookSlot: Int): Unit =
+    if state == ZoneState.InZone then
+      // Step 1: Move scroll to cursor (server expects scroll on cursor for scribing)
+      sendMoveItem(scrollSlot, InventoryItem.Cursor)
+      // Step 2: Send OP_MemorizeSpell with scribing=0 (scribe)
+      queueAppPacket(ZoneOpcodes.MemorizeSpell,
+        ZoneCodec.encodeMemorizeSpell(bookSlot, spellId, 0))
 
   // Merchant state — tracks whether we're waiting for shop inventory
   private var pendingMerchant: Option[MerchantOpen] = None
@@ -480,13 +513,34 @@ class ZoneClient extends PacketHandler:
       case ZoneOpcodes.BeginCast =>
         ZoneCodec.decodeBeginCast(pkt.payload).foreach(c => emit(ZoneEvent.BeginCastTriggered(c)))
 
+      case ZoneOpcodes.MemorizeSpell =>
+        // Server echoes MemorizeSpell_Struct back to confirm scribing/memorization.
+        // scribing=0 means a spell was scribed into the book at the given slot.
+        ZoneCodec.decodeMemorizeSpell(pkt.payload).foreach { (bookSlot, spellId, scribing) =>
+          if scribing == 0 && spellId > 0 then
+            println(s"[Zone] Spell $spellId scribed into book slot $bookSlot")
+            emit(ZoneEvent.SpellScribed(spellId, bookSlot))
+        }
+
+      case ZoneOpcodes.InterruptCast =>
+        // Server sends when a spell cast is interrupted (fizzle, stun, movement, etc.)
+        // messageid is an eqstr_us.txt string ID; color is a MT_* message type code
+        ZoneCodec.decodeInterruptCast(pkt.payload).foreach { (messageId, color, message) =>
+          emit(ZoneEvent.SpellInterrupted(messageId, color, message))
+        }
+
       // --- Stats ---
 
       case ZoneOpcodes.HPUpdate =>
         ZoneCodec.decodeHPUpdate(pkt.payload).foreach(hp => emit(ZoneEvent.HPChanged(hp)))
 
-      case ZoneOpcodes.ManaChange | ZoneOpcodes.ManaUpdate =>
+      case ZoneOpcodes.ManaChange =>
+        // Self-only: ManaChange_Struct has (new_mana, spell_id) — no spawnId
         ZoneCodec.decodeManaChange(pkt.payload).foreach(m => emit(ZoneEvent.ManaChanged(m)))
+
+      case ZoneOpcodes.ManaUpdate =>
+        // ManaUpdate_Struct has (spawn_id, cur_mana)
+        ZoneCodec.decodeManaUpdate(pkt.payload).foreach(m => emit(ZoneEvent.ManaChanged(m)))
 
       case ZoneOpcodes.ExpUpdate =>
         ZoneCodec.decodeExpUpdate(pkt.payload).foreach(e => emit(ZoneEvent.ExpChanged(e)))
@@ -680,9 +734,8 @@ class ZoneClient extends PacketHandler:
       case ZoneOpcodes.SafePoint => ()
 
       case ZoneOpcodes.Buff =>
-        ZoneCodec.decodeBuff(pkt.payload).foreach { (slot, buff) =>
-          emit(ZoneEvent.BuffUpdated(slot, buff))
-        }
+        ZoneCodec.decodeBuff(pkt.payload).foreach((slot, buff) =>
+          emit(ZoneEvent.BuffUpdated(slot, buff)))
 
       case ZoneOpcodes.LogoutReply =>
         println("[Zone] Received OP_LogoutReply — camp complete")
