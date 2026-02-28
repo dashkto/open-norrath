@@ -1,7 +1,7 @@
 package opennorrath.ui
 
 import opennorrath.Game
-import opennorrath.network.{ChatMessage, FormattedMessage, SpecialMessage, SpawnAppearanceChange, ZoneEvent}
+import opennorrath.network.{ChatMessage, FormattedMessage, MessageType, SpecialMessage, SpawnAppearanceChange, ZoneEvent}
 import opennorrath.state.{PlayerCharacter, ZoneCharacter}
 
 /** Processes ZoneClient events — routes messages to the text panel
@@ -9,7 +9,6 @@ import opennorrath.state.{PlayerCharacter, ZoneCharacter}
   */
 class ZoneEventHandler(chatPanel: TextPanel, characters: scala.collection.Map[Int, ZoneCharacter], player: Option[PlayerCharacter] = None):
 
-  private var seenFirstExp = false
   val listener: ZoneEvent => Unit = handle
 
   /** Send a chat message from the input field. Parses /commands. */
@@ -54,13 +53,19 @@ class ZoneEventHandler(chatPanel: TextPanel, characters: scala.collection.Map[In
       val name = spawnName(spawnId)
       chatPanel.addLine(s"$name yells for help!", Colors.coral)
 
-    case ZoneEvent.DamageDealt(info) =>
+    case ZoneEvent.DamageDealt(info) if info.sourceId != info.targetId || info.damage > 0 =>
       val src = spawnName(info.sourceId)
       val tgt = spawnName(info.targetId)
-      if info.damage == 0 then
-        chatPanel.addLine(s"$src tries to hit $tgt, but misses!", Colors.textDim)
-      else if info.damage > 0 then
-        chatPanel.addLine(s"$src hits $tgt for ${info.damage} points of damage.", Colors.text)
+      // EQEmu damage codes: 0=miss, -1=block, -2=parry, -3=dodge, -4=invulnerable, -5=riposte
+      info.damage match
+        case d if d > 0  => chatPanel.addLine(s"$src hits $tgt for $d points of damage.", Colors.text)
+        case 0           => chatPanel.addLine(s"$src tries to hit $tgt, but misses!", Colors.textDim)
+        case -1          => chatPanel.addLine(s"$tgt blocks the attack from $src!", Colors.textDim)
+        case -2          => chatPanel.addLine(s"$tgt parries the attack from $src!", Colors.textDim)
+        case -3          => chatPanel.addLine(s"$tgt dodges the attack from $src!", Colors.textDim)
+        case -4          => chatPanel.addLine(s"$src tries to hit $tgt, but $tgt is INVULNERABLE!", Colors.textDim)
+        case -5          => chatPanel.addLine(s"$tgt ripostes the attack from $src!", Colors.textDim)
+        case _           => () // Unknown negative — ignore
 
     case ZoneEvent.EntityDied(info) =>
       val who = spawnName(info.spawnId)
@@ -73,10 +78,7 @@ class ZoneEventHandler(chatPanel: TextPanel, characters: scala.collection.Map[In
       chatPanel.addLine(s"$tgt $factionStr", conColor(result.conLevel))
 
     case ZoneEvent.ExpChanged(_) =>
-      if seenFirstExp then
-        chatPanel.addLine("You gain experience!", Colors.gold)
-      else
-        seenFirstExp = true
+      () // Server sends its own "You gain experience" text via OP_SpecialMesg
 
     case ZoneEvent.LevelChanged(lvl) =>
       chatPanel.addLine(s"You have reached level ${lvl.level}!", Colors.gold)
@@ -162,28 +164,85 @@ class ZoneEventHandler(chatPanel: TextPanel, characters: scala.collection.Map[In
     case ChatMessage.GMSay   => Colors.gold
     case _                   => Colors.text
 
-  /** Map MT_* msg_type codes (from OP_SpecialMesg / OP_FormattedMessage) to display colors.
-    * Values from EQMacDocker/Server/common/eq_constants.h.
-    */
-  private def msgTypeColor(msgType: Int): (Float, Float, Float, Float) = msgType match
-    case 256     => Colors.text       // MT_Say
-    case 257     => Colors.violet     // MT_Tell
-    case 258     => Colors.secondary2 // MT_Group
-    case 259     => Colors.heal       // MT_Guild
-    case 260     => Colors.secondary  // MT_OOC
-    case 261     => Colors.heal       // MT_Auction
-    case 262     => Colors.coral      // MT_Shout
-    case 263     => Colors.rose       // MT_Emote
-    case 264     => Colors.teal       // MT_Spells
-    case 265 | 266 | 267 | 268 => Colors.text // MT_YouHitOther / OtherHitsYou / misses
-    case 269     => Colors.sky        // MT_Broadcasts
-    case 270     => Colors.teal       // MT_Skills
-    case 271     => Colors.amber      // MT_Disciplines
-    case 273     => Colors.text       // MT_DefaultText
-    case 275     => Colors.sand       // MT_MerchantOffer
-    case 301     => Colors.gold       // MT_CritMelee
-    case 302     => Colors.gold       // MT_SpellCrits
-    case _       => Colors.text
+  /** Map MT_* message types to display colors. */
+  private def msgTypeColor(msgType: Int): (Float, Float, Float, Float) =
+    messageTypeColor(MessageType.fromCode(msgType))
+
+  private def messageTypeColor(mt: MessageType): (Float, Float, Float, Float) = mt match
+    // Chat channels
+    case MessageType.Say              => Colors.text
+    case MessageType.Tell             => Colors.violet
+    case MessageType.Group            => Colors.secondary2
+    case MessageType.Guild            => Colors.heal
+    case MessageType.OOC              => Colors.secondary
+    case MessageType.Auction          => Colors.heal
+    case MessageType.Shout            => Colors.coral
+    case MessageType.Emote            => Colors.rose
+    // Combat & spells
+    case MessageType.Spells           => Colors.teal
+    case MessageType.YouHitOther      => Colors.text
+    case MessageType.OtherHitsYou     => Colors.text
+    case MessageType.YouMissOther     => Colors.text
+    case MessageType.OtherMissesYou   => Colors.text
+    case MessageType.Broadcasts       => Colors.sky
+    case MessageType.Skills           => Colors.teal
+    case MessageType.Disciplines      => Colors.amber
+    case MessageType.DefaultText      => Colors.text
+    case MessageType.MerchantOffer    => Colors.sand
+    case MessageType.MerchantBuySell  => Colors.sand
+    case MessageType.YourDeath        => Colors.danger
+    case MessageType.OtherDeath       => Colors.textDim
+    case MessageType.OtherHits        => Colors.text
+    case MessageType.OtherMisses      => Colors.textDim
+    case MessageType.Who              => Colors.text
+    case MessageType.YellForHelp      => Colors.coral
+    case MessageType.NonMelee         => Colors.text
+    case MessageType.WornOff          => Colors.teal
+    case MessageType.MoneySplit       => Colors.sand
+    case MessageType.LootMessages     => Colors.sand
+    case MessageType.DiceRoll         => Colors.text
+    case MessageType.OtherSpells      => Colors.teal
+    case MessageType.SpellFailure     => Colors.danger
+    // Custom chat channels
+    case MessageType.Chat | MessageType.Channel1 | MessageType.Channel2 | MessageType.Channel3 |
+         MessageType.Channel4 | MessageType.Channel5 | MessageType.Channel6 | MessageType.Channel7 |
+         MessageType.Channel8 | MessageType.Channel9 | MessageType.Channel10 => Colors.secondary
+    // Crits & special combat
+    case MessageType.CritMelee        => Colors.gold
+    case MessageType.SpellCrits       => Colors.gold
+    case MessageType.TooFarAway       => Colors.textDim
+    case MessageType.NPCRampage       => Colors.coral
+    case MessageType.NPCFlurry        => Colors.coral
+    case MessageType.NPCEnrage        => Colors.danger
+    // Echo channels — your own messages echoed back
+    case MessageType.SayEcho          => Colors.text
+    case MessageType.TellEcho         => Colors.violet
+    case MessageType.GroupEcho        => Colors.secondary2
+    case MessageType.GuildEcho        => Colors.heal
+    case MessageType.OOCEcho          => Colors.secondary
+    case MessageType.AuctionEcho      => Colors.heal
+    case MessageType.ShoutEcho        => Colors.coral
+    case MessageType.EmoteEcho        => Colors.rose
+    case MessageType.Chat1Echo | MessageType.Chat2Echo | MessageType.Chat3Echo | MessageType.Chat4Echo |
+         MessageType.Chat5Echo | MessageType.Chat6Echo | MessageType.Chat7Echo | MessageType.Chat8Echo |
+         MessageType.Chat9Echo | MessageType.Chat10Echo => Colors.secondary
+    // DoTs, pets, misc
+    case MessageType.DoTDamage        => Colors.danger
+    case MessageType.ItemLink         => Colors.secondary
+    case MessageType.RaidSay          => Colors.secondary2
+    case MessageType.MyPet            => Colors.teal
+    case MessageType.DamageShield     => Colors.text
+    case MessageType.Leadership       => Colors.amber
+    case MessageType.PetFlurry        => Colors.coral
+    case MessageType.PetCrit          => Colors.gold
+    case MessageType.FocusEffect      => Colors.teal
+    case MessageType.Experience       => Colors.gold
+    case MessageType.System           => Colors.sky
+    case MessageType.PetSpell         => Colors.teal
+    case MessageType.PetResponse      => Colors.teal
+    case MessageType.ItemSpeech       => Colors.sand
+    case MessageType.StrikeThrough    => Colors.gold
+    case MessageType.Stun             => Colors.amber
 
   // ===========================================================================
   // Input parsing

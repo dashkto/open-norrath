@@ -3,7 +3,7 @@ package opennorrath.state
 import org.joml.Vector3f
 import opennorrath.Game
 import opennorrath.animation.AnimCode
-import opennorrath.network.{InventoryItem, PlayerProfileData, SpellBuff, ZoneEvent}
+import opennorrath.network.{InventoryItem, ItemType, PlayerProfileData, SpellBuff, ZoneEvent}
 import opennorrath.world.{Physics, ZoneCollision}
 
 /** Runtime state for the player's character while in a zone.
@@ -250,19 +250,14 @@ class PlayerCharacter(
     for (buff, i) <- initial.zipWithIndex do
       buffs(i) = buff
 
-  // Item type constants from EQEmu's item_data.h
-  private val ItemTypeFood  = 14
-  private val ItemTypeDrink = 15
-  // Consume_Struct type field (different from ItemType)
+  // Consume_Struct type field (different from ItemType enum)
   private val ConsumeFood  = 1
   private val ConsumeDrink = 2
   // Server auto-eat threshold: below 3000 = hungry/thirsty
   private val HungryThreshold = 3000
 
-  /** Find first food or drink item in inventory (general slots + bags).
-    * @param wantType ItemTypeFood (14) or ItemTypeDrink (15)
-    */
-  private def findConsumable(wantType: Int): Option[InventoryItem] =
+  /** Find first food or drink item in inventory (general slots + bags). */
+  private def findConsumable(wantType: ItemType): Option[InventoryItem] =
     allItems.find(_.itemType == wantType)
 
   /** Decrement an item's charges by 1, removing it entirely if depleted. */
@@ -284,19 +279,30 @@ class PlayerCharacter(
   private def autoConsume(): Unit =
     Game.zoneSession.foreach { session =>
       if hungerLevel < HungryThreshold then
-        findConsumable(ItemTypeFood).foreach { food =>
+        findConsumable(ItemType.Food).foreach { food =>
           println(s"[AutoEat] Eating '${food.name}' from slot ${food.equipSlot} (hunger=$hungerLevel)")
           session.client.sendConsume(food.equipSlot, ConsumeFood)
           onSystemMessage(s"You ate a ${food.name}.")
           decrementItem(food)
         }
       if thirstLevel < HungryThreshold then
-        findConsumable(ItemTypeDrink).foreach { drink =>
+        findConsumable(ItemType.Drink).foreach { drink =>
           println(s"[AutoEat] Drinking '${drink.name}' from slot ${drink.equipSlot} (thirst=$thirstLevel)")
           session.client.sendConsume(drink.equipSlot, ConsumeDrink)
           onSystemMessage(s"You drank a ${drink.name}.")
           decrementItem(drink)
         }
+    }
+
+  /** Move bag content items in allItems from one general slot's range to another's. */
+  private def relocateAllItemsBagContents(oldGeneral: Int, newGeneral: Int): Unit =
+    val oldBase = 250 + (oldGeneral - 22) * 10
+    val newBase = 250 + (newGeneral - 22) * 10
+    allItems = allItems.map { item =>
+      val offset = item.equipSlot - oldBase
+      if offset >= 0 && offset < 10 then
+        item.copy(equipSlot = newBase + offset)
+      else item
     }
 
   /** ZoneClient event listener — handles stat and inventory updates. */
@@ -330,6 +336,14 @@ class PlayerCharacter(
         allItems = allItems.filterNot(i => i.equipSlot == from || i.equipSlot == to)
         fromItem.foreach(i => allItems = allItems :+ i.copy(equipSlot = to))
         toItem.foreach(i => allItems = allItems :+ i.copy(equipSlot = from))
+
+        // When a bag moves between general slots, relocate its content items in allItems too
+        val isGeneral = (s: Int) => s >= 22 && s <= 29
+        if isGeneral(from) && isGeneral(to) then
+          relocateAllItemsBagContents(from, to)
+          if toItem.exists(_.isBag) then
+            relocateAllItemsBagContents(to, from)
+
       inventory.swap(from, to)
     case ZoneEvent.BuffsLoaded(initial) =>
       loadBuffs(initial)

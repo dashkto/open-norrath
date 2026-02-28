@@ -73,6 +73,7 @@ class SplashScreen(ctx: GameContext, zonePath: String) extends Screen:
     // Shadow map pre-pass
     glEnable(GL_DEPTH_TEST)
     glDisable(GL_BLEND)
+    zone.updateCharacterVisibility(camera.position)
     zone.shadowMap.bind()
     zone.drawShadowPass(shadowShader)
     zone.shadowMap.unbind(ctx.windowWidth, ctx.windowHeight)

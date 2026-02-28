@@ -3,6 +3,11 @@
 # Use EQG companion files (emitters, etc.) instead of deriving from S3D data
 use_eqg: false
 
+# Rendering
+render:
+  # Max distance (EQ units) to render zone characters — further spawns are culled
+  character_distance: 1000
+
 # Debug rendering options
 debug:
   # Show all animations for a single character model (e.g. "gor", "dra", "btm", "efr", "lim", "tig")

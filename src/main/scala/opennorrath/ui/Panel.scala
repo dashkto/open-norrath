@@ -74,6 +74,14 @@ trait Panel:
   protected def pushColor(idx: Int, c: (Float, Float, Float, Float)): Unit =
     ImGui.pushStyleColor(idx, c._1, c._2, c._3, c._4)
 
+  /** Bold gold section header — shared by InventoryPanel, StatsPanel, etc. */
+  protected def sectionHeader(text: String): Unit =
+    ImGui.pushFont(Fonts.defaultBold)
+    pushColor(ImGuiCol.Text, Colors.gold)
+    ImGui.text(text)
+    ImGui.popStyleColor()
+    ImGui.popFont()
+
   /** Draw a horizontal bar (HP/mana style). */
   protected def bar(fraction: Float, color: (Float, Float, Float, Float), height: Float = Spacing.barHeight): Unit =
     val drawList = ImGui.getWindowDrawList()

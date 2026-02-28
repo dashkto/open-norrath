@@ -124,28 +124,25 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
         (code, duration) <- animActionToCode(anim.action)
         zc <- zoneCharacters.get(anim.spawnId)
       do zc.playTimedAnimation(code, duration)
-    case ZoneEvent.DamageDealt(info) if info.damage != 0 =>
-      // Attacker plays attack animation, target plays get-hit animation
-      val attackAnim = if java.util.concurrent.ThreadLocalRandom.current().nextBoolean()
-        then AnimCode.Attack1.code else AnimCode.Attack2.code
-      zoneCharacters.get(info.sourceId).foreach(_.playTimedAnimation(attackAnim, 0.5f))
+    case ZoneEvent.DamageDealt(info) if info.damage > 0 =>
+      // OP_Animation already handles the attacker's swing — only play flinch on target here.
+      // D01/D02 are the actual damage-received flinch animations;
+      // C05 (GetHit) is misleadingly named — it's the 1H weapon attack anim.
       zoneCharacters.get(info.targetId).foreach { zc =>
-        if info.damage > 0 then
-          // D01/D02 are the actual damage-received flinch animations;
-          // C05 (GetHit) is misleadingly named — it's the 1H weapon attack anim.
-          val hitAnim = if java.util.concurrent.ThreadLocalRandom.current().nextBoolean()
-            then AnimCode.Damage1.code else AnimCode.Damage2.code
-          zc.playTimedAnimation(hitAnim, 0.4f)
+        val hitAnim = if java.util.concurrent.ThreadLocalRandom.current().nextBoolean()
+          then AnimCode.Damage1.code else AnimCode.Damage2.code
+        zc.playTimedAnimation(hitAnim, 0.4f)
       }
       // Auto-stand (and cancel camp) when player takes damage
       val myId = Game.zoneSession.map(_.client.mySpawnId).getOrElse(-1)
-      if info.targetId == myId && info.damage > 0 then
+      if info.targetId == myId then
         zoneCharacters.get(myId).foreach { zc =>
           if zc.sitting then standUp(zc)
         }
     case ZoneEvent.EntityDied(info) =>
       zoneCharacters.get(info.spawnId).foreach { zc =>
         zc.dead = true
+        zc.curHp = 0
       }
     case ZoneEvent.InventoryMoved(from, to) =>
       // When items move to/from weapon slots, update the player's visual equipment.
@@ -499,6 +496,9 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
     // so the depth buffer and the main shader sample with the same projection.
     val sunDir = GameClock.sunDirection
     zone.shadowMap.updateLightDirection(sunDir)
+
+    // Update character distance culling (spread across frames for performance)
+    zone.updateCharacterVisibility(camCtrl.camera.position)
 
     // --- Shadow map pre-pass: render depth from sun's perspective ---
     zone.shadowMap.bind()

@@ -8,7 +8,7 @@ enum GameAction:
   case TargetSelf, TabTarget
   case AutoAttack, Consider
   case Sit
-  case ToggleInventory, ToggleSpellBook, DumpDebug, DetachCamera, Escape
+  case ToggleInventory, ToggleSpellBook, ToggleStats, DumpDebug, DetachCamera, Escape
 
 sealed trait InputBinding
 case class KeyBind(key: Int, shift: Boolean = false) extends InputBinding
@@ -34,6 +34,7 @@ object KeyBindings:
     GameAction.Sit             -> Seq(KeyBind(GLFW_KEY_Q)),
     GameAction.ToggleInventory -> Seq(KeyBind(GLFW_KEY_I)),
     GameAction.ToggleSpellBook -> Seq(KeyBind(GLFW_KEY_B)),
+    GameAction.ToggleStats     -> Seq(KeyBind(GLFW_KEY_O)),
     GameAction.DumpDebug    -> Seq(KeyBind(GLFW_KEY_T)),
     GameAction.DetachCamera -> Seq(KeyBind(GLFW_KEY_T, shift = true)),
     GameAction.Escape       -> Seq(KeyBind(GLFW_KEY_ESCAPE)),

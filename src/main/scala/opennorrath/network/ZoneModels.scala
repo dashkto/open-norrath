@@ -300,7 +300,7 @@ case class DamageInfo(
   sourceId: Int,          // Entity dealing damage
   damageType: Int,        // Type of damage (skill type)
   spellId: Int,           // Spell ID if spell damage (0xFFFF if melee)
-  damage: Int,            // Damage amount (0 = miss)
+  damage: Int,            // Damage amount (0 = miss, <1 ignored by UI)
   force: Float,           // Knockback force
   pushHeading: Float,     // Knockback direction
   pushUpAngle: Float,     // Knockback vertical angle
@@ -419,6 +419,104 @@ object ChatMessage:
   val Tell = 7
   val Say = 8
   val GMSay = 11
+
+/** MT_* message type codes from eq_constants.h. Used by OP_SpecialMesg and OP_FormattedMessage. */
+enum MessageType(val code: Int):
+  // Chat channels
+  case Say              extends MessageType(256)
+  case Tell             extends MessageType(257)
+  case Group            extends MessageType(258)
+  case Guild            extends MessageType(259)
+  case OOC              extends MessageType(260)
+  case Auction          extends MessageType(261)
+  case Shout            extends MessageType(262)
+  case Emote            extends MessageType(263)
+  // Combat & spells
+  case Spells           extends MessageType(264)
+  case YouHitOther      extends MessageType(265)
+  case OtherHitsYou     extends MessageType(266)
+  case YouMissOther     extends MessageType(267)
+  case OtherMissesYou   extends MessageType(268)
+  case Broadcasts       extends MessageType(269)
+  case Skills           extends MessageType(270)
+  case Disciplines      extends MessageType(271)
+  // 272 = unused
+  case DefaultText      extends MessageType(273)
+  // 274 = unused
+  case MerchantOffer    extends MessageType(275)
+  case MerchantBuySell  extends MessageType(276)
+  case YourDeath        extends MessageType(277)
+  case OtherDeath       extends MessageType(278)
+  case OtherHits        extends MessageType(279)
+  case OtherMisses      extends MessageType(280)
+  case Who              extends MessageType(281)
+  case YellForHelp      extends MessageType(282)
+  case NonMelee         extends MessageType(283)
+  case WornOff          extends MessageType(284)
+  case MoneySplit        extends MessageType(285)
+  case LootMessages     extends MessageType(286)
+  case DiceRoll         extends MessageType(287)
+  case OtherSpells      extends MessageType(288)
+  case SpellFailure     extends MessageType(289)
+  // Custom chat channels
+  case Chat             extends MessageType(290)
+  case Channel1         extends MessageType(291)
+  case Channel2         extends MessageType(292)
+  case Channel3         extends MessageType(293)
+  case Channel4         extends MessageType(294)
+  case Channel5         extends MessageType(295)
+  case Channel6         extends MessageType(296)
+  case Channel7         extends MessageType(297)
+  case Channel8         extends MessageType(298)
+  case Channel9         extends MessageType(299)
+  case Channel10        extends MessageType(300)
+  // Crits & special combat
+  case CritMelee        extends MessageType(301)
+  case SpellCrits       extends MessageType(302)
+  case TooFarAway       extends MessageType(303)
+  case NPCRampage       extends MessageType(304)
+  case NPCFlurry        extends MessageType(305)
+  case NPCEnrage        extends MessageType(306)
+  // Echo channels — your own messages echoed back
+  case SayEcho          extends MessageType(307)
+  case TellEcho         extends MessageType(308)
+  case GroupEcho        extends MessageType(309)
+  case GuildEcho        extends MessageType(310)
+  case OOCEcho          extends MessageType(311)
+  case AuctionEcho      extends MessageType(312)
+  case ShoutEcho        extends MessageType(313)
+  case EmoteEcho        extends MessageType(314)
+  case Chat1Echo        extends MessageType(315)
+  case Chat2Echo        extends MessageType(316)
+  case Chat3Echo        extends MessageType(317)
+  case Chat4Echo        extends MessageType(318)
+  case Chat5Echo        extends MessageType(319)
+  case Chat6Echo        extends MessageType(320)
+  case Chat7Echo        extends MessageType(321)
+  case Chat8Echo        extends MessageType(322)
+  case Chat9Echo        extends MessageType(323)
+  case Chat10Echo       extends MessageType(324)
+  // DoTs, pets, misc
+  case DoTDamage        extends MessageType(325)
+  case ItemLink         extends MessageType(326)
+  case RaidSay          extends MessageType(327)
+  case MyPet            extends MessageType(328)
+  case DamageShield     extends MessageType(329)
+  case Leadership       extends MessageType(330)
+  case PetFlurry        extends MessageType(331)
+  case PetCrit          extends MessageType(332)
+  case FocusEffect      extends MessageType(333)
+  case Experience       extends MessageType(334)
+  case System           extends MessageType(335)
+  case PetSpell         extends MessageType(336)
+  case PetResponse      extends MessageType(337)
+  case ItemSpeech       extends MessageType(338)
+  case StrikeThrough    extends MessageType(339)
+  case Stun             extends MessageType(340)
+
+object MessageType:
+  private val byCode: Map[Int, MessageType] = values.map(v => v.code -> v).toMap
+  def fromCode(code: Int): MessageType = byCode.getOrElse(code, DefaultText)
 
 /** System message from OP_SpecialMesg. Server-generated text with msg_type color coding. */
 case class SpecialMessage(msgType: Int, targetSpawnId: Int, sayer: String, message: String)
@@ -646,6 +744,61 @@ case class ZoneChangeResult(
 // Inventory Items — decoded from OP_CharInventory
 // =============================================================================
 
+/** Item type / skill codes from ItemTypes enum in item_data.h.
+  * Determines what the item "is" — weapon type, consumable, instrument, etc.
+  */
+enum ItemType(val code: Int, val label: String):
+  case OneHandSlash          extends ItemType(0,  "1H Slashing")
+  case TwoHandSlash          extends ItemType(1,  "2H Slashing")
+  case OneHandPiercing       extends ItemType(2,  "1H Piercing")
+  case OneHandBlunt          extends ItemType(3,  "1H Blunt")
+  case TwoHandBlunt          extends ItemType(4,  "2H Blunt")
+  case Bow                   extends ItemType(5,  "Bow")
+  case Unknown1              extends ItemType(6,  "Unknown")
+  case LargeThrowing         extends ItemType(7,  "Large Throwing")
+  case Shield                extends ItemType(8,  "Shield")
+  case Scroll                extends ItemType(9,  "Scroll")
+  case Armor                 extends ItemType(10, "Armor")
+  case Misc                  extends ItemType(11, "Misc")           // Catch-all for random items
+  case LockPick              extends ItemType(12, "Lock Pick")
+  case Unknown2              extends ItemType(13, "Unknown")
+  case Food                  extends ItemType(14, "Food")
+  case Drink                 extends ItemType(15, "Drink")
+  case Light                 extends ItemType(16, "Light")
+  case Combinable            extends ItemType(17, "Combinable")     // Not all stackable items are this type
+  case Bandage               extends ItemType(18, "Bandage")
+  case SmallThrowing         extends ItemType(19, "Small Throwing")
+  case Spell                 extends ItemType(20, "Spell")          // Spells and tomes
+  case Potion                extends ItemType(21, "Potion")
+  case FletchedArrows        extends ItemType(22, "Fletched Arrows")
+  case WindInstrument        extends ItemType(23, "Wind Instrument")
+  case StringedInstrument    extends ItemType(24, "Stringed Instrument")
+  case BrassInstrument       extends ItemType(25, "Brass Instrument")
+  case PercussionInstrument  extends ItemType(26, "Percussion Instrument")
+  case Arrow                 extends ItemType(27, "Arrow")
+  case Unknown4              extends ItemType(28, "Unknown")
+  case Jewelry               extends ItemType(29, "Jewelry")
+  case Skull                 extends ItemType(30, "Skull")
+  case Book                  extends ItemType(31, "Book")           // Skill-up tomes/books
+  case Note                  extends ItemType(32, "Note")
+  case Key                   extends ItemType(33, "Key")
+  case Coin                  extends ItemType(34, "Coin")
+  case TwoHandPiercing       extends ItemType(35, "2H Piercing")
+  case FishingPole           extends ItemType(36, "Fishing Pole")
+  case FishingBait           extends ItemType(37, "Fishing Bait")
+  case Alcohol               extends ItemType(38, "Alcohol")
+  case Key2                  extends ItemType(39, "Key")            // Questable keys / satchels
+  case Compass               extends ItemType(40, "Compass")
+  case Unknown5              extends ItemType(41, "Unknown")
+  case Poison                extends ItemType(42, "Poison")
+  case Unknown6              extends ItemType(43, "Unknown")
+  case Unknown7              extends ItemType(44, "Unknown")
+  case Martial               extends ItemType(45, "Martial")
+
+object ItemType:
+  private val byCode: Map[Int, ItemType] = values.map(v => v.code -> v).toMap
+  def fromCode(code: Int): Option[ItemType] = byCode.get(code)
+
 /** An item from the player's inventory.
   *
   * Decoded from Item_Struct (360 bytes) in mac_structs.h.
@@ -673,10 +826,16 @@ case class InventoryItem(
   delay: Int,
   charges: Int,
   stackable: Boolean,
-  itemType: Int = 0,       // EQ item type: 14=food, 15=drink (from ItemType field at offset 253)
+  itemType: ItemType = ItemType.OneHandSlash,  // EQ item type (from ItemType field at offset 253)
   idFileNum: Int = 0,      // IT number from IDFile (e.g., "IT27" → 27) — used for weapon model lookup
+  // Container fields (itemClass == 1 only; 0 for all other items)
+  bagSlots: Int = 0,       // number of slots this bag has (4, 6, 8, or 10)
+  bagSize: Int = 0,        // max item size the bag accepts (0=tiny..4=giant)
+  bagWR: Int = 0,          // weight reduction % (0, 10, 25, etc.)
 ):
   def stackCount: Int = if stackable && charges > 1 then charges else 0
+  /** True if this item is a container with usable bag slots. */
+  def isBag: Boolean = itemClass == 1 && bagSlots > 0
   /** Check if this item can be placed in the given equipment slot (0-21). */
   def canEquipIn(slotId: Int): Boolean =
     if slotId < 0 || slotId > 21 then true // general/bag slots always allowed

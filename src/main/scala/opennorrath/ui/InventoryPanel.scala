@@ -9,14 +9,15 @@ import opennorrath.network.InventoryItem
 import opennorrath.state.PlayerCharacter
 
 /** Inventory panel toggled with the "i" key.
-  * Three-column layout: equipment (left), general inventory (middle), stats (right).
+  * Three-column layout: equipment (left), general inventory (middle), bags (right).
+  * Stats are displayed in the separate StatsPanel (toggled with "o" key).
   */
 class InventoryPanel(player: Option[PlayerCharacter] = None) extends Panel:
 
   val title = "Inventory"
   val defaultX = 200f
   val defaultY = 50f
-  val defaultWidth = 800f
+  val defaultWidth = 880f
   val defaultHeight = 580f
   override def fontScale: Float = Spacing.fontScaleMedium
 
@@ -35,7 +36,7 @@ class InventoryPanel(player: Option[PlayerCharacter] = None) extends Panel:
 
     ImGui.setNextWindowPos(defaultX, defaultY, ImGuiCond.FirstUseEver)
     ImGui.setNextWindowSize(defaultWidth, defaultHeight, ImGuiCond.FirstUseEver)
-    ImGui.setNextWindowSizeConstraints(600f, 400f, Float.MaxValue, Float.MaxValue)
+    ImGui.setNextWindowSizeConstraints(640f, 400f, Float.MaxValue, Float.MaxValue)
 
     val flags = extraFlags | (if locked then ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoResize else 0)
     pOpen.set(true)
@@ -90,16 +91,17 @@ class InventoryPanel(player: Option[PlayerCharacter] = None) extends Panel:
   private val ColPad = Spacing.columnGap
 
   override protected def renderContent(): Unit =
-    val availW = ImGui.getContentRegionAvailX()
     val availH = ImGui.getContentRegionAvailY()
-    val statsW = 120f
     val equipW = SlotSize * MaxSlotsPerRow + SlotGap * (MaxSlotsPerRow - 1)
     val invCols = 2
     val invW = SlotSize * invCols + SlotGap * (invCols - 1)
+    // Bag column: fits BagRowCols slots per row + gaps
+    val bagW = SlotSize * BagRowCols + SlotGap * (BagRowCols - 1)
     val childFlags = ImGuiWindowFlags.NoBackground
+    val moneyRowH = ImGui.getTextLineHeightWithSpacing() + Spacing.slotGap * 2
 
     // Left column — equipment grid (fixed size)
-    ImGui.beginChild("##equip", equipW, availH, false, childFlags)
+    ImGui.beginChild("##equip", equipW, availH - moneyRowH, false, childFlags)
     sectionHeader("Equipment")
     for row <- equipRows do
       renderSlotRow(row)
@@ -108,7 +110,7 @@ class InventoryPanel(player: Option[PlayerCharacter] = None) extends Panel:
     ImGui.sameLine(0f, ColPad)
 
     // Middle column — general inventory (2x4 grid)
-    ImGui.beginChild("##general", invW, availH, false, childFlags)
+    ImGui.beginChild("##general", invW, availH - moneyRowH, false, childFlags)
     sectionHeader("General")
     for row <- 0 until 4 do
       for col <- 0 until invCols do
@@ -120,81 +122,75 @@ class InventoryPanel(player: Option[PlayerCharacter] = None) extends Panel:
 
     ImGui.sameLine(0f, ColPad)
 
-    // Right column — stats & resists
-    ImGui.beginChild("##stats", statsW, availH, false, childFlags)
-    player.foreach(renderStats)
+    // Right column — bag contents (scrollable)
+    ImGui.beginChild("##bags", bagW, availH - moneyRowH, false, childFlags)
+    renderBagsColumn()
     ImGui.endChild()
 
-  private def renderStats(pc: PlayerCharacter): Unit =
+    // Money row across the bottom
+    player.foreach(renderMoneyRow)
+
+  // ---------------------------------------------------------------------------
+  // Bag column
+  // ---------------------------------------------------------------------------
+
+  /** Max slots displayed per visual row in a bag. */
+  private val BagRowCols = 5
+
+  private def renderBagsColumn(): Unit =
+    sectionHeader("Bags")
     val items = itemsBySlot
-    sectionHeader("Stats")
+    for generalSlot <- 22 until 30 do
+      items.get(generalSlot) match
+        case Some(bag) if bag.isBag =>
+          renderBagRow(generalSlot, bag)
+        case _ => () // skip empty general slots and non-bag items
 
-    // HP / Mana
-    pushColor(ImGuiCol.Text, Colors.text)
-    ImGui.text(s"HP: ${pc.currentHp} / ${pc.maxHp}")
-    ImGui.popStyleColor()
-    if EqData.usesMana(pc.classId) then
-      pushColor(ImGuiCol.Text, Colors.text)
-      ImGui.text(s"Mana: ${pc.currentMana} / ${pc.maxMana}")
-      ImGui.popStyleColor()
+  /** Render one bag: icon + name header, then a grid of content slots. */
+  private def renderBagRow(generalSlot: Int, bag: InventoryItem): Unit =
+    // Bag icon + name as a compact header with hover tooltip
+    val drawList = ImGui.getWindowDrawList()
+    val hx = ImGui.getCursorScreenPosX()
+    val hy = ImGui.getCursorScreenPosY()
+    val iconSize = SlotBoxH - 6f
+    ImGui.setCursorScreenPos(hx, hy)
+    ItemIcons.render(bag.icon, iconSize)
+    ImGui.setCursorScreenPos(hx, hy)
+    ImGui.invisibleButton(s"##bag$generalSlot", iconSize, iconSize)
+    if ImGui.isItemHovered() then renderTooltip(bag)
+    ImGui.sameLine(0f, SlotGap)
+    val nameY = hy + (iconSize - ImGui.calcTextSize(bag.name).y) / 2f
+    val (nr, ng, nb, na) = Colors.gold
+    drawList.addText(hx + iconSize + SlotGap, nameY,
+      ImGui.colorConvertFloat4ToU32(nr, ng, nb, na), bag.name)
+    // Advance cursor past the header line
+    ImGui.setCursorScreenPos(hx, hy + iconSize + SlotGap)
 
-    // Equipped items (slots 0-21) — reused for AC, resists, and weight
-    val equipItems = items.filter((slot, _) => slot >= 0 && slot <= 21).values.toVector
-    val totalAc = equipItems.map(_.ac).sum
-    pushColor(ImGuiCol.Text, Colors.text)
-    ImGui.text(s"AC: $totalAc")
-    ImGui.popStyleColor()
-
-    // Experience — displayed as percentage within current level (0-330 scale from server)
-    val expPct = pc.exp * 100f / 330f
-    pushColor(ImGuiCol.Text, Colors.text)
-    ImGui.text(f"Exp: $expPct%.1f%%")
-    ImGui.popStyleColor()
-
+    // Bag content slots: 250 + (generalSlot - 22) * 10 + index
+    val baseSlot = 250 + (generalSlot - 22) * 10
+    for i <- 0 until bag.bagSlots do
+      val contentSlot = baseSlot + i
+      renderSquareSlot(contentSlot, (i + 1).toString, SlotSize)
+      val isLastInRow = (i + 1) % BagRowCols == 0
+      val isLast = i == bag.bagSlots - 1
+      if !isLastInRow && !isLast then
+        ImGui.sameLine(0f, SlotGap)
+    ImGui.spacing()
     ImGui.spacing()
 
-    // Attributes
-    statLine("STR", pc.str)
-    statLine("STA", pc.sta)
-    statLine("AGI", pc.agi)
-    statLine("DEX", pc.dex)
-    statLine("WIS", pc.wis)
-    statLine("INT", pc.int)
-    statLine("CHA", pc.cha)
+  // ---------------------------------------------------------------------------
+  // Money row
+  // ---------------------------------------------------------------------------
 
-    // Resistances
+  private def renderMoneyRow(pc: PlayerCharacter): Unit =
     ImGui.spacing()
-    ImGui.separator()
-    sectionHeader("Resists")
-
-    val (baseMr, baseFr, baseCr, baseDr, basePr) = EqData.raceBaseResists(pc.race)
-    val gearMr = equipItems.map(_.mr).sum
-    val gearFr = equipItems.map(_.fr).sum
-    val gearCr = equipItems.map(_.cr).sum
-    val gearDr = equipItems.map(_.dr).sum
-    val gearPr = equipItems.map(_.pr).sum
-
-    statLine("MR", baseMr + gearMr)
-    statLine("FR", baseFr + gearFr)
-    statLine("CR", baseCr + gearCr)
-    statLine("DR", baseDr + gearDr)
-    statLine("PR", basePr + gearPr)
-
-    // Money
-    ImGui.spacing()
-    ImGui.separator()
-    sectionHeader("Money")
-    statLine("PP", pc.platinum)
-    statLine("GP", pc.gold)
-    statLine("SP", pc.silver)
-    statLine("CP", pc.copper)
-
-  private def sectionHeader(text: String): Unit =
-    ImGui.pushFont(Fonts.defaultBold)
-    pushColor(ImGuiCol.Text, Colors.gold)
-    ImGui.text(text)
+    pushColor(ImGuiCol.Text, Colors.textDim)
+    ImGui.text(s"PP: ${pc.platinum}   GP: ${pc.gold}   SP: ${pc.silver}   CP: ${pc.copper}")
     ImGui.popStyleColor()
-    ImGui.popFont()
+
+  // ---------------------------------------------------------------------------
+  // Shared rendering helpers
+  // ---------------------------------------------------------------------------
 
   private val MaxSlotsPerRow = equipRows.map(_.size).max
 
@@ -270,69 +266,9 @@ class InventoryPanel(player: Option[PlayerCharacter] = None) extends Panel:
             Game.zoneSession.foreach(_.client.sendMoveItem(sourceSlot, slotId))
       ImGui.endDragDropTarget()
 
-  private def renderSlot(slotId: Int, label: String, width: Float): Unit =
-    val item = itemsBySlot.get(slotId)
-    val drawList = ImGui.getWindowDrawList()
-    val cx = ImGui.getCursorScreenPosX()
-    val cy = ImGui.getCursorScreenPosY()
-
-    // Background
-    val bgColor = if item.isDefined then Colors.withAlpha(Colors.darkContainer, 0.6f) else Colors.withAlpha(Colors.background, 0.5f)
-    val (br, bg, bb, ba) = bgColor
-    drawList.addRectFilled(cx, cy, cx + width, cy + SlotBoxH,
-      ImGui.colorConvertFloat4ToU32(br, bg, bb, ba), Spacing.rounding)
-
-    // Border
-    val (borR, borG, borB, borA) = Colors.withAlpha(Colors.darkContainer, 0.8f)
-    drawList.addRect(cx, cy, cx + width, cy + SlotBoxH,
-      ImGui.colorConvertFloat4ToU32(borR, borG, borB, borA), Spacing.rounding)
-
-    item match
-      case Some(it) =>
-        val iconSize = SlotBoxH - 6f
-        val iconX = cx + 3f
-        val iconY = cy + 3f
-        ImGui.setCursorScreenPos(iconX, iconY)
-        val hasIcon = ItemIcons.render(it.icon, iconSize)
-        val textX = if hasIcon then iconX + iconSize + 4f else cx + 4f
-        val textH = ImGui.calcTextSize(it.name).y
-        val (tr, tg, tb, ta) = if it.magic then Colors.secondary else Colors.text
-        drawList.addText(textX, cy + (SlotBoxH - textH) / 2f,
-          ImGui.colorConvertFloat4ToU32(tr, tg, tb, ta), it.name)
-      case None =>
-        val textW = ImGui.calcTextSize(label).x
-        val textH = ImGui.calcTextSize(label).y
-        val (tr, tg, tb, ta) = Colors.withAlpha(Colors.textDim, 0.5f)
-        drawList.addText(cx + (width - textW) / 2f, cy + (SlotBoxH - textH) / 2f,
-          ImGui.colorConvertFloat4ToU32(tr, tg, tb, ta), label)
-
-    // Invisible button for interaction
-    ImGui.setCursorScreenPos(cx, cy)
-    ImGui.invisibleButton(s"##slot$slotId", width, SlotBoxH)
-    if item.isDefined && ImGui.isItemHovered() then renderTooltip(item.get)
-
-    // Drag source — occupied slots can be dragged
-    if item.isDefined && ImGui.beginDragDropSource(ImGuiDragDropFlags.None) then
-      ImGui.setDragDropPayload("INV_SLOT", Integer.valueOf(slotId))
-      val it = item.get
-      ItemIcons.render(it.icon, 32f)
-      ImGui.sameLine()
-      ImGui.text(it.name)
-      ImGui.endDragDropSource()
-
-    // Drop target — validate slot restrictions before accepting
-    if ImGui.beginDragDropTarget() then
-      val payload = ImGui.acceptDragDropPayload("INV_SLOT", classOf[Integer])
-      if payload != null then
-        val sourceSlot = payload.intValue()
-        if sourceSlot != slotId then
-          val sourceItem = itemsBySlot.get(sourceSlot)
-          val destItem = itemsBySlot.get(slotId)
-          val srcAllowed = sourceItem.forall(_.canEquipIn(slotId))
-          val dstAllowed = destItem.forall(_.canEquipIn(sourceSlot))
-          if srcAllowed && dstAllowed then
-            Game.zoneSession.foreach(_.client.sendMoveItem(sourceSlot, slotId))
-      ImGui.endDragDropTarget()
+  // ---------------------------------------------------------------------------
+  // Tooltip
+  // ---------------------------------------------------------------------------
 
   private def renderTooltip(item: InventoryItem): Unit =
     ImGui.beginTooltip()
@@ -363,6 +299,12 @@ class InventoryPanel(player: Option[PlayerCharacter] = None) extends Panel:
       ImGui.text(s"Slot: ${slotNames.mkString(" ")}")
       ImGui.popStyleColor()
 
+    // Item type (skip containers/books and generic "Unknown" types)
+    if item.itemClass == 0 && !item.itemType.label.startsWith("Unknown") then
+      pushColor(ImGuiCol.Text, Colors.textDim)
+      ImGui.text(s"Type: ${item.itemType.label}")
+      ImGui.popStyleColor()
+
     ImGui.separator()
 
     // Stats (common items only)
@@ -386,6 +328,26 @@ class InventoryPanel(player: Option[PlayerCharacter] = None) extends Panel:
       if item.cr != 0 then tooltipStat("SvCold", item.cr)
       if item.dr != 0 then tooltipStat("SvDisease", item.dr)
       if item.pr != 0 then tooltipStat("SvPoison", item.pr)
+
+    // Container info (bags)
+    if item.isBag then
+      tooltipStat("Slots", item.bagSlots)
+      val sizeName = item.bagSize match
+        case 0 => "Tiny"
+        case 1 => "Small"
+        case 2 => "Medium"
+        case 3 => "Large"
+        case _ => "Giant"
+      pushColor(ImGuiCol.Text, Colors.text)
+      ImGui.text(s"  Size: $sizeName")
+      ImGui.popStyleColor()
+      if item.bagWR > 0 then tooltipStat("WR", item.bagWR, "%")
+
+    // Charges / stack count
+    if item.stackable && item.charges > 1 then
+      tooltipStat("Count", item.charges)
+    else if !item.stackable && item.charges > 0 then
+      tooltipStat("Charges", item.charges)
 
     // Lore
     if item.lore.nonEmpty then
@@ -417,18 +379,7 @@ class InventoryPanel(player: Option[PlayerCharacter] = None) extends Panel:
         names += name
     names.result()
 
-  private val StatValueCol = 40f
-
-  private def statLine(label: String, value: Int): Unit =
-    pushColor(ImGuiCol.Text, Colors.textDim)
-    ImGui.text(label)
-    ImGui.popStyleColor()
-    ImGui.sameLine(StatValueCol)
+  private def tooltipStat(label: String, value: Int, suffix: String = ""): Unit =
     pushColor(ImGuiCol.Text, Colors.text)
-    ImGui.text(value.toString)
-    ImGui.popStyleColor()
-
-  private def tooltipStat(label: String, value: Int): Unit =
-    pushColor(ImGuiCol.Text, Colors.text)
-    ImGui.text(s"  $label: $value")
+    ImGui.text(s"  $label: $value$suffix")
     ImGui.popStyleColor()

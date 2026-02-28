@@ -17,9 +17,14 @@ case class WindowSettings(
   height: Int = 900,
 )
 
+case class RenderSettings(
+  characterDistance: Float = 1000f, // Max distance (EQ units) to render zone characters
+)
+
 case class Settings(
   useEqg: Boolean = false,
   window: WindowSettings = WindowSettings(),
+  render: RenderSettings = RenderSettings(),
   debug: DebugSettings = DebugSettings(),
   login: LoginSettings = LoginSettings(),
 )
@@ -36,6 +41,9 @@ private class YamlMap(data: java.util.Map[String, Any]):
 
   def int(key: String, default: Int = 0): Int =
     map.get(key).map(_.toString.toInt).getOrElse(default)
+
+  def float(key: String, default: Float = 0f): Float =
+    map.get(key).map(_.toString.toFloat).getOrElse(default)
 
   def nested(key: String): Option[YamlMap] =
     map.get(key).collect { case m: java.util.Map[?, ?] =>
@@ -64,6 +72,12 @@ object Settings:
       )
     }.getOrElse(WindowSettings())
 
+    val renderSettings = root.nested("render").map { r =>
+      RenderSettings(
+        characterDistance = r.float("character_distance", 200f),
+      )
+    }.getOrElse(RenderSettings())
+
     val login = root.nested("login").map { l =>
       LoginSettings(
         host = l.string("host", "127.0.0.1"),
@@ -75,6 +89,7 @@ object Settings:
     Settings(
       useEqg = root.boolean("use_eqg"),
       window = windowSettings,
+      render = renderSettings,
       debug = debug,
       login = login,
     )

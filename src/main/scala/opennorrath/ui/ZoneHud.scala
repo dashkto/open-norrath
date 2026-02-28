@@ -17,6 +17,7 @@ class ZoneHud(ctx: GameContext, characters: scala.collection.Map[Int, ZoneCharac
   private var spellBookPanel: Option[SpellBookPanel] = None
   private val escapeMenu = EscapeMenu(ctx)
   private var inventoryPanel: InventoryPanel = InventoryPanel()
+  private var statsPanel: StatsPanel = StatsPanel()
   val targetPanel = TargetPanel()
   private val groupPanel = GroupPanel(characters)
   private var chatPanel: TextPanel = null
@@ -54,6 +55,7 @@ class ZoneHud(ctx: GameContext, characters: scala.collection.Map[Int, ZoneCharac
     buffPanel = pc.map(BuffPanel(_))
     spellBookPanel = pc.map(SpellBookPanel(_))
     inventoryPanel = InventoryPanel(pc)
+    statsPanel = StatsPanel(pc)
     targetPanel.player = pc
     chatPanel = TextPanel("Main", onSubmit = text => {
       eventHandler.submitChat(text)
@@ -101,6 +103,8 @@ class ZoneHud(ctx: GameContext, characters: scala.collection.Map[Int, ZoneCharac
           inventoryPanel.toggle()
         if input.isActionPressed(GameAction.ToggleSpellBook) then
           spellBookPanel.foreach(_.toggle())
+        if input.isActionPressed(GameAction.ToggleStats) then
+          statsPanel.toggle()
 
   /** Update target and notify server. */
   def setTarget(zc: Option[ZoneCharacter]): Unit =
@@ -132,6 +136,7 @@ class ZoneHud(ctx: GameContext, characters: scala.collection.Map[Int, ZoneCharac
     targetPanel.render()
     groupPanel.render()
     inventoryPanel.render()
+    statsPanel.render()
     spellBookPanel.foreach(_.render())
     chatPanel.render()
     escapeMenu.render()
@@ -145,7 +150,7 @@ class ZoneHud(ctx: GameContext, characters: scala.collection.Map[Int, ZoneCharac
       fpsAccum = 0f
       fpsFrames = 0
 
-    val padding = 8f
+    val padding = Spacing.menuPad
     val flags = ImGuiWindowFlags.NoDecoration | ImGuiWindowFlags.NoInputs |
       ImGuiWindowFlags.NoBackground | ImGuiWindowFlags.AlwaysAutoResize |
       ImGuiWindowFlags.NoSavedSettings | ImGuiWindowFlags.NoFocusOnAppearing |
@@ -160,7 +165,7 @@ class ZoneHud(ctx: GameContext, characters: scala.collection.Map[Int, ZoneCharac
     else s"${fpsDisplay.toInt} fps"
     val textSize = ImGui.calcTextSize(label)
     val x = ctx.windowWidth - textSize.x - padding * 2
-    ImGui.setNextWindowPos(x, padding, ImGuiCond.Always)
+    ImGui.setNextWindowPos(x, 0f, ImGuiCond.Always)
     ImGui.begin("##fps", flags)
     ImGui.textColored(1f, 1f, 1f, 0.6f, label)
     ImGui.end()

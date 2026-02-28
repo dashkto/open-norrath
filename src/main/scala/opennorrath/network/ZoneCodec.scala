@@ -683,11 +683,21 @@ object ZoneCodec:
         // decode error
         None
 
-  /** Decode OP_HPUpdate: SpawnHPUpdate_Struct (12 bytes). */
+  /** Decode OP_HPUpdate / OP_MobHealth.
+    * Two formats share the same opcode:
+    *   SpawnHPUpdate_Struct  (12 bytes): int32 spawnId, int32 curHp, int32 maxHp — literal values (player self)
+    *   SpawnHPUpdate_Struct2 (3 bytes):  int16 spawnId, uint8 hpPercent — percentage 0-100 (other mobs)
+    */
   def decodeHPUpdate(data: Array[Byte]): Option[HPUpdate] =
-    if data.length < 12 then return None
-    val buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
-    Some(HPUpdate(buf.getInt(), buf.getInt(), buf.getInt()))
+    if data.length >= 12 then
+      val buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
+      Some(HPUpdate(buf.getInt(), buf.getInt(), buf.getInt()))
+    else if data.length >= 3 then
+      val buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
+      val spawnId = buf.getShort() & 0xFFFF
+      val hpPct = buf.get() & 0xFF
+      Some(HPUpdate(spawnId, hpPct, 100))
+    else None
 
   /** Decode OP_ManaChange: ManaUpdate_Struct (4 bytes). */
   def decodeManaChange(data: Array[Byte]): Option[ManaChange] =
@@ -1160,7 +1170,8 @@ object ZoneCodec:
     val delay = buf.get() & 0xFF          // 0249
     val damage = buf.get() & 0xFF         // 0250
     buf.position(base + 253)
-    val itemType = buf.get() & 0xFF       // 0253: ItemType (14=food, 15=drink)
+    val itemTypeRaw = buf.get() & 0xFF    // 0253: ItemType
+    val itemType = ItemType.fromCode(itemTypeRaw).getOrElse(ItemType.Misc)
     val magic = buf.get() & 0xFF          // 0254
 
     // Stackable at offset 0276 (inside common union)
@@ -1172,6 +1183,15 @@ object ZoneCodec:
     val charges = buf.get()               // 0278 (signed)
 
     val common = itemClass == 0
+
+    // Container union (itemClass == 1) — BagSlots@269, BagSize@271, BagWR@272 per mac_structs.h
+    val container = itemClass == 1
+    buf.position(base + 269)
+    val bagSlots = if container then buf.get() & 0xFF else 0
+    buf.position(base + 271)
+    val bagSize = if container then buf.get() & 0xFF else 0
+    val bagWR = if container then buf.get() & 0xFF else 0
+
     InventoryItem(
       name = readNullStr(nameBytes),
       lore = readNullStr(loreBytes),
@@ -1203,8 +1223,11 @@ object ZoneCodec:
       delay = if common then delay else 0,
       charges = charges,
       stackable = common && stackable == 1,
-      itemType = itemType,
+      itemType = if common then itemType else ItemType.Misc,
       idFileNum = idFileNum,
+      bagSlots = bagSlots,
+      bagSize = bagSize,
+      bagWR = bagWR,
     )
 
   // ===========================================================================

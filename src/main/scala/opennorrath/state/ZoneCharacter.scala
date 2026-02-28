@@ -89,6 +89,9 @@ class ZoneCharacter(
   /** Timed animation override (code, remaining seconds). Highest priority while active. */
   private var timedAnim: Option[(String, Float)] = None
 
+  /** Set by ZoneRenderer.updateCharacterVisibility() each frame. */
+  var inRenderRange: Boolean = true
+
   /** Persistent state flags for animation resolution. */
   var dead: Boolean = false
   var airborne: Boolean = false
@@ -119,7 +122,7 @@ class ZoneCharacter(
       case None => ()
 
     // State priority: dead > airborne > sitting > moving > fidget > idle
-    if dead then return AnimCode.Damage1.code
+    if dead then return AnimCode.DeadLoop.code
     if airborne then return AnimCode.Fall.code
     if sitting then return AnimCode.Sitting.code
     if moving then
@@ -156,7 +159,7 @@ class ZoneCharacter(
   private val serverPos: Vector3f = Vector3f(position)
 
   def hpFraction: Float =
-    if maxHp > 0 then curHp.toFloat / maxHp.toFloat else 1f
+    if maxHp > 0 then math.max(0f, math.min(1f, curHp.toFloat / maxHp.toFloat)) else 1f
 
   /** Called when a server position update arrives.
     *

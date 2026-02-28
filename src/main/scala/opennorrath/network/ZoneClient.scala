@@ -513,7 +513,9 @@ class ZoneClient extends PacketHandler:
         }
 
       case ZoneOpcodes.ItemPacket | ZoneOpcodes.MerchantItemPacket |
-           ZoneOpcodes.SummonedItem | ZoneOpcodes.ContainerPacket | ZoneOpcodes.BookPacket =>
+           ZoneOpcodes.TradeItemPacket | ZoneOpcodes.LootItemPacket |
+           ZoneOpcodes.ObjectItemPacket | ZoneOpcodes.SummonedItem |
+           ZoneOpcodes.ContainerPacket | ZoneOpcodes.BookPacket =>
         handleItemPacket(pkt.opcode, pkt.payload)
 
       case ZoneOpcodes.Stamina =>

@@ -17,6 +17,29 @@ import java.nio.file.{Path, Files}
 class ZoneRenderer(s3dPath: String, settings: Settings = Settings(),
     zoneCharacters: scala.collection.Map[Int, ZoneCharacter] = Map.empty):
 
+  private val charDistSq = settings.render.characterDistance * settings.render.characterDistance
+
+  /** Spread distance checks across multiple frames to avoid per-frame full iteration.
+    * Each frame we check a slice of characters; full sweep completes every SpreadFrames frames.
+    */
+  private val SpreadFrames = 4
+  private var visibilityFrame = 0
+
+  /** Recompute inRenderRange for a fraction of characters each frame.
+    * Called once at the start of draw() with the current camera position.
+    */
+  def updateCharacterVisibility(cameraPos: Vector3f): Unit =
+    val chars = zoneCharacters.values
+    val total = chars.size
+    if total == 0 then return
+    val slice = visibilityFrame % SpreadFrames
+    var idx = 0
+    for zc <- chars do
+      if idx % SpreadFrames == slice then
+        zc.inRenderRange = zc.position.distanceSquared(cameraPos) <= charDistSq
+      idx += 1
+    visibilityFrame += 1
+
   private val entries = PfsArchive.load(Path.of(s3dPath))
   private val zoneWld = entries.find(e => e.extension == "wld" && !e.name.contains("objects") && !e.name.contains("lights"))
     .getOrElse(throw RuntimeException(s"No zone WLD found in $s3dPath"))
@@ -83,11 +106,11 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings(),
 
   /** Return (spawnId, modelMatrix, headHeight) for each live spawn — used for nameplates. */
   def spawnNameplateData: Iterable[(Int, Matrix4f, Float)] =
-    zoneCharacters.collect { case (id, zc) if zc.hasRendering => (id, zc.animChar.modelMatrix, zc.build.glHeight * zc.effectiveSize) }
+    zoneCharacters.collect { case (id, zc) if zc.hasRendering && zc.inRenderRange => (id, zc.animChar.modelMatrix, zc.build.glHeight * zc.effectiveSize) }
 
   /** Return (spawnId, modelMatrix, height, width, depth) for each live spawn — used for click targeting. */
   def spawnHitData: Iterable[(Int, Matrix4f, Float, Float, Float)] =
-    zoneCharacters.collect { case (id, zc) if zc.hasRendering =>
+    zoneCharacters.collect { case (id, zc) if zc.hasRendering && zc.inRenderRange =>
       val s = zc.effectiveSize
       (id, zc.animChar.modelMatrix, zc.build.glHeight * s, zc.build.glWidth * s, zc.build.glDepth * s)
     }
@@ -300,7 +323,7 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings(),
       obj.glMesh.unbind()
 
     // Characters (skinned models need bone transforms for correct shadow shapes)
-    for zc <- zoneCharacters.values if zc.hasRendering do
+    for zc <- zoneCharacters.values if zc.hasRendering && zc.inRenderRange do
       val isSkinned = zc.animChar.clips.nonEmpty
       if isSkinned then
         shadowShader.setBool("skinned", true)
@@ -355,7 +378,7 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings(),
     // Characters: animated models use GPU skinning — the VBO holds bone-local S3D positions
     // and the shader transforms them via per-bone uniforms. Non-animated characters (no clips)
     // use the standard path with pre-transformed GL positions, same as zone/objects.
-    for zc <- zoneCharacters.values if zc.hasRendering do
+    for zc <- zoneCharacters.values if zc.hasRendering && zc.inRenderRange do
       zc.animChar.update(deltaTime)
       val isSkinned = zc.animChar.clips.nonEmpty
       if isSkinned then
@@ -412,7 +435,7 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings(),
       obj.glMesh.unbind()
 
     // Characters transparent pass (GPU skinning)
-    for zc <- zoneCharacters.values if zc.hasRendering do
+    for zc <- zoneCharacters.values if zc.hasRendering && zc.inRenderRange do
       val isSkinned = zc.animChar.clips.nonEmpty
       if isSkinned then
         shader.setBool("skinned", true)

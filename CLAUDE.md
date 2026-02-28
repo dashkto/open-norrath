@@ -17,3 +17,7 @@
 ## Code Style
 
 - Use liberal code comments, especially for surprising behavior, hard-won lessons, and non-obvious gotchas (e.g., "the server never sends X for NPCs"). Don't shy away from explaining *why* something is the way it is.
+- There is no linter.  If code changes it is due to another author.
+- 4 spaces for indentation, no tabs. Line length should be <= 120 characters, but this is not strictly enforced.
+- Use descriptive variable and method names. Avoid abbreviations unless they are widely understood.
+- Proper class decomosition is encouraged. If a class exceeds ~200 lines, consider breaking it up into smaller, more focused classes.
