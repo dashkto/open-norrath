@@ -9,12 +9,15 @@ import org.lwjgl.opengl.GL11.*
 
 import opennorrath.{Game, LoginSession}
 import opennorrath.network.{LoginClient, LoginEvent, NetCommand, NetworkThread}
+import opennorrath.network.titanium.TitaniumNetworkThread
 import opennorrath.ui.Colors
 
 class LoginScreen(ctx: GameContext) extends Screen:
 
   private val loginClient = LoginClient()
-  private val networkThread = NetworkThread(loginClient)
+  private val networkThread =
+    if Game.macMode then NetworkThread(loginClient)
+    else TitaniumNetworkThread(loginClient)
 
   private val username = new ImString(64)
   private val password = new ImString(64)

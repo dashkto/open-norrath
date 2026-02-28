@@ -17,7 +17,7 @@ enum NetCommand:
   * - NetCommand queue (game thread → network thread)
   * - PacketHandler.errors queue (network thread → game thread)
   */
-class NetworkThread(handler: PacketHandler):
+class NetworkThread(handler: PacketHandler) extends EqNetworkThread:
   private val running = AtomicBoolean(false)
   private val commands = ConcurrentLinkedQueue[NetCommand]()
   private var socket: DatagramSocket = uninitialized

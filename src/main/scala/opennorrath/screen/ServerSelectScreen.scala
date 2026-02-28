@@ -8,6 +8,7 @@ import org.lwjgl.opengl.GL11.*
 
 import opennorrath.{Game, WorldSession}
 import opennorrath.network.*
+import opennorrath.network.titanium.TitaniumNetworkThread
 import opennorrath.ui.Colors
 
 class ServerSelectScreen(
@@ -136,7 +137,7 @@ class ServerSelectScreen(
       statusColor = Colors.text
       waiting = true
       loginError = false
-      loginSession.client.selectServer(server.ip)
+      loginSession.client.selectServer(server.ip, server.worldId)
 
   private def pollWorldEvents(): Unit =
     Game.worldSession match
@@ -176,7 +177,9 @@ class ServerSelectScreen(
     Game.worldKey = loginClient.worldKey
 
     val wc = WorldClient()
-    val wnt = NetworkThread(wc)
+    val wnt: EqNetworkThread =
+      if Game.macMode then NetworkThread(wc)
+      else TitaniumNetworkThread(wc)
     Game.worldSession = Some(WorldSession(wc, wnt))
     wnt.start()
     wnt.send(NetCommand.Connect(serverIp, worldPort))

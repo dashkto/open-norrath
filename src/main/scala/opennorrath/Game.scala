@@ -4,19 +4,19 @@ import imgui.ImGui
 
 import org.lwjgl.glfw.GLFW.*
 
-import opennorrath.network.{LoginClient, NetworkThread, WorldClient, ZoneClient}
+import opennorrath.network.{EqNetworkThread, LoginClient, WorldClient, ZoneClient}
 import opennorrath.screen.{GameContext, Screen}
 
 /** Shared login connection, owned by Game, outlives any individual screen. */
-class LoginSession(val client: LoginClient, val network: NetworkThread):
+class LoginSession(val client: LoginClient, val network: EqNetworkThread):
   def stop(): Unit = network.stop()
 
 /** Shared world connection, owned by Game, outlives any individual screen. */
-class WorldSession(val client: WorldClient, val network: NetworkThread):
+class WorldSession(val client: WorldClient, val network: EqNetworkThread):
   def stop(): Unit = network.stop()
 
 /** Shared zone connection, owned by Game, outlives any individual screen. */
-class ZoneSession(val client: ZoneClient, val network: NetworkThread):
+class ZoneSession(val client: ZoneClient, val network: EqNetworkThread):
   def stop(): Unit = network.stop()
 
 object Game:

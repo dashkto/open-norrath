@@ -5,6 +5,7 @@
 ## Reference Projects
 
 - **EQEmu**: A downloaded copy of the EQEmu server source should exist in an adjacent project directory (sibling to this repo). Use it as reference for quest scripts, spawn data, zone mechanics, and server-side logic.
+- **EQPcDocker**: A Docker-based EQEmu server setup for the Titanium client, located in the adjacent `EQPcDocker` directory. Repo: https://github.com/dashkto/EQPcDocker
 
 ## Asset Paths
 

@@ -2,6 +2,9 @@ package opennorrath.network
 
 import java.util.concurrent.ConcurrentLinkedQueue
 
+import opennorrath.Game
+import opennorrath.network.titanium.{TitaniumWorldCodec, TitaniumWorldOpcodes}
+
 enum WorldState:
   case Disconnected, Connecting, Authenticated, CharacterSelect, EnteringZone, Failed
 
@@ -19,6 +22,10 @@ enum WorldEvent:
 
 /** World server protocol state machine.
   *
+  * Supports both Mac (OldPacket) and Titanium (EqStream) protocols.
+  * Mac mode uses OldPacket.encode + outQueue + FragmentAssembler.
+  * Titanium mode uses appOutQueue — TitaniumNetworkThread handles framing.
+  *
   * Thread safety model (mirrors LoginClient):
   * - Game thread calls: connect(), enterWorld(), pollEvent(), state
   * - Network thread calls: handlePacket(), tick(), pollOutgoing()
@@ -29,10 +36,11 @@ class WorldClient extends PacketHandler:
   val events = ConcurrentLinkedQueue[WorldEvent]()
   val errors = ConcurrentLinkedQueue[String]()
 
+  // Mac transport outgoing queues
   private val outQueue = ConcurrentLinkedQueue[Array[Byte]]()
   private val pendingApps = ConcurrentLinkedQueue[(Short, Array[Byte])]()
 
-  // Sequence tracking (network thread only — never touch from game thread)
+  // Sequence tracking for Mac transport (network thread only)
   private var outSeq: Int = 0
   private var outArq: Int = 0
   private var lastInArq: Int = -1
@@ -40,10 +48,10 @@ class WorldClient extends PacketHandler:
   private var firstPacket = true
   private var fragSeq: Int = 0
 
-  // Fragment reassembly
+  // Fragment reassembly (Mac only — Titanium handles fragments in TitaniumNetworkThread)
   private val assembler = FragmentAssembler()
 
-  // Keepalive — send periodic ACKs so the server doesn't drop the connection
+  // Keepalive — send periodic ACKs so the server doesn't drop the connection (Mac only)
   private var lastSentMs: Long = 0
   private val KeepaliveIntervalMs = 5000L
 
@@ -61,24 +69,51 @@ class WorldClient extends PacketHandler:
     pendingSessionKey = sessionKey
     state = WorldState.Connecting
     emit(WorldEvent.StateChanged(state))
-    queueAppPacket(WorldOpcodes.SendLoginInfo, WorldCodec.encodeLoginInfo(accountId, sessionKey))
+    if Game.macMode then
+      queueAppPacket(MacWorldOpcodes.SendLoginInfo, WorldCodec.encodeLoginInfo(accountId, sessionKey))
+    else
+      queueAppPacket(
+        TitaniumWorldOpcodes.SendLoginInfo,
+        TitaniumWorldCodec.encodeLoginInfo(accountId, sessionKey),
+      )
 
   /** Initiate world reconnection for zone-to-zone. Called from game thread.
-    * Server will recognize pZoning=true and skip character select.
+    * Server will recognize zoning=true and skip character select.
     */
   def connectForZoning(accountId: Int, sessionKey: String, charName: String): Unit =
     zoningCharName = charName
-    connect(accountId, sessionKey)
+    pendingAccountId = accountId
+    pendingSessionKey = sessionKey
+    state = WorldState.Connecting
+    emit(WorldEvent.StateChanged(state))
+    if Game.macMode then
+      // Mac LoginInfo_Struct doesn't have a separate zoning variant in our codec,
+      // but the zoning byte at offset 192 can be set
+      queueAppPacket(MacWorldOpcodes.SendLoginInfo, WorldCodec.encodeLoginInfo(accountId, sessionKey))
+    else
+      queueAppPacket(
+        TitaniumWorldOpcodes.SendLoginInfo,
+        TitaniumWorldCodec.encodeLoginInfoZoning(accountId, sessionKey),
+      )
 
   /** Request to enter the world with a character. Called from game thread. */
   def enterWorld(charName: String): Unit =
     state = WorldState.EnteringZone
     emit(WorldEvent.StateChanged(state))
-    queueAppPacket(WorldOpcodes.EnterWorld, WorldCodec.encodeEnterWorld(charName))
+    if Game.macMode then
+      queueAppPacket(MacWorldOpcodes.EnterWorld, WorldCodec.encodeEnterWorld(charName))
+    else
+      queueAppPacket(TitaniumWorldOpcodes.EnterWorld, TitaniumWorldCodec.encodeEnterWorld(charName))
 
   /** Check if a name is available. Called from game thread. */
   def approveName(name: String, race: Int, classId: Int): Unit =
-    queueAppPacket(WorldOpcodes.ApproveName, WorldCodec.encodeApproveName(name, race, classId))
+    if Game.macMode then
+      queueAppPacket(MacWorldOpcodes.ApproveName, WorldCodec.encodeApproveName(name, race, classId))
+    else
+      queueAppPacket(
+        TitaniumWorldOpcodes.ApproveName,
+        TitaniumWorldCodec.encodeApproveName(name, race, classId),
+      )
 
   /** Create a character. Called from game thread. */
   def createCharacter(
@@ -90,14 +125,29 @@ class WorldClient extends PacketHandler:
     eyeColor1: Int = 0, eyeColor2: Int = 0,
     hairStyle: Int = 0, beard: Int = 0, face: Int = 0,
   ): Unit =
-    queueAppPacket(WorldOpcodes.CharacterCreate, WorldCodec.encodeCharCreate(
-      name, gender, race, classId, str, sta, cha, dex, int_, agi, wis,
-      startZone, deity, hairColor, beardColor, eyeColor1, eyeColor2,
-      hairStyle, beard, face,
-    ))
+    if Game.macMode then
+      queueAppPacket(MacWorldOpcodes.CharacterCreate, WorldCodec.encodeCharCreate(
+        name, gender, race, classId, str, sta, cha, dex, int_, agi, wis,
+        startZone, deity, hairColor, beardColor, eyeColor1, eyeColor2,
+        hairStyle, beard, face,
+      ))
+    else
+      queueAppPacket(TitaniumWorldOpcodes.CharacterCreate, TitaniumWorldCodec.encodeCharCreate(
+        name, gender, race, classId, str, sta, cha, dex, int_, agi, wis,
+        startZone, deity, hairColor, beardColor, eyeColor1, eyeColor2,
+        hairStyle, beard, face,
+      ))
 
   /** Called from network thread when a decoded packet arrives. */
   def handlePacket(packet: InboundPacket): Unit =
+    if Game.macMode then
+      handleMacPacket(packet)
+    else
+      handleTitaniumPacket(packet)
+
+  // ---- Mac protocol handling ----
+
+  private def handleMacPacket(packet: InboundPacket): Unit =
     // Track ARQs for acknowledgment
     packet.arq.foreach { arq =>
       lastInArq = arq
@@ -111,81 +161,151 @@ class WorldClient extends PacketHandler:
 
     if pkt.opcode == 0 then return
 
-    println(f"[World] Received opcode: 0x${pkt.opcode & 0xFFFF}%04x (${WorldOpcodes.name(pkt.opcode)}) ${pkt.payload.length}B")
+    println(f"[World] Received opcode: 0x${pkt.opcode & 0xFFFF}%04x " +
+      s"(${MacWorldOpcodes.name(pkt.opcode)}) ${pkt.payload.length}B")
+    dispatchMacOpcode(pkt)
+
+  private def dispatchMacOpcode(pkt: InboundPacket): Unit =
     pkt.opcode match
-      case WorldOpcodes.SendCharInfo =>
+      case MacWorldOpcodes.SendCharInfo =>
         characters = WorldCodec.decodeCharacterSelect(pkt.payload)
         state = WorldState.CharacterSelect
         emit(WorldEvent.CharacterList(characters))
         emit(WorldEvent.StateChanged(state))
 
-      case WorldOpcodes.ApproveWorld =>
+      case MacWorldOpcodes.ApproveWorld =>
         state = WorldState.Authenticated
         emit(WorldEvent.StateChanged(state))
 
-      case WorldOpcodes.GuildsList =>
+      case MacWorldOpcodes.GuildsList =>
         val guilds = WorldCodec.decodeGuildsList(pkt.payload)
         emit(WorldEvent.GuildsReceived(guilds))
 
-      case WorldOpcodes.LogServer =>
+      case MacWorldOpcodes.LogServer =>
         val host = WorldCodec.decodeLogServer(pkt.payload)
         emit(WorldEvent.LogServerReceived(host))
 
-      case WorldOpcodes.ExpansionInfo =>
+      case MacWorldOpcodes.ExpansionInfo =>
         val exp = WorldCodec.decodeExpansionInfo(pkt.payload)
         emit(WorldEvent.ExpansionReceived(exp))
 
-      case WorldOpcodes.MOTD =>
+      case MacWorldOpcodes.MOTD =>
         val msg = WorldCodec.decodeMOTD(pkt.payload)
         emit(WorldEvent.MOTDReceived(msg))
 
-      case WorldOpcodes.SetChatServer =>
+      case MacWorldOpcodes.SetChatServer =>
         val host = WorldCodec.decodeChatServer(pkt.payload)
         emit(WorldEvent.ChatServerReceived(host))
 
-      case WorldOpcodes.ZoneServerInfo =>
+      case MacWorldOpcodes.ZoneServerInfo =>
         WorldCodec.decodeZoneServerInfo(pkt.payload) match
           case Some(addr) => emit(WorldEvent.ZoneInfo(addr))
           case None => ()
 
-      case WorldOpcodes.ApproveName =>
+      case MacWorldOpcodes.ApproveName =>
         val approved = WorldCodec.decodeNameApproval(pkt.payload)
         emit(WorldEvent.NameApproved(approved))
 
-      case WorldOpcodes.EnterWorld =>
+      case MacWorldOpcodes.EnterWorld =>
         // Server sends OP_EnterWorld during zoning reconnect (pZoning=true).
         // Auto-respond with OP_EnterWorld to continue the zone-to-zone flow.
         if zoningCharName.nonEmpty then
           println(s"[World] Zoning: auto-responding OP_EnterWorld for '$zoningCharName'")
-          queueAppPacket(WorldOpcodes.EnterWorld, WorldCodec.encodeEnterWorld(zoningCharName))
+          queueAppPacket(MacWorldOpcodes.EnterWorld, WorldCodec.encodeEnterWorld(zoningCharName))
           state = WorldState.EnteringZone
           emit(WorldEvent.StateChanged(state))
 
       case other =>
         println(f"[World] Unhandled opcode: 0x${other & 0xFFFF}%04x (${pkt.payload.length} bytes)")
 
+  // ---- Titanium protocol handling ----
+
+  private def handleTitaniumPacket(packet: InboundPacket): Unit =
+    if packet.opcode == 0 then return
+
+    val op = packet.opcode
+    println(f"[World] Received opcode: 0x${op & 0xFFFF}%04x " +
+      s"(${TitaniumWorldOpcodes.name(op)}) ${packet.payload.length}B")
+
+    if op == TitaniumWorldOpcodes.SendCharInfo then
+      characters = TitaniumWorldCodec.decodeCharacterSelect(packet.payload)
+      state = WorldState.CharacterSelect
+      emit(WorldEvent.CharacterList(characters))
+      emit(WorldEvent.StateChanged(state))
+
+    else if op == TitaniumWorldOpcodes.ApproveWorld then
+      state = WorldState.Authenticated
+      emit(WorldEvent.StateChanged(state))
+
+    else if op == TitaniumWorldOpcodes.GuildsList then
+      val guilds = TitaniumWorldCodec.decodeGuildsList(packet.payload)
+      emit(WorldEvent.GuildsReceived(guilds))
+
+    else if op == TitaniumWorldOpcodes.LogServer then
+      val host = TitaniumWorldCodec.decodeLogServer(packet.payload)
+      emit(WorldEvent.LogServerReceived(host))
+
+    else if op == TitaniumWorldOpcodes.ExpansionInfo then
+      val exp = TitaniumWorldCodec.decodeExpansionInfo(packet.payload)
+      emit(WorldEvent.ExpansionReceived(exp))
+
+    else if op == TitaniumWorldOpcodes.MOTD then
+      val msg = TitaniumWorldCodec.decodeMOTD(packet.payload)
+      emit(WorldEvent.MOTDReceived(msg))
+
+    else if op == TitaniumWorldOpcodes.SetChatServer then
+      val host = TitaniumWorldCodec.decodeChatServer(packet.payload)
+      emit(WorldEvent.ChatServerReceived(host))
+
+    else if op == TitaniumWorldOpcodes.ZoneServerInfo then
+      TitaniumWorldCodec.decodeZoneServerInfo(packet.payload) match
+        case Some(addr) => emit(WorldEvent.ZoneInfo(addr))
+        case None => ()
+
+    else if op == TitaniumWorldOpcodes.ApproveName then
+      val approved = TitaniumWorldCodec.decodeNameApproval(packet.payload)
+      emit(WorldEvent.NameApproved(approved))
+
+    else if op == TitaniumWorldOpcodes.EnterWorld then
+      // Server sends OP_EnterWorld during zoning reconnect
+      if zoningCharName.nonEmpty then
+        println(s"[World] Zoning: auto-responding OP_EnterWorld for '$zoningCharName'")
+        queueAppPacket(
+          TitaniumWorldOpcodes.EnterWorld,
+          TitaniumWorldCodec.encodeEnterWorld(zoningCharName),
+        )
+        state = WorldState.EnteringZone
+        emit(WorldEvent.StateChanged(state))
+
+    else
+      println(f"[World] Unhandled Titanium opcode: 0x${op & 0xFFFF}%04x (${packet.payload.length} bytes)")
+
+  // ---- Common ----
+
   /** Called periodically from network thread. Builds queued app packets and ACKs. */
   def tick(): Unit =
-    // Build pending app packets (queued from game thread, built here on network thread)
-    var pending = pendingApps.poll()
-    while pending != null do
-      buildAppPacket(pending._1, pending._2)
-      pending = pendingApps.poll()
+    if Game.macMode then
+      // Mac: build pending app packets (queued from game thread, built here on network thread)
+      var pending = pendingApps.poll()
+      while pending != null do
+        buildAppPacket(pending._1, pending._2)
+        pending = pendingApps.poll()
 
-    if needArsp then
-      val ack = OldPacket.encodeAck(nextSeq(), lastInArq)
-      outQueue.add(ack)
-      needArsp = false
-      lastSentMs = System.currentTimeMillis()
+      if needArsp then
+        val ack = OldPacket.encodeAck(nextSeq(), lastInArq)
+        outQueue.add(ack)
+        needArsp = false
+        lastSentMs = System.currentTimeMillis()
 
-    // Keepalive — send a periodic ACK to prevent server from dropping idle connection
-    val now = System.currentTimeMillis()
-    if lastInArq >= 0 && now - lastSentMs > KeepaliveIntervalMs then
-      val ack = OldPacket.encodeAck(nextSeq(), lastInArq)
-      outQueue.add(ack)
-      lastSentMs = now
+      // Keepalive — send a periodic ACK to prevent server from dropping idle connection
+      val now = System.currentTimeMillis()
+      if lastInArq >= 0 && now - lastSentMs > KeepaliveIntervalMs then
+        val ack = OldPacket.encodeAck(nextSeq(), lastInArq)
+        outQueue.add(ack)
+        lastSentMs = now
+    // Titanium: no tick work needed — TitaniumNetworkThread handles ACKs and keepalive
 
-  /** Dequeue next outgoing raw packet. Called from network thread. */
+  /** Dequeue next outgoing raw packet. Called from network thread (Mac transport). */
   def pollOutgoing(): Option[Array[Byte]] =
     Option(outQueue.poll())
 
@@ -199,9 +319,13 @@ class WorldClient extends PacketHandler:
 
   /** Queue an app packet for sending. Safe to call from game thread. */
   private def queueAppPacket(opcode: Short, payload: Array[Byte]): Unit =
-    pendingApps.add((opcode, payload))
+    if Game.macMode then
+      pendingApps.add((opcode, payload))
+    else
+      appOutQueue.add((opcode, payload))
 
-  /** Build and enqueue a raw packet. Called from network thread only. */
+  // ---- Mac transport helpers (network thread only) ----
+
   private def buildAppPacket(opcode: Short, payload: Array[Byte]): Unit =
     if payload.length > 510 then
       buildFragmentedPacket(opcode, payload)

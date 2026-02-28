@@ -15,7 +15,8 @@ import opennorrath.animation.AnimCode
 import opennorrath.render.Shader
 import opennorrath.state.{GameClock, PlayerCharacter, ZoneCharacter}
 import opennorrath.world.{CameraController, EqCoords, SpellEffectSystem, TargetingSystem, ZoneRenderer}
-import opennorrath.network.{InventoryItem, NetCommand, NetworkThread, PlayerPosition, PlayerProfileData, SpawnAppearanceChange, SpawnData, WorldClient, WorldEvent, ZoneEvent, ZonePointData, ZoneState}
+import opennorrath.network.{EqNetworkThread, InventoryItem, NetCommand, NetworkThread, PlayerPosition, PlayerProfileData, SpawnAppearanceChange, SpawnData, WorldClient, WorldEvent, ZoneEvent, ZonePointData, ZoneState}
+import opennorrath.network.titanium.TitaniumNetworkThread
 import opennorrath.ui.{EqClass, NameplateRenderer, ZoneHud}
 
 class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData] = None, profile: Option[PlayerProfileData] = None) extends Screen:
@@ -625,7 +626,9 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
     // Create new world session in zoning mode
     val charName = player.map(_.name).getOrElse("")
     val wc = WorldClient()
-    val wnt = NetworkThread(wc)
+    val wnt: EqNetworkThread =
+      if Game.macMode then NetworkThread(wc)
+      else TitaniumNetworkThread(wc)
     Game.worldSession = Some(WorldSession(wc, wnt))
     wnt.start()
     wnt.send(NetCommand.Connect(Game.worldHost, Game.worldPort))

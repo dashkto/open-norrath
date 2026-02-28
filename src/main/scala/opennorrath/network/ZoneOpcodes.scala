@@ -4,7 +4,7 @@ package opennorrath.network
   * Values from EQMacDocker/Server/utils/patches/patch_Mac.conf.
   * These are big-endian wire values (matching how OldPacket reads opcodes).
   */
-object ZoneOpcodes:
+object MacZoneOpcodes extends ZoneOpcodes:
 
   // --- Zone Entry Handshake ---
   val ZoneEntry: Short          = 0x2840.toShort  // Client → Zone: request zone entry

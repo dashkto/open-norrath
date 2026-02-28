@@ -3,6 +3,9 @@
 # Use EQG companion files (emitters, etc.) instead of deriving from S3D data
 use_eqg: false
 
+# Protocol: true = Mac (EQMacDocker), false = Titanium/PC (EQEmu)
+mac_mode: true
+
 # Rendering
 render:
   # Max distance (GL units) to render zone characters — further spawns are culled

@@ -2,6 +2,9 @@ package opennorrath.network
 
 import java.util.concurrent.ConcurrentLinkedQueue
 
+import opennorrath.Game
+import opennorrath.network.titanium.{TitaniumZoneCodec, TitaniumZoneOpcodes}
+
 enum ZoneState:
   /** Not connected to zone server. */
   case Disconnected
@@ -128,6 +131,10 @@ enum ZoneEvent:
   *  11. Zone is ready — ongoing updates flow
   */
 class ZoneClient extends PacketHandler:
+  /** Protocol-specific opcodes — resolved once from Game.macMode. */
+  private val opcodes: ZoneOpcodes =
+    if Game.macMode then MacZoneOpcodes else TitaniumZoneOpcodes
+
   @volatile var state: ZoneState = ZoneState.Disconnected
   val events = ConcurrentLinkedQueue[ZoneEvent]()
   val errors = ConcurrentLinkedQueue[String]()
@@ -190,9 +197,11 @@ class ZoneClient extends PacketHandler:
     pendingCharName = charName
     state = ZoneState.Connecting
     emit(ZoneEvent.StateChanged(state))
-    // Mac zone signature: first packet must be OP_DataRate for the server to identify us
-    queueAppPacket(ZoneOpcodes.DataRate, ZoneCodec.encodeDataRate(8.0f))
-    queueAppPacket(ZoneOpcodes.ZoneEntry, ZoneCodec.encodeZoneEntry(charName))
+    // Mac zone signature: first packet must be OP_DataRate for the server to identify us.
+    // Titanium doesn't have DataRate (returns 0), so this is skipped.
+    if opcodes.DataRate != 0 then
+      queueAppPacket(opcodes.DataRate, ZoneCodec.encodeDataRate(8.0f))
+    queueAppPacket(opcodes.ZoneEntry, ZoneCodec.encodeZoneEntry(charName))
     lastZoneEntrySentMs = System.currentTimeMillis()
     zoneEntryRetries = 0
     state = ZoneState.WaitingForProfile
@@ -201,36 +210,45 @@ class ZoneClient extends PacketHandler:
   /** Send player position update. Called from game thread each tick. */
   def sendPosition(pos: PlayerPosition): Unit =
     if state == ZoneState.InZone then
-      queueAppPacket(ZoneOpcodes.ClientUpdate, ZoneCodec.encodeClientUpdate(pos))
+      // Encoding differs: Mac 15-byte packed int16, Titanium 36-byte floats
+      val payload = if Game.macMode then ZoneCodec.encodeClientUpdate(pos)
+                    else TitaniumZoneCodec.encodeClientUpdate(pos)
+      queueAppPacket(opcodes.ClientUpdate, payload)
 
   /** Target an entity. Called from game thread. */
   def target(targetId: Int): Unit =
-    queueAppPacket(ZoneOpcodes.TargetMouse, ZoneCodec.encodeTarget(targetId))
+    // Encoding differs: Mac uint16 (2 bytes), Titanium uint32 (4 bytes)
+    val payload = if Game.macMode then ZoneCodec.encodeTarget(targetId)
+                  else TitaniumZoneCodec.encodeTarget(targetId)
+    queueAppPacket(opcodes.TargetMouse, payload)
 
   /** Consider an entity. Called from game thread. */
   def consider(playerId: Int, targetId: Int): Unit =
-    queueAppPacket(ZoneOpcodes.Consider, ZoneCodec.encodeConsider(playerId, targetId))
+    // Encoding differs: Mac uint16 IDs, Titanium uint32 IDs
+    val payload = if Game.macMode then ZoneCodec.encodeConsider(playerId, targetId)
+                  else TitaniumZoneCodec.encodeConsider(playerId, targetId)
+    queueAppPacket(opcodes.Consider, payload)
 
   /** Send a chat message. Called from game thread. */
   def sendChat(sender: String, target: String, channel: Int, language: Int, message: String): Unit =
-    queueAppPacket(ZoneOpcodes.ChannelMessage, ZoneCodec.encodeChannelMessage(sender, target, channel, language, message))
+    queueAppPacket(opcodes.ChannelMessage, ZoneCodec.encodeChannelMessage(sender, target, channel, language, message))
 
   /** Toggle auto-attack. Called from game thread. */
   def autoAttack(enabled: Boolean): Unit =
-    queueAppPacket(ZoneOpcodes.AutoAttack, ZoneCodec.encodeAutoAttack(enabled))
+    queueAppPacket(opcodes.AutoAttack, ZoneCodec.encodeAutoAttack(enabled))
 
   /** Set spawn appearance (sit/stand/etc). Called from game thread. */
   def setAppearance(spawnId: Int, appearanceType: Int, parameter: Int): Unit =
-    queueAppPacket(ZoneOpcodes.SpawnAppearance, ZoneCodec.encodeSpawnAppearance(spawnId, appearanceType, parameter))
+    queueAppPacket(opcodes.SpawnAppearance, ZoneCodec.encodeSpawnAppearance(spawnId, appearanceType, parameter))
 
   /** Send face/hair/beard change to server. Called from game thread. */
   def sendFaceChange(data: FaceChangeData): Unit =
-    queueAppPacket(ZoneOpcodes.FaceChange, ZoneCodec.encodeFaceChange(data))
+    queueAppPacket(opcodes.FaceChange, ZoneCodec.encodeFaceChange(data))
 
   /** Send a /who or /whoall request to the server. Called from game thread. */
   def sendWhoAll(whom: String = ""): Unit =
     if state == ZoneState.InZone then
-      queueAppPacket(ZoneOpcodes.WhoAllRequest, ZoneCodec.encodeWhoAllRequest(whom = whom))
+      queueAppPacket(opcodes.WhoAllRequest, ZoneCodec.encodeWhoAllRequest(whom = whom))
 
   /** Whether a camp is in progress (client waiting to send OP_Logout). */
   var camping: Boolean = false
@@ -239,17 +257,17 @@ class ZoneClient extends PacketHandler:
   def camp(): Unit =
     println("[Zone] Sending OP_Camp")
     camping = true
-    queueAppPacket(ZoneOpcodes.Camp, ZoneCodec.encodeCamp)
+    queueAppPacket(opcodes.Camp, ZoneCodec.encodeCamp)
 
   /** Send OP_Logout after camp timer expires. Called from game thread. */
   def sendLogout(): Unit =
     println("[Zone] Sending OP_Logout (camp timer expired)")
-    queueAppPacket(ZoneOpcodes.Logout, ZoneCodec.encodeLogout)
+    queueAppPacket(opcodes.Logout, ZoneCodec.encodeLogout)
 
   /** Move/swap an inventory item. Called from game thread. */
   def sendMoveItem(fromSlot: Int, toSlot: Int, stackCount: Int = 0): Unit =
     if state == ZoneState.InZone then
-      queueAppPacket(ZoneOpcodes.MoveItem, ZoneCodec.encodeMoveItem(fromSlot, toSlot, stackCount))
+      queueAppPacket(opcodes.MoveItem, ZoneCodec.encodeMoveItem(fromSlot, toSlot, stackCount))
       // Update local inventory and emit event so listeners (e.g. weapon visual updates)
       // react immediately — the server doesn't echo OP_MoveItem back to the originator.
       val fromItem = inventory.find(_.equipSlot == fromSlot)
@@ -262,36 +280,34 @@ class ZoneClient extends PacketHandler:
   /** Request zone change (client-initiated, e.g. zone line). Called from game thread. */
   def sendZoneChange(zoneId: Int): Unit =
     val charName = profile.map(_.name).getOrElse(pendingCharName)
-    queueAppPacket(ZoneOpcodes.ZoneChange, ZoneCodec.encodeZoneChange(charName, zoneId))
+    queueAppPacket(opcodes.ZoneChange, ZoneCodec.encodeZoneChange(charName, zoneId))
 
   /** Save character. Called from game thread. */
   def save(): Unit =
-    queueAppPacket(ZoneOpcodes.Save, ZoneCodec.encodeSave)
+    queueAppPacket(opcodes.Save, ZoneCodec.encodeSave)
 
   /** Notify server the player jumped. Called from game thread. */
   def sendJump(): Unit =
-    queueAppPacket(ZoneOpcodes.Jump, ZoneCodec.encodeJump)
+    queueAppPacket(opcodes.Jump, ZoneCodec.encodeJump)
 
   /** Consume food/drink. Called from game thread.
     * @param slot      inventory slot of the item
     * @param itemType  1=food, 2=water (Consume_Struct type field)
     */
   def sendConsume(slot: Int, itemType: Int): Unit =
-    queueAppPacket(ZoneOpcodes.Consume, ZoneCodec.encodeConsume(slot, itemType))
+    queueAppPacket(opcodes.Consume, ZoneCodec.encodeConsume(slot, itemType))
 
   /** Memorize a spell into a gem slot. Called from game thread.
     * Sends OP_MemorizeSpell with scribing=1 so the server persists the gem assignment.
     */
   def sendMemorizeSpell(gemSlot: Int, spellId: Int): Unit =
     if state == ZoneState.InZone then
-      queueAppPacket(ZoneOpcodes.MemorizeSpell,
-        ZoneCodec.encodeMemorizeSpell(gemSlot, spellId, 1))
+      queueAppPacket(opcodes.MemorizeSpell, ZoneCodec.encodeMemorizeSpell(gemSlot, spellId, 1))
 
   /** Unmemorize (forget) a spell from a gem slot. Called from game thread. */
   def sendForgetSpell(gemSlot: Int, spellId: Int): Unit =
     if state == ZoneState.InZone then
-      queueAppPacket(ZoneOpcodes.MemorizeSpell,
-        ZoneCodec.encodeMemorizeSpell(gemSlot, spellId, 2))
+      queueAppPacket(opcodes.MemorizeSpell, ZoneCodec.encodeMemorizeSpell(gemSlot, spellId, 2))
 
   /** Cast a memorized spell from a gem slot. Called from game thread.
     * @param gemSlot  gem slot 0-7
@@ -300,7 +316,7 @@ class ZoneClient extends PacketHandler:
     */
   def sendCastSpell(gemSlot: Int, spellId: Int, targetId: Int): Unit =
     if state == ZoneState.InZone then
-      queueAppPacket(ZoneOpcodes.CastSpell, ZoneCodec.encodeCastSpell(gemSlot, spellId, targetId))
+      queueAppPacket(opcodes.CastSpell, ZoneCodec.encodeCastSpell(gemSlot, spellId, targetId))
 
   /** Scribe a spell scroll into the spell book. Called from game thread.
     * Moves the scroll to cursor (slot 0), then sends OP_MemorizeSpell with scribing=0.
@@ -311,8 +327,7 @@ class ZoneClient extends PacketHandler:
       // Step 1: Move scroll to cursor (server expects scroll on cursor for scribing)
       sendMoveItem(scrollSlot, InventoryItem.Cursor)
       // Step 2: Send OP_MemorizeSpell with scribing=0 (scribe)
-      queueAppPacket(ZoneOpcodes.MemorizeSpell,
-        ZoneCodec.encodeMemorizeSpell(bookSlot, spellId, 0))
+      queueAppPacket(opcodes.MemorizeSpell, ZoneCodec.encodeMemorizeSpell(bookSlot, spellId, 0))
 
   // Merchant state — tracks whether we're waiting for shop inventory
   private var pendingMerchant: Option[MerchantOpen] = None
@@ -322,19 +337,17 @@ class ZoneClient extends PacketHandler:
   /** Open a merchant's shop. Called from game thread. */
   def openMerchant(npcId: Int): Unit =
     println(s"[Zone] Sending OP_ShopRequest for npcId=$npcId playerId=$mySpawnId")
-    queueAppPacket(ZoneOpcodes.ShopRequest,
-      ZoneCodec.encodeMerchantClick(npcId, mySpawnId))
+    queueAppPacket(opcodes.ShopRequest, ZoneCodec.encodeMerchantClick(npcId, mySpawnId))
 
   /** Buy an item from the open merchant. Called from game thread. */
   def buyFromMerchant(slot: Int, quantity: Int): Unit =
     if activeMerchantId != 0 then
-      queueAppPacket(ZoneOpcodes.ShopPlayerBuy,
-        ZoneCodec.encodeMerchantBuy(activeMerchantId, mySpawnId, slot, quantity))
+      queueAppPacket(opcodes.ShopPlayerBuy, ZoneCodec.encodeMerchantBuy(activeMerchantId, mySpawnId, slot, quantity))
 
   /** Close the merchant window. Called from game thread. */
   def closeMerchant(): Unit =
     if activeMerchantId != 0 then
-      queueAppPacket(ZoneOpcodes.ShopEnd, Array.emptyByteArray)
+      queueAppPacket(opcodes.ShopEnd, Array.emptyByteArray)
       activeMerchantId = 0
       pendingMerchant = None
       merchantItems = Vector.empty
@@ -342,22 +355,22 @@ class ZoneClient extends PacketHandler:
   /** Leave / disband the current group. Called from game thread. */
   def disbandGroup(): Unit =
     val myName = profile.map(_.name).getOrElse(pendingCharName)
-    queueAppPacket(ZoneOpcodes.GroupDisband, ZoneCodec.encodeGroupDisband(myName))
+    queueAppPacket(opcodes.GroupDisband, ZoneCodec.encodeGroupDisband(myName))
 
   /** Invite a player to our group. Called from game thread. */
   def inviteToGroup(targetName: String): Unit =
     val myName = profile.map(_.name).getOrElse(pendingCharName)
-    queueAppPacket(ZoneOpcodes.GroupInvite, ZoneCodec.encodeGroupInvite(targetName, myName))
+    queueAppPacket(opcodes.GroupInvite, ZoneCodec.encodeGroupInvite(targetName, myName))
 
   /** Accept a pending group invite. Called from game thread. */
   def acceptGroupInvite(inviterName: String): Unit =
     val myName = profile.map(_.name).getOrElse(pendingCharName)
-    queueAppPacket(ZoneOpcodes.GroupFollow, ZoneCodec.encodeGroupFollow(inviterName, myName))
+    queueAppPacket(opcodes.GroupFollow, ZoneCodec.encodeGroupFollow(inviterName, myName))
 
   /** Decline a pending group invite. Called from game thread. */
   def declineGroupInvite(inviterName: String): Unit =
     val myName = profile.map(_.name).getOrElse(pendingCharName)
-    queueAppPacket(ZoneOpcodes.GroupCancelInvite, ZoneCodec.encodeGroupCancelInvite(inviterName, myName))
+    queueAppPacket(opcodes.GroupCancelInvite, ZoneCodec.encodeGroupCancelInvite(inviterName, myName))
 
   /** Tracks which corpse we're currently requesting loot from. */
   var lootingCorpseId: Int = 0
@@ -365,15 +378,15 @@ class ZoneClient extends PacketHandler:
   /** Request to open a corpse for looting. Called from game thread. */
   def requestLoot(corpseId: Int): Unit =
     lootingCorpseId = corpseId
-    queueAppPacket(ZoneOpcodes.LootRequest, ZoneCodec.encodeLootRequest(corpseId))
+    queueAppPacket(opcodes.LootRequest, ZoneCodec.encodeLootRequest(corpseId))
 
   /** Loot a specific item from the open corpse. Called from game thread. */
   def lootItem(corpseId: Int, lootSlot: Int): Unit =
-    queueAppPacket(ZoneOpcodes.LootItem, ZoneCodec.encodeLootItem(corpseId, lootSlot))
+    queueAppPacket(opcodes.LootItem, ZoneCodec.encodeLootItem(corpseId, lootSlot))
 
   /** Close the loot window. Called from game thread. */
   def endLoot(corpseId: Int): Unit =
-    queueAppPacket(ZoneOpcodes.EndLootRequest, ZoneCodec.encodeLootRequest(corpseId))
+    queueAppPacket(opcodes.EndLootRequest, ZoneCodec.encodeLootRequest(corpseId))
     lootingCorpseId = 0
 
   // ===========================================================================
@@ -381,24 +394,35 @@ class ZoneClient extends PacketHandler:
   // ===========================================================================
 
   def handlePacket(packet: InboundPacket): Unit =
+    if Game.macMode then handleMacPacket(packet)
+    else handleTitaniumPacket(packet)
+
+  // ===========================================================================
+  // Mac protocol handling
+  // ===========================================================================
+
+  private def handleMacPacket(packet: InboundPacket): Unit =
+    // Track ARQs for acknowledgment (Mac OldPacket layer)
     packet.arq.foreach { arq =>
       lastInArq = arq
       needArsp = true
     }
 
-    // Fragment reassembly
+    // Fragment reassembly — may buffer and return None until complete
     val pkt = assembler.process(packet) match
       case Some(p) => p
       case None => return
 
-    if pkt.opcode == 0 then
-      return // pure ACK
+    if pkt.opcode == 0 then return // pure ACK
 
+    dispatchMacOpcode(pkt)
+
+  private def dispatchMacOpcode(pkt: InboundPacket): Unit =
     pkt.opcode match
 
       // --- Zone Entry Handshake ---
 
-      case ZoneOpcodes.PlayerProfile =>
+      case MacZoneOpcodes.PlayerProfile =>
         // PlayerProfile is encrypted + zlib compressed (mac.cpp:290-293)
         val rawOpt = PacketCrypto.decryptAndInflateProfile(pkt.payload)
         rawOpt.flatMap(ZoneCodec.decodePlayerProfile) match
@@ -408,12 +432,12 @@ class ZoneClient extends PacketHandler:
             emit(ZoneEvent.ProfileReceived(pp))
             emit(ZoneEvent.StateChanged(state))
             // Client must request zone data — server won't send it unprompted
-            queueAppPacket(ZoneOpcodes.SetServerFilter, ZoneCodec.encodeServerFilter)
-            queueAppPacket(ZoneOpcodes.ReqNewZone, ZoneCodec.encodeReqNewZone)
+            queueAppPacket(MacZoneOpcodes.SetServerFilter, ZoneCodec.encodeServerFilter)
+            queueAppPacket(MacZoneOpcodes.ReqNewZone, ZoneCodec.encodeReqNewZone)
           case None =>
             emit(ZoneEvent.Error("Failed to decode player profile"))
 
-      case ZoneOpcodes.NewZone =>
+      case MacZoneOpcodes.NewZone =>
         ZoneCodec.decodeNewZone(pkt.payload) match
           case Some(nz) =>
             zoneInfo = Some(nz)
@@ -421,25 +445,22 @@ class ZoneClient extends PacketHandler:
             if state == ZoneState.WaitingForZone then
               state = ZoneState.RequestingSpawns
               emit(ZoneEvent.StateChanged(state))
-              // Request doors/objects/zonepoints
-              queueAppPacket(ZoneOpcodes.ReqClientSpawn, ZoneCodec.encodeReqClientSpawn)
+              queueAppPacket(MacZoneOpcodes.ReqClientSpawn, ZoneCodec.encodeReqClientSpawn)
           case None =>
             emit(ZoneEvent.Error("Failed to decode zone data"))
 
-      case ZoneOpcodes.TimeOfDay =>
+      case MacZoneOpcodes.TimeOfDay =>
         ZoneCodec.decodeTimeOfDay(pkt.payload).foreach(time => emit(ZoneEvent.TimeReceived(time)))
 
       // --- Spawns ---
 
-      case ZoneOpcodes.ZoneEntry =>
-        // Server sends our own spawn back as ServerZoneEntry_Struct (356 bytes, unencrypted)
+      case MacZoneOpcodes.ZoneEntry =>
         ZoneCodec.decodeServerZoneEntry(pkt.payload).foreach { spawn =>
           selfSpawn = Some(spawn)
-          // The server will later assign our spawn ID via SpawnAppearance(SpawnID)
           emit(ZoneEvent.SpawnAdded(spawn))
         }
 
-      case ZoneOpcodes.ZoneSpawns =>
+      case MacZoneOpcodes.ZoneSpawns =>
         // ZoneSpawns are encrypted + zlib compressed (mac.cpp:461-462)
         val rawOpt = PacketCrypto.decryptAndInflateSpawns(pkt.payload)
         val rawData = rawOpt.getOrElse(pkt.payload)
@@ -447,8 +468,7 @@ class ZoneClient extends PacketHandler:
         for s <- spawnList do spawns(s.spawnId) = s
         emit(ZoneEvent.SpawnsLoaded(spawnList))
 
-      case ZoneOpcodes.NewSpawn =>
-        // NewSpawn is encrypted + zlib compressed (same as ZoneSpawns, mac.cpp:356)
+      case MacZoneOpcodes.NewSpawn =>
         val rawOpt = PacketCrypto.decryptAndInflateSpawns(pkt.payload)
         val rawData = rawOpt.getOrElse(pkt.payload)
         ZoneCodec.decodeSpawn(rawData).foreach { s =>
@@ -456,7 +476,7 @@ class ZoneClient extends PacketHandler:
           emit(ZoneEvent.SpawnAdded(s))
         }
 
-      case ZoneOpcodes.DeleteSpawn =>
+      case MacZoneOpcodes.DeleteSpawn =>
         ZoneCodec.decodeDeleteSpawn(pkt.payload).foreach { id =>
           spawns.remove(id)
           emit(ZoneEvent.SpawnRemoved(id))
@@ -464,199 +484,160 @@ class ZoneClient extends PacketHandler:
 
       // --- Movement ---
 
-      case ZoneOpcodes.MobUpdate =>
+      case MacZoneOpcodes.MobUpdate =>
         for upd <- ZoneCodec.decodeMobUpdates(pkt.payload) do
           handleMobPositionUpdate(upd)
 
-      case ZoneOpcodes.ClientUpdate =>
+      case MacZoneOpcodes.ClientUpdate =>
         ZoneCodec.decodeClientUpdate(pkt.payload).foreach(handleMobPositionUpdate)
 
       // --- Combat ---
 
-      case ZoneOpcodes.Damage =>
+      case MacZoneOpcodes.Damage =>
         ZoneCodec.decodeDamage(pkt.payload).foreach(d => emit(ZoneEvent.DamageDealt(d)))
 
-      case ZoneOpcodes.Death =>
+      case MacZoneOpcodes.Death =>
         ZoneCodec.decodeDeath(pkt.payload).foreach { d =>
           spawns.remove(d.spawnId)
           emit(ZoneEvent.EntityDied(d))
-          // Player death: log and disable auto-attack. The actual zone-to-bind
-          // is triggered by OP_GMGoto which the server sends shortly after.
           if d.spawnId == mySpawnId then
             println(s"[Zone] Player died! Killed by spawnId=${d.killerId} damage=${d.damage}")
         }
 
-      case ZoneOpcodes.Consider =>
+      case MacZoneOpcodes.Consider =>
         ZoneCodec.decodeConsider(pkt.payload).foreach(c => emit(ZoneEvent.ConsiderResult(c)))
 
       // --- Appearance / Animation ---
 
-      case ZoneOpcodes.SpawnAppearance =>
-        ZoneCodec.decodeSpawnAppearance(pkt.payload).foreach { change =>
-          // SpawnAppearance(SpawnID) assigns our spawn ID during zone entry
-          if change.appearanceType == SpawnAppearanceChange.SpawnID && state == ZoneState.RequestingSpawns then
-            mySpawnId = change.parameter
-            state = ZoneState.InZone
-            emit(ZoneEvent.StateChanged(state))
-            // Send initial position to trigger server's CompleteConnect → client_data_loaded.
-            // Without this, the server stays in CLIENT_CONNECTING and regen/aggro/etc won't run.
-            selfSpawn match
-              case Some(s) =>
-                println(s"[Zone] Sending initial OP_ClientUpdate (spawnId=$mySpawnId) to trigger CompleteConnect")
-                sendPosition(PlayerPosition(spawnId = mySpawnId, y = s.y, x = s.x, z = s.z,
-                  heading = s.heading.toFloat, deltaY = 0, deltaX = 0, deltaZ = 0, deltaHeading = 0, animation = 0))
-              case None =>
-                println("[Zone] WARNING: selfSpawn is None — cannot send initial OP_ClientUpdate, server will not CompleteConnect!")
-          emit(ZoneEvent.AppearanceChanged(change))
-        }
+      case MacZoneOpcodes.SpawnAppearance =>
+        handleSpawnAppearance(pkt.payload)
 
-      case ZoneOpcodes.WearChange =>
-        ZoneCodec.decodeWearChange(pkt.payload).foreach { wc =>
-          emit(ZoneEvent.EquipmentChanged(wc))
-        }
+      case MacZoneOpcodes.WearChange =>
+        ZoneCodec.decodeWearChange(pkt.payload).foreach(wc => emit(ZoneEvent.EquipmentChanged(wc)))
 
-      case ZoneOpcodes.FaceChange =>
-        ZoneCodec.decodeFaceChange(pkt.payload).foreach { fc =>
-          emit(ZoneEvent.FaceChanged(fc))
-        }
+      case MacZoneOpcodes.FaceChange =>
+        ZoneCodec.decodeFaceChange(pkt.payload).foreach(fc => emit(ZoneEvent.FaceChanged(fc)))
 
-      case ZoneOpcodes.Animation =>
+      case MacZoneOpcodes.Animation =>
         ZoneCodec.decodeAnimation(pkt.payload).foreach(a => emit(ZoneEvent.AnimationTriggered(a)))
 
-      case ZoneOpcodes.Action =>
+      case MacZoneOpcodes.Action =>
         ZoneCodec.decodeAction(pkt.payload).foreach(a => emit(ZoneEvent.SpellActionTriggered(a)))
 
-      case ZoneOpcodes.BeginCast =>
+      case MacZoneOpcodes.BeginCast =>
         ZoneCodec.decodeBeginCast(pkt.payload).foreach(c => emit(ZoneEvent.BeginCastTriggered(c)))
 
-      case ZoneOpcodes.MemorizeSpell =>
-        // Server echoes MemorizeSpell_Struct back to confirm scribing/memorization.
-        // scribing=0 means a spell was scribed into the book at the given slot.
+      case MacZoneOpcodes.MemorizeSpell =>
         ZoneCodec.decodeMemorizeSpell(pkt.payload).foreach { (bookSlot, spellId, scribing) =>
           if scribing == 0 && spellId > 0 then
             println(s"[Zone] Spell $spellId scribed into book slot $bookSlot")
             emit(ZoneEvent.SpellScribed(spellId, bookSlot))
         }
 
-      case ZoneOpcodes.InterruptCast =>
-        // Server sends when a spell cast is interrupted (fizzle, stun, movement, etc.)
-        // messageid is an eqstr_us.txt string ID; color is a MT_* message type code
+      case MacZoneOpcodes.InterruptCast =>
         ZoneCodec.decodeInterruptCast(pkt.payload).foreach { (messageId, color, message) =>
           emit(ZoneEvent.SpellInterrupted(messageId, color, message))
         }
 
       // --- Stats ---
 
-      case ZoneOpcodes.HPUpdate =>
+      case MacZoneOpcodes.HPUpdate =>
         ZoneCodec.decodeHPUpdate(pkt.payload).foreach(hp => emit(ZoneEvent.HPChanged(hp)))
 
-      case ZoneOpcodes.ManaChange =>
-        // Self-only: ManaChange_Struct has (new_mana, spell_id) — no spawnId
+      case MacZoneOpcodes.ManaChange =>
         ZoneCodec.decodeManaChange(pkt.payload).foreach(m => emit(ZoneEvent.ManaChanged(m)))
 
-      case ZoneOpcodes.ManaUpdate =>
-        // ManaUpdate_Struct has (spawn_id, cur_mana)
+      case MacZoneOpcodes.ManaUpdate =>
         ZoneCodec.decodeManaUpdate(pkt.payload).foreach(m => emit(ZoneEvent.ManaChanged(m)))
 
-      case ZoneOpcodes.ExpUpdate =>
+      case MacZoneOpcodes.ExpUpdate =>
         ZoneCodec.decodeExpUpdate(pkt.payload).foreach(e => emit(ZoneEvent.ExpChanged(e)))
 
-      case ZoneOpcodes.LevelUpdate =>
+      case MacZoneOpcodes.LevelUpdate =>
         ZoneCodec.decodeLevelUpdate(pkt.payload).foreach(l => emit(ZoneEvent.LevelChanged(l)))
 
-      case ZoneOpcodes.SkillUpdate =>
+      case MacZoneOpcodes.SkillUpdate =>
         ZoneCodec.decodeSkillUpdate(pkt.payload).foreach(s => emit(ZoneEvent.SkillChanged(s)))
 
       // --- Chat ---
 
-      case ZoneOpcodes.ChannelMessage =>
+      case MacZoneOpcodes.ChannelMessage =>
         ZoneCodec.decodeChannelMessage(pkt.payload).foreach(m => emit(ZoneEvent.ChatReceived(m)))
 
-      case ZoneOpcodes.SpecialMesg =>
+      case MacZoneOpcodes.SpecialMesg =>
         ZoneCodec.decodeSpecialMesg(pkt.payload).foreach(m => emit(ZoneEvent.SpecialMsgReceived(m)))
 
-      case ZoneOpcodes.FormattedMessage =>
+      case MacZoneOpcodes.FormattedMessage =>
         ZoneCodec.decodeFormattedMessage(pkt.payload).foreach(m => emit(ZoneEvent.FormattedMsgReceived(m)))
 
-      case ZoneOpcodes.Emote =>
+      case MacZoneOpcodes.Emote =>
         ZoneCodec.decodeEmote(pkt.payload).foreach(m => emit(ZoneEvent.EmoteReceived(m)))
 
-      case ZoneOpcodes.MultiLineMsg =>
+      case MacZoneOpcodes.MultiLineMsg =>
         ZoneCodec.decodeMultiLineMsg(pkt.payload).foreach(t => emit(ZoneEvent.MultiLineMsgReceived(t)))
 
-      case ZoneOpcodes.WhoAllResponse =>
+      case MacZoneOpcodes.WhoAllResponse =>
         ZoneCodec.decodeWhoAllResponse(pkt.payload).foreach(w => emit(ZoneEvent.WhoAllReceived(w)))
 
-      case ZoneOpcodes.YellForHelp =>
-        // Server broadcasts uint32 spawn ID of the player yelling
+      case MacZoneOpcodes.YellForHelp =>
         if pkt.payload.length >= 4 then
           val spawnId = java.nio.ByteBuffer.wrap(pkt.payload).order(java.nio.ByteOrder.LITTLE_ENDIAN).getInt()
           emit(ZoneEvent.YellReceived(spawnId))
 
       // --- Environment ---
 
-      case ZoneOpcodes.Weather | ZoneOpcodes.Weather2 =>
+      case MacZoneOpcodes.Weather | MacZoneOpcodes.Weather2 =>
         ZoneCodec.decodeWeather(pkt.payload).foreach(w => emit(ZoneEvent.WeatherChanged(w)))
 
       // --- Zone Objects ---
 
-      case ZoneOpcodes.SpawnDoor =>
-        val doors = ZoneCodec.decodeDoors(pkt.payload)
-        emit(ZoneEvent.DoorsLoaded(doors))
+      case MacZoneOpcodes.SpawnDoor =>
+        emit(ZoneEvent.DoorsLoaded(ZoneCodec.decodeDoors(pkt.payload)))
 
-      case ZoneOpcodes.GroundSpawn =>
+      case MacZoneOpcodes.GroundSpawn =>
         ZoneCodec.decodeGroundItem(pkt.payload).foreach(i => emit(ZoneEvent.GroundItemSpawned(i)))
 
-      case ZoneOpcodes.SendZonepoints =>
+      case MacZoneOpcodes.SendZonepoints =>
         val points = ZoneCodec.decodeZonePoints(pkt.payload)
         zonePoints = points
         emit(ZoneEvent.ZonePointsLoaded(points))
 
       // --- Group ---
 
-      case ZoneOpcodes.GroupInvite | ZoneOpcodes.GroupInvite2 =>
-        ZoneCodec.decodeGroupInvite(pkt.payload).foreach { inviterName =>
-          emit(ZoneEvent.GroupInviteReceived(inviterName))
-        }
+      case MacZoneOpcodes.GroupInvite | MacZoneOpcodes.GroupInvite2 =>
+        ZoneCodec.decodeGroupInvite(pkt.payload).foreach(n => emit(ZoneEvent.GroupInviteReceived(n)))
 
-      case ZoneOpcodes.GroupUpdate =>
+      case MacZoneOpcodes.GroupUpdate =>
         ZoneCodec.decodeGroupUpdate(pkt.payload).foreach((members, leader) =>
           emit(ZoneEvent.GroupUpdated(members, leader)))
 
       // --- Zone Change ---
 
-      case ZoneOpcodes.RequestClientZoneChange =>
+      case MacZoneOpcodes.RequestClientZoneChange =>
         ZoneCodec.decodeRequestClientZoneChange(pkt.payload).foreach { req =>
-          // Respond to server — it won't process the zone change without this
           val charName = profile.map(_.name).getOrElse(pendingCharName)
-          queueAppPacket(ZoneOpcodes.ZoneChange, ZoneCodec.encodeZoneChange(charName, req.zoneId))
+          queueAppPacket(MacZoneOpcodes.ZoneChange, ZoneCodec.encodeZoneChange(charName, req.zoneId))
           emit(ZoneEvent.ZoneChangeRequested(req))
         }
 
-      case ZoneOpcodes.GMGoto =>
-        // EQMac death zoning: server sends OP_GMGoto instead of OP_RequestClientZoneChange
-        // because the latter causes Mac-era clients to disconnect during death.
-        // We treat it identically: echo OP_ZoneChange and emit ZoneChangeRequested.
+      case MacZoneOpcodes.GMGoto =>
         ZoneCodec.decodeGMGoto(pkt.payload).foreach { req =>
           println(s"[Zone] OP_GMGoto received — zoning to bind point (zoneId=${req.zoneId})")
           val charName = profile.map(_.name).getOrElse(pendingCharName)
-          queueAppPacket(ZoneOpcodes.ZoneChange, ZoneCodec.encodeZoneChange(charName, req.zoneId))
+          queueAppPacket(MacZoneOpcodes.ZoneChange, ZoneCodec.encodeZoneChange(charName, req.zoneId))
           emit(ZoneEvent.ZoneChangeRequested(req))
         }
 
-      case ZoneOpcodes.ZoneChange =>
+      case MacZoneOpcodes.ZoneChange =>
         ZoneCodec.decodeZoneChange(pkt.payload).foreach { result =>
           println(s"[Zone] OP_ZoneChange response: success=${result.success}")
-          if result.success == 1 then
-            emit(ZoneEvent.ZoneChangeAccepted)
-          else
-            emit(ZoneEvent.ZoneChangeDenied)
+          if result.success == 1 then emit(ZoneEvent.ZoneChangeAccepted)
+          else emit(ZoneEvent.ZoneChangeDenied)
         }
 
-      // --- Misc (log but don't emit events) ---
+      // --- Inventory / Items ---
 
-      case ZoneOpcodes.CharInventory =>
-        // CharInventory: uint16(item_count) + zlib compressed data (mac.cpp:627-628)
+      case MacZoneOpcodes.CharInventory =>
         PacketCrypto.inflateInventory(pkt.payload) match
           case Some((count, raw)) =>
             val items = ZoneCodec.decodeInventory(raw, count)
@@ -664,44 +645,20 @@ class ZoneClient extends PacketHandler:
             emit(ZoneEvent.InventoryLoaded(items))
           case None => ()
 
-      case ZoneOpcodes.MoveItem =>
-        ZoneCodec.decodeMoveItem(pkt.payload).foreach { (from, to) =>
-          // Server-initiated move or resync — update local inventory
-          if to == -1 || to == 0xFFFFFFFF then
-            inventory = inventory.filterNot(_.equipSlot == from)
-          else
-            val fromItem = inventory.find(_.equipSlot == from)
-            val toItem = inventory.find(_.equipSlot == to)
-            inventory = inventory.filterNot(i => i.equipSlot == from || i.equipSlot == to)
-            fromItem.foreach(i => inventory = inventory :+ i.copy(equipSlot = to))
-            toItem.foreach(i => inventory = inventory :+ i.copy(equipSlot = from))
-          emit(ZoneEvent.InventoryMoved(from, to))
-        }
+      case MacZoneOpcodes.MoveItem =>
+        handleMoveItem(pkt.payload)
 
-      case ZoneOpcodes.ItemPacket |
-           ZoneOpcodes.TradeItemPacket |
-           ZoneOpcodes.ObjectItemPacket | ZoneOpcodes.SummonedItem |
-           ZoneOpcodes.ContainerPacket | ZoneOpcodes.BookPacket =>
+      case MacZoneOpcodes.ItemPacket | MacZoneOpcodes.TradeItemPacket |
+           MacZoneOpcodes.ObjectItemPacket | MacZoneOpcodes.SummonedItem |
+           MacZoneOpcodes.ContainerPacket | MacZoneOpcodes.BookPacket =>
         handleItemPacket(pkt.opcode, pkt.payload)
 
       // --- Merchant ---
 
-      case ZoneOpcodes.ShopRequest =>
-        // Server response to our OP_ShopRequest: Merchant_Click_Struct (12 bytes)
-        // command=1 means merchant is ready; shop inventory follows in OP_ShopInventoryPacket
-        println(s"[Zone] Received OP_ShopRequest response (${pkt.payload.length} bytes)")
-        ZoneCodec.decodeMerchantClick(pkt.payload) match
-          case Some(open) =>
-            println(s"[Zone] Merchant open: npcId=${open.merchantId} rate=${open.rate}")
-            pendingMerchant = Some(open)
-            merchantItems = Vector.empty
-          case None =>
-            // Dump raw bytes for debugging
-            val hex = pkt.payload.take(16).map(b => f"${b & 0xFF}%02X").mkString(" ")
-            println(s"[Zone] OP_ShopRequest decode failed (${pkt.payload.length} bytes): $hex")
+      case MacZoneOpcodes.ShopRequest =>
+        handleShopRequest(pkt.payload)
 
-      case ZoneOpcodes.ShopInventoryPacket =>
-        // Concatenated Item_Structs for merchant inventory (data.length / 360 items)
+      case MacZoneOpcodes.ShopInventoryPacket =>
         val items = ZoneCodec.decodeShopInventory(pkt.payload)
         println(s"[Zone] Received OP_ShopInventoryPacket: ${items.size} items (${pkt.payload.length} bytes)")
         pendingMerchant match
@@ -713,97 +670,416 @@ class ZoneClient extends PacketHandler:
           case None =>
             println(s"[Zone] OP_ShopInventoryPacket without pending ShopRequest (${items.size} items)")
 
-      case ZoneOpcodes.MerchantItemPacket =>
-        // Individual merchant item update, or looted item (ItemPacketTrade → OP_MerchantItemPacket)
+      case MacZoneOpcodes.MerchantItemPacket =>
         if pkt.payload.length >= 360 then
           val item = ZoneCodec.decodeItem(pkt.payload, 0)
-          println(s"[Zone] OP_MerchantItemPacket: '${item.name}' equipSlot=${item.equipSlot} activeMerchant=$activeMerchantId")
           if item.name.nonEmpty && activeMerchantId != 0 then
             emit(ZoneEvent.MerchantItemAdded(item))
           else if item.name.nonEmpty then
             handleItemPacket(pkt.opcode, pkt.payload)
 
-      case ZoneOpcodes.ShopPlayerBuy =>
-        // Server echo of buy result — Merchant_Sell_Struct (16 bytes).
-        // IsSold (byte 6): 1 = success, 0 = failed (not enough money, etc).
-        // Actual inventory updates and error messages come via separate packets.
-        ()
+      case MacZoneOpcodes.ShopPlayerBuy => ()
 
-      case ZoneOpcodes.ShopEndConfirm =>
-        activeMerchantId = 0
-        pendingMerchant = None
-        merchantItems = Vector.empty
+      case MacZoneOpcodes.ShopEndConfirm =>
+        activeMerchantId = 0; pendingMerchant = None; merchantItems = Vector.empty
         emit(ZoneEvent.MerchantClosed)
 
-      // Loot item packets go to loot panel, not inventory
-      case ZoneOpcodes.LootItemPacket =>
+      // --- Loot ---
+
+      case MacZoneOpcodes.LootItemPacket =>
         if pkt.payload.length >= 360 then
           val item = ZoneCodec.decodeItem(pkt.payload, 0)
           if item.name.nonEmpty then emit(ZoneEvent.LootItemReceived(item))
 
-      case ZoneOpcodes.MoneyOnCorpse =>
-        ZoneCodec.decodeMoneyOnCorpse(pkt.payload).foreach { resp =>
-          emit(ZoneEvent.LootOpened(lootingCorpseId, resp))
-        }
+      case MacZoneOpcodes.MoneyOnCorpse =>
+        ZoneCodec.decodeMoneyOnCorpse(pkt.payload).foreach(r => emit(ZoneEvent.LootOpened(lootingCorpseId, r)))
 
-      case ZoneOpcodes.LootComplete =>
-        emit(ZoneEvent.LootClosed)
+      case MacZoneOpcodes.LootComplete => emit(ZoneEvent.LootClosed)
+      case MacZoneOpcodes.LootRequest | MacZoneOpcodes.LootItem => ()
 
-      case ZoneOpcodes.LootRequest | ZoneOpcodes.LootItem =>
-        () // Server echoes these back as ACKs — ignore
+      // --- Misc ---
 
-      case ZoneOpcodes.Stamina =>
+      case MacZoneOpcodes.Stamina =>
         ZoneCodec.decodeStamina(pkt.payload).foreach(s => emit(ZoneEvent.StaminaChanged(s)))
 
-      case ZoneOpcodes.SendExpZonein =>
+      case MacZoneOpcodes.SendExpZonein =>
         if state == ZoneState.RequestingSpawns then
-          // Server sent SendExpZonein after doors/objects — respond to complete handshake
-          // This triggers server to send SpawnAppearance(SpawnID), make us visible, etc.
-          queueAppPacket(ZoneOpcodes.SendExpZonein, Array.emptyByteArray)
+          queueAppPacket(MacZoneOpcodes.SendExpZonein, Array.emptyByteArray)
 
-      case ZoneOpcodes.SafePoint => ()
+      case MacZoneOpcodes.SafePoint => ()
 
-      case ZoneOpcodes.Buff =>
-        ZoneCodec.decodeBuff(pkt.payload).foreach((slot, buff) =>
-          emit(ZoneEvent.BuffUpdated(slot, buff)))
+      case MacZoneOpcodes.Buff =>
+        ZoneCodec.decodeBuff(pkt.payload).foreach((slot, buff) => emit(ZoneEvent.BuffUpdated(slot, buff)))
 
-      case ZoneOpcodes.LogoutReply =>
+      case MacZoneOpcodes.LogoutReply =>
         println("[Zone] Received OP_LogoutReply — camp complete")
         state = ZoneState.Disconnected
         emit(ZoneEvent.StateChanged(state))
 
       case other =>
-        val name = ZoneOpcodes.name(other)
+        val name = MacZoneOpcodes.name(other)
         println(f"[Zone] Unhandled opcode: 0x${other & 0xFFFF}%04X ($name) ${pkt.payload.length} bytes")
 
-  def tick(): Unit =
-    // Build pending app packets
-    var pending = pendingApps.poll()
-    while pending != null do
-      buildAppPacket(pending._1, pending._2)
-      pending = pendingApps.poll()
+  // ===========================================================================
+  // Titanium protocol handling
+  // ===========================================================================
 
-    // Retransmit ZoneEntry if zone server hasn't responded
-    if state == ZoneState.WaitingForProfile then
-      val now = System.currentTimeMillis()
-      if now - lastZoneEntrySentMs > ZoneEntryRetryIntervalMs then
-        zoneEntryRetries += 1
-        if zoneEntryRetries > ZoneEntryMaxRetries then
-          state = ZoneState.Failed
-          emit(ZoneEvent.Error(s"Zone server not responding after $ZoneEntryMaxRetries retries"))
+  private def handleTitaniumPacket(packet: InboundPacket): Unit =
+    // Titanium: EqStream handles fragments and ACKs — packets arrive complete
+    if packet.opcode == 0 then return
+
+    val op = packet.opcode
+    val data = packet.payload
+
+    // --- Zone Entry Handshake ---
+
+    if op == TitaniumZoneOpcodes.PlayerProfile then
+      // Titanium profiles are NOT encrypted/compressed — decode directly
+      TitaniumZoneCodec.decodePlayerProfile(data) match
+        case Some(pp) =>
+          profile = Some(pp)
+          state = ZoneState.WaitingForZone
+          emit(ZoneEvent.ProfileReceived(pp))
           emit(ZoneEvent.StateChanged(state))
-        else
-          // Retransmit
-          buildAppPacket(ZoneOpcodes.ZoneEntry, ZoneCodec.encodeZoneEntry(pendingCharName))
-          lastZoneEntrySentMs = now
+          queueAppPacket(TitaniumZoneOpcodes.SetServerFilter, ZoneCodec.encodeServerFilter)
+          queueAppPacket(TitaniumZoneOpcodes.ReqNewZone, ZoneCodec.encodeReqNewZone)
+        case None =>
+          emit(ZoneEvent.Error("Failed to decode Titanium player profile"))
 
-    if needArsp then
-      val ack = OldPacket.encodeAck(nextSeq(), lastInArq)
-      outQueue.add(ack)
-      needArsp = false
+    else if op == TitaniumZoneOpcodes.NewZone then
+      TitaniumZoneCodec.decodeNewZone(data) match
+        case Some(nz) =>
+          zoneInfo = Some(nz)
+          emit(ZoneEvent.ZoneDataReceived(nz))
+          if state == ZoneState.WaitingForZone then
+            state = ZoneState.RequestingSpawns
+            emit(ZoneEvent.StateChanged(state))
+            queueAppPacket(TitaniumZoneOpcodes.ReqClientSpawn, ZoneCodec.encodeReqClientSpawn)
+        case None =>
+          emit(ZoneEvent.Error("Failed to decode Titanium zone data"))
+
+    else if op == TitaniumZoneOpcodes.TimeOfDay then
+      ZoneCodec.decodeTimeOfDay(data).foreach(time => emit(ZoneEvent.TimeReceived(time)))
+
+    // --- Spawns ---
+
+    else if op == TitaniumZoneOpcodes.ZoneEntry then
+      // Server sends our own spawn back (same Spawn_Struct as other spawns in Titanium)
+      TitaniumZoneCodec.decodeServerZoneEntry(data).foreach { spawn =>
+        selfSpawn = Some(spawn)
+        emit(ZoneEvent.SpawnAdded(spawn))
+      }
+
+    else if op == TitaniumZoneOpcodes.ZoneSpawns then
+      // Titanium zone spawns are NOT encrypted — decode directly
+      val spawnList = TitaniumZoneCodec.decodeZoneSpawns(data)
+      for s <- spawnList do spawns(s.spawnId) = s
+      emit(ZoneEvent.SpawnsLoaded(spawnList))
+
+    else if op == TitaniumZoneOpcodes.NewSpawn then
+      // Titanium new spawns are NOT encrypted
+      TitaniumZoneCodec.decodeSpawn(data).foreach { s =>
+        spawns(s.spawnId) = s
+        emit(ZoneEvent.SpawnAdded(s))
+      }
+
+    else if op == TitaniumZoneOpcodes.DeleteSpawn then
+      TitaniumZoneCodec.decodeDeleteSpawn(data).foreach { id =>
+        spawns.remove(id)
+        emit(ZoneEvent.SpawnRemoved(id))
+      }
+
+    // --- Movement ---
+    // Titanium: OP_ClientUpdate carries ALL position updates (self and other mobs).
+    // No separate MobUpdate opcode (Mac's OP_MobUpdate doesn't exist in Titanium).
+
+    else if op == TitaniumZoneOpcodes.ClientUpdate then
+      TitaniumZoneCodec.decodeMobUpdate(data).foreach(handleMobPositionUpdate)
+
+    // --- Combat ---
+
+    else if op == TitaniumZoneOpcodes.Damage then
+      ZoneCodec.decodeDamage(data).foreach(d => emit(ZoneEvent.DamageDealt(d)))
+
+    else if op == TitaniumZoneOpcodes.Death then
+      TitaniumZoneCodec.decodeDeath(data).foreach { d =>
+        spawns.remove(d.spawnId)
+        emit(ZoneEvent.EntityDied(d))
+        if d.spawnId == mySpawnId then
+          println(s"[Zone] Player died! Killed by spawnId=${d.killerId} damage=${d.damage}")
+      }
+
+    else if op == TitaniumZoneOpcodes.Consider then
+      ZoneCodec.decodeConsider(data).foreach(c => emit(ZoneEvent.ConsiderResult(c)))
+
+    // --- Appearance / Animation (shared struct formats) ---
+
+    else if op == TitaniumZoneOpcodes.SpawnAppearance then
+      handleSpawnAppearance(data)
+
+    else if op == TitaniumZoneOpcodes.WearChange then
+      ZoneCodec.decodeWearChange(data).foreach(wc => emit(ZoneEvent.EquipmentChanged(wc)))
+
+    else if op == TitaniumZoneOpcodes.FaceChange then
+      ZoneCodec.decodeFaceChange(data).foreach(fc => emit(ZoneEvent.FaceChanged(fc)))
+
+    else if op == TitaniumZoneOpcodes.Animation then
+      ZoneCodec.decodeAnimation(data).foreach(a => emit(ZoneEvent.AnimationTriggered(a)))
+
+    else if op == TitaniumZoneOpcodes.Action then
+      ZoneCodec.decodeAction(data).foreach(a => emit(ZoneEvent.SpellActionTriggered(a)))
+
+    else if op == TitaniumZoneOpcodes.BeginCast then
+      ZoneCodec.decodeBeginCast(data).foreach(c => emit(ZoneEvent.BeginCastTriggered(c)))
+
+    else if op == TitaniumZoneOpcodes.MemorizeSpell then
+      ZoneCodec.decodeMemorizeSpell(data).foreach { (bookSlot, spellId, scribing) =>
+        if scribing == 0 && spellId > 0 then
+          println(s"[Zone] Spell $spellId scribed into book slot $bookSlot")
+          emit(ZoneEvent.SpellScribed(spellId, bookSlot))
+      }
+
+    else if op == TitaniumZoneOpcodes.InterruptCast then
+      ZoneCodec.decodeInterruptCast(data).foreach { (messageId, color, message) =>
+        emit(ZoneEvent.SpellInterrupted(messageId, color, message))
+      }
+
+    // --- Stats ---
+
+    else if op == TitaniumZoneOpcodes.HPUpdate then
+      ZoneCodec.decodeHPUpdate(data).foreach(hp => emit(ZoneEvent.HPChanged(hp)))
+
+    else if op == TitaniumZoneOpcodes.ManaChange then
+      // Titanium only has ManaChange (no separate ManaUpdate opcode)
+      ZoneCodec.decodeManaChange(data).foreach(m => emit(ZoneEvent.ManaChanged(m)))
+
+    else if op == TitaniumZoneOpcodes.ExpUpdate then
+      ZoneCodec.decodeExpUpdate(data).foreach(e => emit(ZoneEvent.ExpChanged(e)))
+
+    else if op == TitaniumZoneOpcodes.LevelUpdate then
+      ZoneCodec.decodeLevelUpdate(data).foreach(l => emit(ZoneEvent.LevelChanged(l)))
+
+    else if op == TitaniumZoneOpcodes.SkillUpdate then
+      ZoneCodec.decodeSkillUpdate(data).foreach(s => emit(ZoneEvent.SkillChanged(s)))
+
+    // --- Chat ---
+
+    else if op == TitaniumZoneOpcodes.ChannelMessage then
+      ZoneCodec.decodeChannelMessage(data).foreach(m => emit(ZoneEvent.ChatReceived(m)))
+
+    else if op == TitaniumZoneOpcodes.SpecialMesg then
+      ZoneCodec.decodeSpecialMesg(data).foreach(m => emit(ZoneEvent.SpecialMsgReceived(m)))
+
+    else if op == TitaniumZoneOpcodes.FormattedMessage then
+      ZoneCodec.decodeFormattedMessage(data).foreach(m => emit(ZoneEvent.FormattedMsgReceived(m)))
+
+    else if op == TitaniumZoneOpcodes.Emote then
+      ZoneCodec.decodeEmote(data).foreach(m => emit(ZoneEvent.EmoteReceived(m)))
+
+    // No MultiLineMsg in Titanium (opcode 0x0000 = disabled)
+
+    else if op == TitaniumZoneOpcodes.WhoAllResponse then
+      ZoneCodec.decodeWhoAllResponse(data).foreach(w => emit(ZoneEvent.WhoAllReceived(w)))
+
+    else if op == TitaniumZoneOpcodes.YellForHelp then
+      if data.length >= 4 then
+        val spawnId = java.nio.ByteBuffer.wrap(data).order(java.nio.ByteOrder.LITTLE_ENDIAN).getInt()
+        emit(ZoneEvent.YellReceived(spawnId))
+
+    // --- Environment ---
+
+    else if op == TitaniumZoneOpcodes.Weather then
+      ZoneCodec.decodeWeather(data).foreach(w => emit(ZoneEvent.WeatherChanged(w)))
+
+    // --- Zone Objects ---
+
+    else if op == TitaniumZoneOpcodes.SpawnDoor then
+      emit(ZoneEvent.DoorsLoaded(ZoneCodec.decodeDoors(data)))
+
+    else if op == TitaniumZoneOpcodes.GroundSpawn then
+      ZoneCodec.decodeGroundItem(data).foreach(i => emit(ZoneEvent.GroundItemSpawned(i)))
+
+    else if op == TitaniumZoneOpcodes.SendZonepoints then
+      val points = ZoneCodec.decodeZonePoints(data)
+      zonePoints = points
+      emit(ZoneEvent.ZonePointsLoaded(points))
+
+    // --- Group ---
+
+    else if op == TitaniumZoneOpcodes.GroupInvite || op == TitaniumZoneOpcodes.GroupInvite2 then
+      ZoneCodec.decodeGroupInvite(data).foreach(n => emit(ZoneEvent.GroupInviteReceived(n)))
+
+    else if op == TitaniumZoneOpcodes.GroupUpdate then
+      ZoneCodec.decodeGroupUpdate(data).foreach((members, leader) =>
+        emit(ZoneEvent.GroupUpdated(members, leader)))
+
+    // --- Zone Change ---
+
+    else if op == TitaniumZoneOpcodes.RequestClientZoneChange then
+      ZoneCodec.decodeRequestClientZoneChange(data).foreach { req =>
+        val charName = profile.map(_.name).getOrElse(pendingCharName)
+        queueAppPacket(TitaniumZoneOpcodes.ZoneChange, ZoneCodec.encodeZoneChange(charName, req.zoneId))
+        emit(ZoneEvent.ZoneChangeRequested(req))
+      }
+
+    else if op == TitaniumZoneOpcodes.GMGoto then
+      ZoneCodec.decodeGMGoto(data).foreach { req =>
+        println(s"[Zone] OP_GMGoto received — zoning to bind point (zoneId=${req.zoneId})")
+        val charName = profile.map(_.name).getOrElse(pendingCharName)
+        queueAppPacket(TitaniumZoneOpcodes.ZoneChange, ZoneCodec.encodeZoneChange(charName, req.zoneId))
+        emit(ZoneEvent.ZoneChangeRequested(req))
+      }
+
+    else if op == TitaniumZoneOpcodes.ZoneChange then
+      ZoneCodec.decodeZoneChange(data).foreach { result =>
+        println(s"[Zone] OP_ZoneChange response: success=${result.success}")
+        if result.success == 1 then emit(ZoneEvent.ZoneChangeAccepted)
+        else emit(ZoneEvent.ZoneChangeDenied)
+      }
+
+    // --- Inventory / Items ---
+    // TODO: Titanium items use variable-length serialization (SerializeItem) — not yet implemented.
+    // For now we log and skip. The fixed 360-byte Mac Item_Struct won't work here.
+
+    else if op == TitaniumZoneOpcodes.CharInventory then
+      println(s"[Zone] Titanium OP_CharInventory (${data.length} bytes) — item serialization not yet implemented")
+
+    else if op == TitaniumZoneOpcodes.ItemPacket then
+      println(s"[Zone] Titanium OP_ItemPacket (${data.length} bytes) — item serialization not yet implemented")
+
+    else if op == TitaniumZoneOpcodes.MoveItem then
+      handleMoveItem(data)
+
+    // --- Merchant ---
+
+    else if op == TitaniumZoneOpcodes.ShopRequest then
+      handleShopRequest(data)
+
+    else if op == TitaniumZoneOpcodes.ShopPlayerBuy then ()
+
+    else if op == TitaniumZoneOpcodes.ShopEndConfirm then
+      activeMerchantId = 0; pendingMerchant = None; merchantItems = Vector.empty
+      emit(ZoneEvent.MerchantClosed)
+
+    // --- Loot ---
+
+    else if op == TitaniumZoneOpcodes.MoneyOnCorpse then
+      ZoneCodec.decodeMoneyOnCorpse(data).foreach(r => emit(ZoneEvent.LootOpened(lootingCorpseId, r)))
+
+    else if op == TitaniumZoneOpcodes.LootComplete then emit(ZoneEvent.LootClosed)
+    else if op == TitaniumZoneOpcodes.LootRequest || op == TitaniumZoneOpcodes.LootItem then ()
+
+    // --- Misc ---
+
+    else if op == TitaniumZoneOpcodes.Stamina then
+      ZoneCodec.decodeStamina(data).foreach(s => emit(ZoneEvent.StaminaChanged(s)))
+
+    else if op == TitaniumZoneOpcodes.SendExpZonein then
+      if state == ZoneState.RequestingSpawns then
+        queueAppPacket(TitaniumZoneOpcodes.SendExpZonein, Array.emptyByteArray)
+
+    else if op == TitaniumZoneOpcodes.Buff then
+      ZoneCodec.decodeBuff(data).foreach((slot, buff) => emit(ZoneEvent.BuffUpdated(slot, buff)))
+
+    else if op == TitaniumZoneOpcodes.LogoutReply then
+      println("[Zone] Received OP_LogoutReply — camp complete")
+      state = ZoneState.Disconnected
+      emit(ZoneEvent.StateChanged(state))
+
+    else
+      val name = TitaniumZoneOpcodes.name(op)
+      println(f"[Zone] Unhandled Titanium opcode: 0x${op & 0xFFFF}%04X ($name) ${data.length} bytes")
+
+  def tick(): Unit =
+    if Game.macMode then
+      // Mac: build pending app packets (queued from game thread, built here on network thread)
+      var pending = pendingApps.poll()
+      while pending != null do
+        buildAppPacket(pending._1, pending._2)
+        pending = pendingApps.poll()
+
+      // Retransmit ZoneEntry if zone server hasn't responded
+      if state == ZoneState.WaitingForProfile then
+        val now = System.currentTimeMillis()
+        if now - lastZoneEntrySentMs > ZoneEntryRetryIntervalMs then
+          zoneEntryRetries += 1
+          if zoneEntryRetries > ZoneEntryMaxRetries then
+            state = ZoneState.Failed
+            emit(ZoneEvent.Error(s"Zone server not responding after $ZoneEntryMaxRetries retries"))
+            emit(ZoneEvent.StateChanged(state))
+          else
+            buildAppPacket(MacZoneOpcodes.ZoneEntry, ZoneCodec.encodeZoneEntry(pendingCharName))
+            lastZoneEntrySentMs = now
+
+      if needArsp then
+        val ack = OldPacket.encodeAck(nextSeq(), lastInArq)
+        outQueue.add(ack)
+        needArsp = false
+    else
+      // Titanium: app packets go directly to appOutQueue via queueAppPacket().
+      // TitaniumNetworkThread handles framing, ACKs, and keepalive.
+      // Only need retransmit logic here.
+      if state == ZoneState.WaitingForProfile then
+        val now = System.currentTimeMillis()
+        if now - lastZoneEntrySentMs > ZoneEntryRetryIntervalMs then
+          zoneEntryRetries += 1
+          if zoneEntryRetries > ZoneEntryMaxRetries then
+            state = ZoneState.Failed
+            emit(ZoneEvent.Error(s"Zone server not responding after $ZoneEntryMaxRetries retries"))
+            emit(ZoneEvent.StateChanged(state))
+          else
+            queueAppPacket(TitaniumZoneOpcodes.ZoneEntry, ZoneCodec.encodeZoneEntry(pendingCharName))
+            lastZoneEntrySentMs = now
 
   def pollOutgoing(): Option[Array[Byte]] =
     Option(outQueue.poll())
+
+  /** Handle SpawnAppearance — shared by Mac and Titanium. Same struct format.
+    * SpawnAppearance(SpawnID) during zone entry assigns our spawn ID and transitions to InZone.
+    */
+  private def handleSpawnAppearance(data: Array[Byte]): Unit =
+    ZoneCodec.decodeSpawnAppearance(data).foreach { change =>
+      if change.appearanceType == SpawnAppearanceChange.SpawnID && state == ZoneState.RequestingSpawns then
+        mySpawnId = change.parameter
+        state = ZoneState.InZone
+        emit(ZoneEvent.StateChanged(state))
+        // Send initial position to trigger server's CompleteConnect → client_data_loaded.
+        // Without this, the server stays in CLIENT_CONNECTING and regen/aggro/etc won't run.
+        selfSpawn match
+          case Some(s) =>
+            println(s"[Zone] Sending initial OP_ClientUpdate (spawnId=$mySpawnId) to trigger CompleteConnect")
+            sendPosition(PlayerPosition(spawnId = mySpawnId, y = s.y, x = s.x, z = s.z,
+              heading = s.heading.toFloat, deltaY = 0, deltaX = 0, deltaZ = 0, deltaHeading = 0, animation = 0))
+          case None =>
+            println("[Zone] WARNING: selfSpawn is None — cannot send initial OP_ClientUpdate")
+      emit(ZoneEvent.AppearanceChanged(change))
+    }
+
+  /** Handle OP_ShopRequest response — shared by Mac and Titanium. Same struct format. */
+  private def handleShopRequest(data: Array[Byte]): Unit =
+    println(s"[Zone] Received OP_ShopRequest response (${data.length} bytes)")
+    ZoneCodec.decodeMerchantClick(data) match
+      case Some(open) =>
+        println(s"[Zone] Merchant open: npcId=${open.merchantId} rate=${open.rate}")
+        pendingMerchant = Some(open)
+        merchantItems = Vector.empty
+      case None =>
+        val hex = data.take(16).map(b => f"${b & 0xFF}%02X").mkString(" ")
+        println(s"[Zone] OP_ShopRequest decode failed (${data.length} bytes): $hex")
+
+  /** Handle OP_MoveItem from server — shared by Mac and Titanium. Same struct format. */
+  private def handleMoveItem(data: Array[Byte]): Unit =
+    ZoneCodec.decodeMoveItem(data).foreach { (from, to) =>
+      if to == -1 || to == 0xFFFFFFFF then
+        inventory = inventory.filterNot(_.equipSlot == from)
+      else
+        val fromItem = inventory.find(_.equipSlot == from)
+        val toItem = inventory.find(_.equipSlot == to)
+        inventory = inventory.filterNot(i => i.equipSlot == from || i.equipSlot == to)
+        fromItem.foreach(i => inventory = inventory :+ i.copy(equipSlot = to))
+        toItem.foreach(i => inventory = inventory :+ i.copy(equipSlot = from))
+      emit(ZoneEvent.InventoryMoved(from, to))
+    }
 
   private def handleMobPositionUpdate(upd: MobPositionUpdate): Unit =
     spawns.get(upd.spawnId).foreach { existing =>
@@ -830,8 +1106,15 @@ class ZoneClient extends PacketHandler:
   // Internal packet building — mirrors WorldClient
   // ===========================================================================
 
+  /** Queue an app packet for sending. Safe to call from game thread.
+    * Mac: queued in pendingApps, built into OldPacket frames by tick().
+    * Titanium: goes directly to appOutQueue for TitaniumNetworkThread.
+    */
   private def queueAppPacket(opcode: Short, payload: Array[Byte]): Unit =
-    pendingApps.add((opcode, payload))
+    if Game.macMode then
+      pendingApps.add((opcode, payload))
+    else
+      appOutQueue.add((opcode, payload))
 
   private def buildAppPacket(opcode: Short, payload: Array[Byte]): Unit =
     if payload.length > 510 then

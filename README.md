@@ -63,19 +63,28 @@ Opens a 1280x720 window. Press Escape to quit.
 
 ## Local EQEmu Server
 
-To develop and test client networking, run a local EQEmu/Quarm server via Docker.
+### EQPcDocker (Titanium / PC Clients)
 
-### Prerequisites
-- [Docker](https://docs.docker.com/engine/install/) + Docker Compose
+Docker-based EQEmu server for Titanium and other PC clients, using the mainline EQEmu server and PEQ database.
 
-### Setup
+- **Repo:** https://github.com/dashkto/EQPcDocker
 
 ```bash
-# Clone the Docker environment (includes server, quests, and maps as submodules)
+git clone --recurse-submodules https://github.com/dashkto/EQPcDocker
+cd EQPcDocker
+cp .env.example .env   # edit SERVER_ADDRESS
+docker compose up
+```
+
+### EQMacDocker (Quarm / Mac Client)
+
+Docker-based server for the Mac/Quarm client, using the EQMacEmu fork.
+
+- **Repo:** https://github.com/nickgal/EQMacDocker
+
+```bash
 git clone --recurse-submodules https://github.com/nickgal/EQMacDocker
 cd EQMacDocker
-
-# Create .env from the example
 cp .env.example .env
 ```
 

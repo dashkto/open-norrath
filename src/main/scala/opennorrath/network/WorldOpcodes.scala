@@ -4,7 +4,7 @@ package opennorrath.network
   * Values from EQMacDocker/Server/utils/patches/patch_Mac.conf.
   * These are big-endian wire values (matching how OldPacket reads opcodes).
   */
-object WorldOpcodes:
+object MacWorldOpcodes extends WorldOpcodes:
   val SendLoginInfo: Short   = 0x5818.toShort  // Client → World: auth
   val GuildsList: Short      = 0x9241.toShort  // World → Client
   val LogServer: Short       = 0xc341.toShort  // World → Client

@@ -22,6 +22,7 @@ object Main:
   def main(args: Array[String]): Unit =
     Logging.init()
     val settings = Settings.load()
+    Game.macMode = settings.macMode
     val WindowWidth = settings.window.width
     val WindowHeight = settings.window.height
     val zonePath = if args.nonEmpty then args(0) else "assets/arena.s3d"

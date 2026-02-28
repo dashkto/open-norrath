@@ -8,6 +8,7 @@ import org.lwjgl.opengl.GL11.*
 
 import opennorrath.{Game, ZoneSession}
 import opennorrath.network.*
+import opennorrath.network.titanium.TitaniumNetworkThread
 import opennorrath.ui.Colors
 
 /** Loading screen shown during zone entry handshake.
@@ -41,7 +42,9 @@ class ZoneLoadingScreen(
 
     // Create zone session and connect
     val zc = ZoneClient()
-    val znt = NetworkThread(zc)
+    val znt: EqNetworkThread =
+      if Game.macMode then NetworkThread(zc)
+      else TitaniumNetworkThread(zc)
     Game.zoneSession = Some(ZoneSession(zc, znt))
     znt.start()
     znt.send(NetCommand.Connect(zoneAddr.ip, zoneAddr.port))

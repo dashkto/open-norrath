@@ -23,6 +23,7 @@ case class RenderSettings(
 
 case class Settings(
   useEqg: Boolean = false,
+  macMode: Boolean = true, // true = Mac protocol, false = Titanium (PC) protocol
   window: WindowSettings = WindowSettings(),
   render: RenderSettings = RenderSettings(),
   debug: DebugSettings = DebugSettings(),
@@ -88,6 +89,7 @@ object Settings:
 
     Settings(
       useEqg = root.boolean("use_eqg"),
+      macMode = root.boolean("mac_mode", default = true),
       window = windowSettings,
       render = renderSettings,
       debug = debug,
