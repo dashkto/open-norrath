@@ -1345,6 +1345,53 @@ object ZoneCodec:
   // Group
   // ===========================================================================
 
+  /** Encode GroupInvite_Struct (193 bytes) for OP_GroupInvite.
+    * invitee_name[64] + inviter_name[64] + unknown[65].
+    */
+  def encodeGroupInvite(inviteeName: String, inviterName: String): Array[Byte] =
+    val data = new Array[Byte](193)
+    writeNullStr(data, 0, inviteeName, 64)
+    writeNullStr(data, 64, inviterName, 64)
+    data
+
+  /** Decode GroupInvite_Struct (193 bytes): invitee_name[64] + inviter_name[64] + unknown[65].
+    * Returns the inviter's name.
+    */
+  def decodeGroupInvite(data: Array[Byte]): Option[String] =
+    if data.length < 128 then return None
+    val inviterBytes = new Array[Byte](64)
+    System.arraycopy(data, 64, inviterBytes, 0, 64)
+    val inviter = readNullStr(inviterBytes)
+    if inviter.nonEmpty then Some(inviter) else None
+
+  /** Encode GroupGeneric_Struct (128 bytes) for OP_GroupFollow (accept invite).
+    * name1 = inviter, name2 = acceptor (our character).
+    */
+  def encodeGroupFollow(inviterName: String, myName: String): Array[Byte] =
+    val data = new Array[Byte](128)
+    writeNullStr(data, 0, inviterName, 64)
+    writeNullStr(data, 64, myName, 64)
+    data
+
+  /** Encode GroupGeneric_Struct (128 bytes) for OP_GroupDisband.
+    * name1 = our character, name2 = our character (server only checks name1).
+    */
+  def encodeGroupDisband(myName: String): Array[Byte] =
+    val data = new Array[Byte](128)
+    writeNullStr(data, 0, myName, 64)
+    writeNullStr(data, 64, myName, 64)
+    data
+
+  /** Encode GroupCancel_Struct (129 bytes) for OP_GroupCancelInvite (decline invite).
+    * name1 = inviter, name2 = invitee (our character), toggle = 2.
+    */
+  def encodeGroupCancelInvite(inviterName: String, myName: String): Array[Byte] =
+    val data = new Array[Byte](129)
+    writeNullStr(data, 0, inviterName, 64)
+    writeNullStr(data, 64, myName, 64)
+    data(128) = 2.toByte
+    data
+
   /** Decode GroupUpdate_Struct: action(4) + yourname(64) + 5×membername(64) + leadername(64).
     * Returns (memberNames, leaderName). Only emitted for action=0 (full update).
     */
@@ -1368,6 +1415,12 @@ object ZoneCodec:
   // ===========================================================================
   // Helpers
   // ===========================================================================
+
+  /** Write a null-terminated string into a pre-zeroed byte array at the given offset. */
+  private def writeNullStr(dest: Array[Byte], offset: Int, s: String, maxLen: Int): Unit =
+    val bytes = s.getBytes(StandardCharsets.US_ASCII)
+    val copyLen = Math.min(bytes.length, maxLen - 1)
+    System.arraycopy(bytes, 0, dest, offset, copyLen)
 
   private def readNullStr(data: Array[Byte]): String =
     val sb = StringBuilder()

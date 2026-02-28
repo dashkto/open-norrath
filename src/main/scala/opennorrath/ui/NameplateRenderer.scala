@@ -111,7 +111,10 @@ class NameplateRenderer:
       characters.get(spawnId).foreach { zc =>
         val name = zc.displayName
         if name.nonEmpty then
-          val color = if targetId.contains(spawnId) then Colors.primary else Colors.secondary
+          val color =
+            if targetId.contains(spawnId) then Colors.primary
+            else if zc.npcType == 0 then Colors.sky         // Player characters
+            else Colors.secondary                            // NPCs
           val tex = getTexture(name, color)
 
           // World position above head

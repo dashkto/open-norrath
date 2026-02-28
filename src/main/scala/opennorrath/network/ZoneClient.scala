@@ -83,6 +83,7 @@ enum ZoneEvent:
 
   // Group
   case GroupUpdated(members: Vector[String], leader: String)
+  case GroupInviteReceived(inviterName: String)
 
   // Loot — corpse looting flow
   case LootOpened(corpseId: Int, response: LootResponse)
@@ -292,6 +293,26 @@ class ZoneClient extends PacketHandler:
       activeMerchantId = 0
       pendingMerchant = None
       merchantItems = Vector.empty
+
+  /** Leave / disband the current group. Called from game thread. */
+  def disbandGroup(): Unit =
+    val myName = profile.map(_.name).getOrElse(pendingCharName)
+    queueAppPacket(ZoneOpcodes.GroupDisband, ZoneCodec.encodeGroupDisband(myName))
+
+  /** Invite a player to our group. Called from game thread. */
+  def inviteToGroup(targetName: String): Unit =
+    val myName = profile.map(_.name).getOrElse(pendingCharName)
+    queueAppPacket(ZoneOpcodes.GroupInvite, ZoneCodec.encodeGroupInvite(targetName, myName))
+
+  /** Accept a pending group invite. Called from game thread. */
+  def acceptGroupInvite(inviterName: String): Unit =
+    val myName = profile.map(_.name).getOrElse(pendingCharName)
+    queueAppPacket(ZoneOpcodes.GroupFollow, ZoneCodec.encodeGroupFollow(inviterName, myName))
+
+  /** Decline a pending group invite. Called from game thread. */
+  def declineGroupInvite(inviterName: String): Unit =
+    val myName = profile.map(_.name).getOrElse(pendingCharName)
+    queueAppPacket(ZoneOpcodes.GroupCancelInvite, ZoneCodec.encodeGroupCancelInvite(inviterName, myName))
 
   /** Tracks which corpse we're currently requesting loot from. */
   var lootingCorpseId: Int = 0
@@ -519,6 +540,11 @@ class ZoneClient extends PacketHandler:
         emit(ZoneEvent.ZonePointsLoaded(points))
 
       // --- Group ---
+
+      case ZoneOpcodes.GroupInvite | ZoneOpcodes.GroupInvite2 =>
+        ZoneCodec.decodeGroupInvite(pkt.payload).foreach { inviterName =>
+          emit(ZoneEvent.GroupInviteReceived(inviterName))
+        }
 
       case ZoneOpcodes.GroupUpdate =>
         ZoneCodec.decodeGroupUpdate(pkt.payload).foreach((members, leader) =>
