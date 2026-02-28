@@ -480,6 +480,10 @@ class ZoneClient extends PacketHandler:
         ZoneCodec.decodeDeath(pkt.payload).foreach { d =>
           spawns.remove(d.spawnId)
           emit(ZoneEvent.EntityDied(d))
+          // Player death: log and disable auto-attack. The actual zone-to-bind
+          // is triggered by OP_GMGoto which the server sends shortly after.
+          if d.spawnId == mySpawnId then
+            println(s"[Zone] Player died! Killed by spawnId=${d.killerId} damage=${d.damage}")
         }
 
       case ZoneOpcodes.Consider =>
@@ -624,6 +628,17 @@ class ZoneClient extends PacketHandler:
       case ZoneOpcodes.RequestClientZoneChange =>
         ZoneCodec.decodeRequestClientZoneChange(pkt.payload).foreach { req =>
           // Respond to server — it won't process the zone change without this
+          val charName = profile.map(_.name).getOrElse(pendingCharName)
+          queueAppPacket(ZoneOpcodes.ZoneChange, ZoneCodec.encodeZoneChange(charName, req.zoneId))
+          emit(ZoneEvent.ZoneChangeRequested(req))
+        }
+
+      case ZoneOpcodes.GMGoto =>
+        // EQMac death zoning: server sends OP_GMGoto instead of OP_RequestClientZoneChange
+        // because the latter causes Mac-era clients to disconnect during death.
+        // We treat it identically: echo OP_ZoneChange and emit ZoneChangeRequested.
+        ZoneCodec.decodeGMGoto(pkt.payload).foreach { req =>
+          println(s"[Zone] OP_GMGoto received — zoning to bind point (zoneId=${req.zoneId})")
           val charName = profile.map(_.name).getOrElse(pendingCharName)
           queueAppPacket(ZoneOpcodes.ZoneChange, ZoneCodec.encodeZoneChange(charName, req.zoneId))
           emit(ZoneEvent.ZoneChangeRequested(req))

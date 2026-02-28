@@ -1,5 +1,6 @@
 package opennorrath.world
 
 object Physics:
-    val Gravity = 80f // GL units/sec² downward acceleration
-    val MaxFallSpeed = Gravity * 2f // terminal velocity
+    val DefaultGravity = 80f
+    var Gravity = DefaultGravity // GL units/sec² downward acceleration
+    def MaxFallSpeed: Float = Gravity * 2f // terminal velocity (scales with gravity)

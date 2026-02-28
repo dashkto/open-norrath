@@ -105,7 +105,8 @@ class PlayerCharacter(
   /** Full model height in GL units (scaled). Used to derive eye height. */
   var modelHeight: Float = 0f
 
-  private val JumpSpeed = 30f     // initial upward velocity when jumping
+  val DefaultJumpSpeed = 30f
+  var jumpSpeed = DefaultJumpSpeed // initial upward velocity when jumping
   private val GroundProbe = 200f  // max raycast distance below player
   private val SnapThreshold = 0.5f
   private val FootRadius = 1.5f   // half-width of foot hitbox for multi-ray ground detection
@@ -119,7 +120,7 @@ class PlayerCharacter(
 
   def jump(): Unit =
     if onGround then
-      fallSpeed = -JumpSpeed  // negative = upward
+      fallSpeed = -jumpSpeed  // negative = upward
       onGround = false
       zoneChar.foreach(_.playTimedAnimation(AnimCode.Crouch.code, 0.3f))
 

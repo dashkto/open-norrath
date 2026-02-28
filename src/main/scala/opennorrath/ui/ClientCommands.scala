@@ -3,7 +3,7 @@ package opennorrath.ui
 import opennorrath.Game
 import opennorrath.network.PlayerPosition
 import opennorrath.state.{GameClock, PlayerCharacter, ZoneCharacter}
-import opennorrath.world.EqCoords
+import opennorrath.world.{EqCoords, Physics}
 
 /** Registry of client console commands (slash commands like /loc, /camp, /who).
   *
@@ -43,8 +43,12 @@ object ClientCommands:
     Command("attack",   List("a"), "/attack",     "Toggle auto-attack",            handleAttack),
     Command("speedup",  Nil,       "/speedup",    "Increase run speed",            handleSpeedUp),
     Command("slowdown", Nil,       "/slowdown",   "Reset run speed to default",    handleSlowDown),
-    Command("help",     Nil,       "/help",       "List available commands",        handleHelp),
-    Command("settime",  Nil,       "/settime h m", "Set game time (resets on server sync)", handleSetTime),
+    Command("help",        Nil,       "/help",        "List available commands",        handleHelp),
+    Command("settime",     Nil,       "/settime h m", "Set game time (resets on server sync)", handleSetTime),
+    Command("gravitydown", Nil,       "/gravitydown", "Decrease gravity to 30%",       handleGravityDown),
+    Command("gravityup",   Nil,       "/gravityup",   "Reset gravity to default",      handleGravityUp),
+    Command("jumpup",      Nil,       "/jumpup",      "Increase jump power to 100",    handleJumpUp),
+    Command("jumpdown",    Nil,       "/jumpdown",    "Reset jump power to default",   handleJumpDown),
   )
 
   // --- /loc ----------------------------------------------------------------
@@ -150,6 +154,34 @@ object ClientCommands:
       ctx.print(f"Game time set to $h12%d:$m%02d $ampm", Colors.gold)
     catch case _: NumberFormatException =>
       ctx.print("Usage: /settime hour minute (numbers required)", Colors.danger)
+
+  // --- /gravitydown --------------------------------------------------------
+
+  private def handleGravityDown(ctx: Context, args: Array[String]): Unit =
+    Physics.Gravity = Physics.DefaultGravity * 0.3f
+    ctx.print(f"Gravity set to ${Physics.Gravity}%.1f (30%% of default)", Colors.gold)
+
+  // --- /gravityup ----------------------------------------------------------
+
+  private def handleGravityUp(ctx: Context, args: Array[String]): Unit =
+    Physics.Gravity = Physics.DefaultGravity
+    ctx.print(f"Gravity reset to ${Physics.Gravity}%.1f", Colors.gold)
+
+  // --- /jumpup -------------------------------------------------------------
+
+  private def handleJumpUp(ctx: Context, args: Array[String]): Unit =
+    ctx.player.foreach { pc =>
+      pc.jumpSpeed = 100f
+      ctx.print("Jump power set to 100", Colors.gold)
+    }
+
+  // --- /jumpdown -----------------------------------------------------------
+
+  private def handleJumpDown(ctx: Context, args: Array[String]): Unit =
+    ctx.player.foreach { pc =>
+      pc.jumpSpeed = pc.DefaultJumpSpeed
+      ctx.print(s"Jump power reset to ${pc.DefaultJumpSpeed.toInt} (default)", Colors.gold)
+    }
 
   // --- /help ---------------------------------------------------------------
 

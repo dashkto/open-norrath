@@ -44,6 +44,10 @@ class ZoneHud(ctx: GameContext, characters: scala.collection.Map[Int, ZoneCharac
     case ZoneEvent.EntityDied(info) =>
       if targetPanel.target.exists(_.spawnId == info.spawnId) then
         disableAutoAttack()
+      // Player death: always disable auto-attack regardless of current target
+      val myId = Game.zoneSession.map(_.client.mySpawnId).getOrElse(-1)
+      if info.spawnId == myId then
+        disableAutoAttack()
     case _ => ()
 
   val groupListener: ZoneEvent => Unit =

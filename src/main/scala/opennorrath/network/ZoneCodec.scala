@@ -1261,6 +1261,23 @@ object ZoneCodec:
       heading = buf.getFloat(),
     ))
 
+  /** Decode OP_GMGoto: GMGoto_Struct (152 bytes).
+    * The EQMac server sends this instead of OP_RequestClientZoneChange for death zoning
+    * because RequestClientZoneChange causes Mac-era clients to disconnect during death.
+    * Layout: char[64] charname, char[64] gmname, uint32 success, uint32 zoneID,
+    *         float y, float x, float z, uint32 unknown.
+    */
+  def decodeGMGoto(data: Array[Byte]): Option[ZoneChangeRequest] =
+    if data.length < 148 then return None
+    val buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
+    buf.position(128) // skip charname[64] + gmname[64]
+    buf.getInt() // skip success
+    val zoneId = buf.getInt()
+    val y = buf.getFloat()
+    val x = buf.getFloat()
+    val z = buf.getFloat()
+    Some(ZoneChangeRequest(zoneId, y, x, z, heading = 0f))
+
   // ===========================================================================
   // Inventory — OP_CharInventory
   // ===========================================================================

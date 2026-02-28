@@ -257,7 +257,7 @@ object ZoneOpcodes:
   val GMZoneRequest: Short      = 0x4f41.toShort  // Client → Zone: /zone
   val GMZoneRequest2: Short     = 0x0842.toShort  // Client → Zone: /zone (alt)
   val GMHideMe: Short           = 0xd441.toShort  // Client → Zone: /hideme
-  val GMGoto: Short             = 0x6e40.toShort  // Client → Zone: /goto
+  val GMGoto: Short             = 0x6e40.toShort  // Bidirectional: /goto (client) or death zone-to-bind (server)
   val GMSummon: Short           = 0xc540.toShort  // Client → Zone: /summon
   val GMKick: Short             = 0x6d40.toShort  // Client → Zone: /kick
   val GMKill: Short             = 0x6c40.toShort  // Client → Zone: /kill

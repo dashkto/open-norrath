@@ -23,6 +23,9 @@ object Game:
 
   private var currentScreen: Option[Screen] = None
 
+  /** When true, connect using the Mac protocol. Some servers reject Mac clients. */
+  var macMode: Boolean = true
+
   /** Active login session — created during login, survives into server select. */
   var loginSession: Option[LoginSession] = None
 
