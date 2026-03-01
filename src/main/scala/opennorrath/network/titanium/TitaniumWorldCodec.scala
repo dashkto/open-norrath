@@ -109,11 +109,20 @@ object TitaniumWorldCodec:
 
   /** OP_World_Client_CRC1/CRC2: Checksum_Struct (2056 bytes).
     * uint64 checksum + uint8[2048] data.
-    * The server uses these to set StartInTutorial = false. The actual checksum values
-    * don't matter unless EnableChecksumVerification is enabled (off by default).
-    * We send zeros — the important thing is the packet arrives before OP_EnterWorld.
+    *
+    * The Titanium client computes CRC32 of critical files and sends them to the world
+    * server during character select. The server uses these packets to clear the
+    * StartInTutorial flag (important: must arrive before OP_EnterWorld), and optionally
+    * validates the checksums if EnableChecksumVerification is enabled.
+    *
+    * CRC1 = eqgame.exe, CRC2 = SkillCaps.txt. The data[2048] buffer is unused by
+    * the server — only the uint64 checksum field is compared.
     */
-  def encodeWorldClientCRC(): Array[Byte] = new Array[Byte](2056)
+  def encodeWorldClientCRC(checksum: Long): Array[Byte] =
+    val buf = ByteBuffer.allocate(2056).order(ByteOrder.LITTLE_ENDIAN)
+    buf.putLong(checksum)
+    // data[2048] left as zeros — server only reads the checksum field
+    buf.array()
 
   // ---- Incoming (server -> client) ----
 

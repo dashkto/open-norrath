@@ -1,5 +1,5 @@
 # open-norrath
-Open-source EverQuest client written in Scala, targeting Project 1999 (P1999) and Quarm (TAKP) compatibility. Licensed under GPL v3.
+Open-source EverQuest client written in Scala, targeting Quarm (TAKP) compatibility. Licensed under GPL v3.
 
 ## Prerequisites
 - JDK 21+
@@ -24,7 +24,6 @@ Opens a 1280x720 window. Press Escape to quit.
 ### EQEmu Server (C++, GPL v3) — Protocol & Game Logic Reference
 - **Main repo:** https://github.com/EQEmu/EQEmu
 - **Docs:** https://github.com/EQEmu/eqemu-docs-v2 / https://docs.eqemu.dev
-- P1999 runs a modified EQEmu fork; packet structures are largely the same
 - Contains opcode definitions, packet structures, and game mechanic implementations
 - EQExtractor2 lives inside the server repo at `utils/EQExtractor2/` (.NET, packet capture tool)
 
@@ -157,7 +156,6 @@ SELECT id, Name, ac, hp, mana, damage, delay, slots FROM items WHERE Name LIKE '
 | Server | Host | Port |
 |--------|------|------|
 | Project Quarm (TAKP-based) | `loginserver.takproject.net` | 6000 |
-| Project 1999 | `login.eqemulator.net` | 5998 |
 
 ## Settings
 
@@ -181,11 +179,6 @@ servers:
     port: 6000
     world_port: 9000
     mac_mode: true
-  p99:
-    host: 192.168.50.228
-    port: 5998
-    world_port: 9000
-    mac_mode: false
 ```
 
 | Key | Description |

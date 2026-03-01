@@ -2,6 +2,8 @@ package opennorrath.network
 
 import java.util.concurrent.ConcurrentLinkedQueue
 
+import java.nio.file.Path
+
 import opennorrath.Game
 import opennorrath.network.titanium.{TitaniumWorldCodec, TitaniumWorldOpcodes}
 
@@ -130,9 +132,15 @@ class WorldClient extends PacketHandler:
     if Game.macMode then
       queueAppPacket(MacWorldOpcodes.EnterWorld, WorldCodec.encodeEnterWorld(charName))
     else
-      // Send CRC packets first — server sets StartInTutorial=false when it sees CRC1
-      queueAppPacket(TitaniumWorldOpcodes.WorldClientCRC1, TitaniumWorldCodec.encodeWorldClientCRC())
-      queueAppPacket(TitaniumWorldOpcodes.WorldClientCRC2, TitaniumWorldCodec.encodeWorldClientCRC())
+      // Send CRC packets first — server sets StartInTutorial=false when it sees CRC1.
+      // CRC1 = eqgame.exe, CRC2 = SkillCaps.txt. The server records these and optionally
+      // validates them against expected values (EnableChecksumVerification rule).
+      val assetsDir = Path.of("assets/EverQuest")
+      val crc1 = EqCrc32.computeFile(assetsDir.resolve("eqgame.exe"))
+      val crc2 = EqCrc32.computeFile(assetsDir.resolve("SkillCaps.txt"))
+      println(f"[World] Sending file checksums: eqgame.exe=0x$crc1%016x, SkillCaps.txt=0x$crc2%016x")
+      queueAppPacket(TitaniumWorldOpcodes.WorldClientCRC1, TitaniumWorldCodec.encodeWorldClientCRC(crc1))
+      queueAppPacket(TitaniumWorldOpcodes.WorldClientCRC2, TitaniumWorldCodec.encodeWorldClientCRC(crc2))
       queueAppPacket(TitaniumWorldOpcodes.EnterWorld, TitaniumWorldCodec.encodeEnterWorld(charName))
 
   /** Check if a name is available. Called from game thread. */
@@ -277,6 +285,7 @@ class WorldClient extends PacketHandler:
 
     else if op == TitaniumWorldOpcodes.ExpansionInfo then
       val exp = TitaniumWorldCodec.decodeExpansionInfo(packet.payload)
+      println(s"[World] ExpansionInfo: flags=0x${exp.flags.toHexString} (${exp.enabledNames.mkString(", ")})")
       emit(WorldEvent.ExpansionReceived(exp))
 
     else if op == TitaniumWorldOpcodes.MOTD then
@@ -302,6 +311,9 @@ class WorldClient extends PacketHandler:
       state = WorldState.CharacterSelect
       emit(WorldEvent.ZoneUnavailable(zoneName))
       emit(WorldEvent.StateChanged(state))
+
+    else if op == TitaniumWorldOpcodes.PostEnterWorld then
+      () // Empty signal packet — no action needed
 
     else if op == TitaniumWorldOpcodes.EnterWorld then
       // Server sends OP_EnterWorld during zoning reconnect

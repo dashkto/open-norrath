@@ -27,8 +27,4 @@ servers:
     port: 6000
     world_port: 9000
     mac_mode: true
-  p99:
-    host: login.eqemulator.net
-    port: 5998
-    world_port: 9000
-    mac_mode: false
+
