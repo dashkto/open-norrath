@@ -814,6 +814,56 @@ object ZoneRenderer:
                 overrides(group.textureName.toLowerCase) = variant
     overrides.toMap
 
+  /** For multi-bone equipment skeletons, transform each mesh fragment's vertices from
+    * its owning bone's local space into the root bone's local space.
+    *
+    * Equipment meshes are named like "IT148MAIN_DMSPRITEDEF" and authored in the local
+    * space of the bone whose track name matches (e.g., "IT148MAIN"). The bone's rest-pose
+    * transform includes scale factors (often 0.004–0.01x) that shrink the mesh to its
+    * intended size. Without this correction, the renderer only applies the root bone's
+    * transform — which is often identity — leaving the mesh at its raw inflated size.
+    *
+    * The correction for each mesh is: rootBoneWorld⁻¹ × meshBoneWorld × vertex,
+    * placing all vertices in root-bone-local space where the renderer's rootBoneTransform
+    * will finish the job.
+    */
+  def correctBoneLocalMeshes(wld: WldFile, meshFragments: List[Fragment36_Mesh],
+      skeletonOpt: Option[Fragment10_SkeletonHierarchy]): List[Fragment36_Mesh] =
+    skeletonOpt match
+      case Some(skel) if skel.bones.length > 1 =>
+        val worldTransforms = skel.boneWorldTransforms(wld)
+        val rootInverse = Matrix4f(worldTransforms(0)).invert()
+        // Map bone track names to bone indices
+        val boneByName = skel.bones.zipWithIndex.flatMap { (bone, idx) =>
+          try
+            val tr = wld.fragment(bone.trackRef).asInstanceOf[Fragment13_TrackRef]
+            val td = wld.fragment(tr.trackDefRef).asInstanceOf[Fragment12_TrackDef]
+            Some(td.cleanName -> idx)
+          catch case _: Exception => None
+        }.toMap
+        meshFragments.map { mesh =>
+          // Match mesh name to bone: "IT148MAIN_DMSPRITEDEF" → "IT148MAIN"
+          val meshKey = mesh.name.replace("_DMSPRITEDEF", "").toUpperCase
+          boneByName.get(meshKey) match
+            case Some(boneIdx) if boneIdx != 0 =>
+              val correction = Matrix4f(rootInverse).mul(worldTransforms(boneIdx))
+              val newVerts = mesh.vertices.map { v =>
+                val dest = Vector3f()
+                correction.transformPosition(v.x, v.y, v.z, dest)
+                dest
+              }
+              val newNormals = mesh.normals.map { n =>
+                val dest = Vector3f()
+                correction.transformDirection(n.x, n.y, n.z, dest)
+                dest.normalize()
+              }
+              val newCenter = Vector3f()
+              correction.transformPosition(mesh.center.x, mesh.center.y, mesh.center.z, newCenter)
+              mesh.copy(vertices = newVerts, normals = newNormals, center = newCenter)
+            case _ => mesh
+        }
+      case _ => meshFragments
+
   /** Load equipment 3D models from gequip*.s3d archives.
     * Returns IT number → EquipModel (mesh + GPU data).
     */
@@ -843,6 +893,7 @@ object ZoneRenderer:
                 if !models.contains(itNum) then
                   var meshFragments = List.empty[Fragment36_Mesh]
                   var rootBoneXform: Option[Matrix4f] = None
+                  var skeletonOpt: Option[Fragment10_SkeletonHierarchy] = None
                   for ref <- actor.componentRefs do
                     try
                       eqWld.fragment(ref) match
@@ -864,9 +915,15 @@ object ZoneRenderer:
                                 catch case _: Exception => ()
                               if skel.bones.nonEmpty then
                                 rootBoneXform = Some(skel.restPoseBoneTransform(0, eqWld))
+                                skeletonOpt = Some(skel)
                             case _ =>
                         case _ =>
                     catch case _: Exception => ()
+                  // For multi-bone equipment, each mesh is authored in its owning bone's
+                  // local space (identified by mesh name matching bone track name).
+                  // Transform vertices from bone-local into root-bone-local space so
+                  // the renderer's single rootBoneTransform produces correct results.
+                  meshFragments = correctBoneLocalMeshes(eqWld, meshFragments, skeletonOpt)
                   if meshFragments.nonEmpty then
                     val cx = meshFragments.map(_.center.x).sum / meshFragments.size
                     val cy = meshFragments.map(_.center.y).sum / meshFragments.size
