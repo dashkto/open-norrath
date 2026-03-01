@@ -136,15 +136,17 @@ class ZoneClient extends PacketHandler:
     if Game.macMode then MacZoneOpcodes else TitaniumZoneOpcodes
 
   // Fixed-size packet validation — catches struct size mismatches before they cause silent failures.
-  override val expectedPacketSizes: Map[Short, (Int, String)] =
+  override val expectedOutgoingSizes: Map[Short, (Int, String)] =
     if Game.macMode then Map.empty
     else Map(
-      // Outgoing (client -> server)
       TitaniumZoneOpcodes.ClientUpdate -> (36, "ClientUpdate"),
       TitaniumZoneOpcodes.TargetMouse -> (4, "TargetMouse"),
       TitaniumZoneOpcodes.Consider -> (24, "Consider"),
       TitaniumZoneOpcodes.SetServerFilter -> (36, "SetServerFilter"),
-      // Incoming (server -> client)
+    )
+  override val expectedIncomingSizes: Map[Short, (Int, String)] =
+    if Game.macMode then Map.empty
+    else Map(
       TitaniumZoneOpcodes.PlayerProfile -> (19588, "PlayerProfile"),
       TitaniumZoneOpcodes.Death -> (32, "Death"),
       TitaniumZoneOpcodes.DeleteSpawn -> (4, "DeleteSpawn"),

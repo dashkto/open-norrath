@@ -15,6 +15,14 @@
 
 - All stdout is written to log files in `/logs`
 
+## EQEmu Struct Sizes
+
+When encoding packet structs for the Titanium protocol, always reference the **patch-specific** struct definitions in `titanium_structs.h`, NOT the generic ones in `eq_packet_structs.h`. Later client versions (SoF, SoD, RoF, etc.) add fields that don't exist in Titanium. For example:
+- `CharCreate_Struct`: 80 bytes in Titanium (no drakkin fields), 92 bytes in the generic header
+- `LoginInfo_Struct`: 464 bytes in Titanium (the `/*488*/` end comment in `titanium_structs.h` is wrong — trust `sizeof()` math, not comments)
+
+The server's `Decode_OP_*` functions reject packets with wrong sizes, often silently (no error sent to the client). The `PacketHandler.expectedOutgoingSizes` / `expectedIncomingSizes` maps exist specifically to catch these mismatches at runtime.
+
 ## Code Style
 
 - Use liberal code comments, especially for surprising behavior, hard-won lessons, and non-obvious gotchas (e.g., "the server never sends X for NPCs"). Don't shy away from explaining *why* something is the way it is.

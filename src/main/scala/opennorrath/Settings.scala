@@ -4,8 +4,6 @@ import org.yaml.snakeyaml.Yaml
 import java.nio.file.{Files, Path}
 import scala.jdk.CollectionConverters.*
 
-case class DebugSettings()
-
 case class LoginSettings(
   host: String = "127.0.0.1",
   port: Int = 6000,
@@ -35,7 +33,6 @@ case class Settings(
   macMode: Boolean = true, // true = Mac protocol, false = Titanium (PC) protocol
   window: WindowSettings = WindowSettings(),
   render: RenderSettings = RenderSettings(),
-  debug: DebugSettings = DebugSettings(),
   login: LoginSettings = LoginSettings(),
   servers: Map[String, ServerConfig] = Map.empty,
   activeServer: String = "",
@@ -97,8 +94,6 @@ object Settings:
     if raw == null then return Settings()
 
     val root = YamlMap(raw)
-    val debug = DebugSettings()
-
     val windowSettings = root.nested("window").map { w =>
       WindowSettings(
         width = w.int("width", 1280),
@@ -136,7 +131,6 @@ object Settings:
       macMode = root.boolean("mac_mode", default = true),
       window = windowSettings,
       render = renderSettings,
-      debug = debug,
       login = login,
       servers = servers,
       activeServer = activeServer,

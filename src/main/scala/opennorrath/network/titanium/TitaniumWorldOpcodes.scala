@@ -21,6 +21,8 @@ object TitaniumWorldOpcodes extends WorldOpcodes:
   val ApproveName: Short     = 0x3ea6.toShort  // Client -> World: name check
   val CharacterCreate: Short = 0x10b2.toShort  // Client -> World: create character
   val DeleteCharacter: Short = 0x26c9.toShort  // Client -> World: delete character
+  val WorldClientCRC1: Short = 0x5072.toShort  // Client -> World: eqgame.exe CRC
+  val WorldClientCRC2: Short = 0x5b18.toShort  // Client -> World: SkillCaps.txt CRC
 
   def name(op: Short): String = op match
     case SendLoginInfo   => "SendLoginInfo"
@@ -36,5 +38,7 @@ object TitaniumWorldOpcodes extends WorldOpcodes:
     case ZoneUnavail     => "ZoneUnavail"
     case ApproveName     => "ApproveName"
     case CharacterCreate => "CharacterCreate"
-    case DeleteCharacter => "DeleteCharacter"
-    case other           => f"Unknown(0x${other & 0xFFFF}%04x)"
+    case DeleteCharacter  => "DeleteCharacter"
+    case WorldClientCRC1  => "WorldClientCRC1"
+    case WorldClientCRC2  => "WorldClientCRC2"
+    case other            => f"Unknown(0x${other & 0xFFFF}%04x)"

@@ -19,14 +19,18 @@ trait PacketHandler:
   /** Expected payload sizes for fixed-size packets. Override in subclasses.
     * Key = opcode, Value = (expected bytes, human-readable name).
     * Variable-length packets should NOT be included — only packets that must be
-    * an exact size. TitaniumNetworkThread checks this on both send and receive,
+    * an exact size. TitaniumNetworkThread checks these on send/receive,
     * logging a warning on mismatch (but never blocking the packet).
+    *
+    * Separate maps for outgoing vs incoming because bidirectional opcodes
+    * (e.g. ApproveName: 72 bytes out, 1 byte back) have different sizes.
     *
     * Hard-won lesson: the Titanium world connection hung silently for hours because
     * LoginInfo_Struct was 488 bytes instead of 464. The server's CheckSignature
     * rejected the size mismatch with no visible client-side error.
     */
-  val expectedPacketSizes: Map[Short, (Int, String)] = Map.empty
+  val expectedOutgoingSizes: Map[Short, (Int, String)] = Map.empty
+  val expectedIncomingSizes: Map[Short, (Int, String)] = Map.empty
 
   /** Called from network thread when a decoded packet arrives. */
   def handlePacket(packet: InboundPacket): Unit

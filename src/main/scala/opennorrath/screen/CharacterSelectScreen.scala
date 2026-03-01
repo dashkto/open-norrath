@@ -64,6 +64,11 @@ class CharacterSelectScreen(
         case WorldEvent.ZoneInfo(addr) =>
           Game.setScreen(ZoneLoadingScreen(ctx, addr, enteredCharName))
           return
+        case WorldEvent.ZoneUnavailable(zoneName) =>
+          val zoneLabel = if zoneName.nonEmpty then s"'$zoneName'" else "the zone"
+          statusText = s"Zone unavailable: $zoneLabel is not running"
+          statusColor = Colors.error
+          entering = false
         case WorldEvent.Error(msg) =>
           statusText = msg
           statusColor = Colors.error

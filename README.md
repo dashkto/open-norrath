@@ -1,7 +1,5 @@
 # open-norrath
-Experimental Scala based Everquest client designed for EQEmu
-
-Open-source EverQuest client written in Scala, targeting Project 1999 (P1999) compatibility. Licensed under GPL v3.
+Open-source EverQuest client written in Scala, targeting Project 1999 (P1999) and Quarm (TAKP) compatibility. Licensed under GPL v3.
 
 ## Prerequisites
 - JDK 21+
@@ -20,14 +18,6 @@ Opens a 1280x720 window. Press Escape to quit.
 - **Math:** JOML (Java OpenGL Math Library)
 - **UI:** imgui-java (Dear ImGui bindings) for EQ-style dockable/resizable windows
 - **Windowing/Input/Audio:** GLFW + OpenAL via LWJGL
-
-## Architecture / Milestones
-1. **Protocol library** — connect, authenticate, enter world, receive entity updates (EQ Titanium-era protocol)
-2. **Asset parser** — parse S3D archives and WLD (world) format files into renderable geometry
-3. **Zone renderer** — render static zones via LWJGL (BSP/region visibility, baked lightmaps)
-4. **Entity system** — positioning, movement, skeletal animation
-5. **UI layer** — hotbars, chat, inventory via imgui-java
-6. **Everything else** — spells, effects, pathing, etc.
 
 ## Key Reference Projects
 

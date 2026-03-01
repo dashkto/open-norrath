@@ -291,7 +291,7 @@ class TitaniumNetworkThread(handler: PacketHandler) extends EqNetworkThread:
       buf
     else Array.emptyByteArray
     // Validate incoming packet size against expected fixed sizes
-    handler.expectedPacketSizes.get(opcode).foreach { (expected, name) =>
+    handler.expectedIncomingSizes.get(opcode).foreach { (expected, name) =>
       if payload.length != expected then
         println(f"[PacketSize] WARNING: Incoming 0x${opcode & 0xFFFF}%04x ($name) " +
           s"expected $expected bytes but received ${payload.length} bytes")
@@ -337,7 +337,7 @@ class TitaniumNetworkThread(handler: PacketHandler) extends EqNetworkThread:
   /** Send an application packet wrapped in OP_Packet or OP_Fragment. */
   private def sendAppPacket(opcode: Short, payload: Array[Byte]): Unit =
     // Validate outgoing packet size against expected fixed sizes
-    handler.expectedPacketSizes.get(opcode).foreach { (expected, name) =>
+    handler.expectedOutgoingSizes.get(opcode).foreach { (expected, name) =>
       if payload.length != expected then
         println(f"[PacketSize] WARNING: Outgoing 0x${opcode & 0xFFFF}%04x ($name) " +
           s"expected $expected bytes but sending ${payload.length} bytes")

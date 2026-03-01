@@ -18,6 +18,7 @@ enum WorldEvent:
   case ExpansionReceived(expansions: ExpansionFlags)
   case ChatServerReceived(host: String)
   case LogServerReceived(host: String)
+  case ZoneUnavailable(zoneName: String)
   case Error(message: String)
 
 /** World server protocol state machine.
@@ -36,18 +37,21 @@ class WorldClient extends PacketHandler:
   val events = ConcurrentLinkedQueue[WorldEvent]()
 
   // Fixed-size packet validation — catches struct size mismatches before they cause silent failures.
-  override val expectedPacketSizes: Map[Short, (Int, String)] =
+  override val expectedOutgoingSizes: Map[Short, (Int, String)] =
     if Game.macMode then Map.empty
     else Map(
-      // Outgoing (client -> server)
       TitaniumWorldOpcodes.SendLoginInfo -> (464, "SendLoginInfo"),
       TitaniumWorldOpcodes.EnterWorld -> (72, "EnterWorld"),
-      TitaniumWorldOpcodes.ApproveName -> (76, "ApproveName"),
+      TitaniumWorldOpcodes.ApproveName -> (72, "ApproveName"),
       TitaniumWorldOpcodes.CharacterCreate -> (80, "CharacterCreate"),
-      // Incoming (server -> client)
+    )
+  override val expectedIncomingSizes: Map[Short, (Int, String)] =
+    if Game.macMode then Map.empty
+    else Map(
       TitaniumWorldOpcodes.SendCharInfo -> (1704, "SendCharInfo"),
       TitaniumWorldOpcodes.ZoneServerInfo -> (130, "ZoneServerInfo"),
       TitaniumWorldOpcodes.ExpansionInfo -> (4, "ExpansionInfo"),
+      TitaniumWorldOpcodes.ApproveName -> (1, "ApproveName"),
     )
   val errors = ConcurrentLinkedQueue[String]()
 
@@ -111,13 +115,20 @@ class WorldClient extends PacketHandler:
         TitaniumWorldCodec.encodeLoginInfoZoning(accountId, sessionKey),
       )
 
-  /** Request to enter the world with a character. Called from game thread. */
+  /** Request to enter the world with a character. Called from game thread.
+    * For Titanium, sends CRC1+CRC2 before EnterWorld to clear StartInTutorial flag.
+    * Without these, the server redirects to tutorialb zone (189) instead of the
+    * character's actual start zone.
+    */
   def enterWorld(charName: String): Unit =
     state = WorldState.EnteringZone
     emit(WorldEvent.StateChanged(state))
     if Game.macMode then
       queueAppPacket(MacWorldOpcodes.EnterWorld, WorldCodec.encodeEnterWorld(charName))
     else
+      // Send CRC packets first — server sets StartInTutorial=false when it sees CRC1
+      queueAppPacket(TitaniumWorldOpcodes.WorldClientCRC1, TitaniumWorldCodec.encodeWorldClientCRC())
+      queueAppPacket(TitaniumWorldOpcodes.WorldClientCRC2, TitaniumWorldCodec.encodeWorldClientCRC())
       queueAppPacket(TitaniumWorldOpcodes.EnterWorld, TitaniumWorldCodec.encodeEnterWorld(charName))
 
   /** Check if a name is available. Called from game thread. */
@@ -280,6 +291,13 @@ class WorldClient extends PacketHandler:
     else if op == TitaniumWorldOpcodes.ApproveName then
       val approved = TitaniumWorldCodec.decodeNameApproval(packet.payload)
       emit(WorldEvent.NameApproved(approved))
+
+    else if op == TitaniumWorldOpcodes.ZoneUnavail then
+      val zoneName = TitaniumWorldCodec.decodeZoneUnavail(packet.payload)
+      println(s"[World] Zone unavailable: '$zoneName'")
+      state = WorldState.CharacterSelect
+      emit(WorldEvent.ZoneUnavailable(zoneName))
+      emit(WorldEvent.StateChanged(state))
 
     else if op == TitaniumWorldOpcodes.EnterWorld then
       // Server sends OP_EnterWorld during zoning reconnect

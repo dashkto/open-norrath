@@ -560,10 +560,21 @@ class CharacterCreateScreen(
     val race = races(selectedRace)
     race.classes.map(id => (id, classNames.getOrElse(id, s"Class($id)")))
 
+  // Distributable bonus points per class. The server validates that total stats equal
+  // base + bonus. In the original game the player distributes these manually.
+  // TODO: add a stat point allocation UI; for now we dump all bonus into STR.
+  private val classBonusPoints: Map[Int, Int] = Map(
+    1 -> 25, 2 -> 30, 3 -> 20, 4 -> 20, 5 -> 20, 6 -> 30, 7 -> 20, 8 -> 25,
+    9 -> 30, 10 -> 30, 11 -> 30, 12 -> 30, 13 -> 30, 14 -> 30, 15 -> 20, 16 -> 25,
+  )
+
   private def computeStats: (Int, Int, Int, Int, Int, Int, Int) =
     val race = races(selectedRace)
     val cls = availableClasses(selectedClass)
-    baseStats.getOrElse((race.id, cls._1), (75,75,75,75,75,75,75))
+    val (str, sta, cha, dex, int_, agi, wis) =
+      baseStats.getOrElse((race.id, cls._1), (75, 75, 75, 75, 75, 75, 75))
+    val bonus = classBonusPoints.getOrElse(cls._1, 25)
+    (str + bonus, sta, cha, dex, int_, agi, wis)
 
   private def availableDeities: Vector[(Int, String)] =
     val race = races(selectedRace)

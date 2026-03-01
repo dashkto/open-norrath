@@ -55,22 +55,24 @@ object TitaniumWorldCodec:
     buf.putInt(if returnHome then 1 else 0)
     buf.array()
 
-  /** OP_ApproveName: Titanium NameApproval (76 bytes).
-    * name[64] + uint32 race + uint32 class_ + uint32 deity
+  /** OP_ApproveName: Titanium NameApproval_Struct (72 bytes).
+    * name[64] + uint32 race_id + uint32 class_id
+    * Note: no deity field — server struct is only 72 bytes (eq_packet_structs.h).
     */
-  def encodeApproveName(name: String, race: Int, classId: Int, deity: Int = 0): Array[Byte] =
-    val buf = ByteBuffer.allocate(76).order(ByteOrder.LITTLE_ENDIAN)
+  def encodeApproveName(name: String, race: Int, classId: Int): Array[Byte] =
+    val buf = ByteBuffer.allocate(72).order(ByteOrder.LITTLE_ENDIAN)
     val nameBytes = name.getBytes(StandardCharsets.US_ASCII)
     val nameBuf = new Array[Byte](64)
     System.arraycopy(nameBytes, 0, nameBuf, 0, Math.min(nameBytes.length, 63))
     buf.put(nameBuf)
     buf.putInt(race)
     buf.putInt(classId)
-    buf.putInt(deity)
     buf.array()
 
   /** OP_CharacterCreate: Titanium CharCreate_Struct (80 bytes).
     * All fields are uint32, tightly packed at 4-byte intervals.
+    * Note: Titanium struct does NOT have drakkin fields (those are SoF+).
+    * See titanium_structs.h, not eq_packet_structs.h.
     */
   def encodeCharCreate(
     name: String,
@@ -80,6 +82,7 @@ object TitaniumWorldCodec:
     hairColor: Int = 0, beardColor: Int = 0,
     eyeColor1: Int = 0, eyeColor2: Int = 0,
     hairStyle: Int = 0, beard: Int = 0, face: Int = 0,
+    tutorial: Boolean = false,
   ): Array[Byte] =
     val buf = ByteBuffer.allocate(80).order(ByteOrder.LITTLE_ENDIAN)
     buf.putInt(classId)     // offset 0
@@ -101,8 +104,16 @@ object TitaniumWorldCodec:
     buf.putInt(face)        // offset 64
     buf.putInt(eyeColor1)   // offset 68
     buf.putInt(eyeColor2)   // offset 72
-    buf.putInt(0)           // offset 76: tutorial
+    buf.putInt(if tutorial then 1 else 0)  // offset 76
     buf.array()
+
+  /** OP_World_Client_CRC1/CRC2: Checksum_Struct (2056 bytes).
+    * uint64 checksum + uint8[2048] data.
+    * The server uses these to set StartInTutorial = false. The actual checksum values
+    * don't matter unless EnableChecksumVerification is enabled (off by default).
+    * We send zeros — the important thing is the packet arrives before OP_EnterWorld.
+    */
+  def encodeWorldClientCRC(): Array[Byte] = new Array[Byte](2056)
 
   // ---- Incoming (server -> client) ----
 
@@ -256,6 +267,13 @@ object TitaniumWorldCodec:
       i += 1
 
     guilds.result()
+
+  /** Decode OP_ZoneUnavail: ZoneUnavail_Struct (24 bytes).
+    * zonename[16] + int16[4]. Returns the zone short name.
+    */
+  def decodeZoneUnavail(data: Array[Byte]): String =
+    if data.length < 16 then ""
+    else readNullString(data.take(16))
 
   /** Decode OP_ApproveName reply (1 byte): 1=approved, 0=rejected. Same as Mac. */
   def decodeNameApproval(data: Array[Byte]): Boolean =

@@ -8,12 +8,6 @@ render:
   # Max distance (GL units) to render zone characters — further spawns are culled
   character_distance: 1000
 
-# Debug rendering options
-debug:
-  # Show all animations for a single character model (e.g. "gor", "dra", "btm", "efr", "lim", "tig")
-  # Leave empty to disable animation showcase
-  animation_model: gor
-
 # Named server profiles — switch between servers by changing active_server
 active_server: local_titanium
 
@@ -34,7 +28,7 @@ servers:
     world_port: 9000
     mac_mode: true
   p99:
-    host: 192.168.50.228
+    host: login.eqemulator.net
     port: 5998
     world_port: 9000
     mac_mode: false
