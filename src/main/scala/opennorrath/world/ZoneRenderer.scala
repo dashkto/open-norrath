@@ -142,11 +142,10 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings(),
   /** Get the vertical offset from model origin to feet for a given model code and size.
     * Returns -glMinY * effectiveSize (positive if origin is above feet).
     */
-  /** Get (feetOffset, modelHeight) for a given model code and size. */
-  def modelMetrics(modelCode: String, size: Float): (Float, Float) =
+  /** Get (feetOffset, modelHeight) for a given model code and effective size (server size / 6). */
+  def modelMetrics(modelCode: String, effectiveSize: Float): (Float, Float) =
     characterBuilds.get(modelCode) match
       case Some(build) =>
-        val effectiveSize = if size > 0f then size / 6f else 1f
         (-build.glMinY * effectiveSize, build.glHeight * effectiveSize)
       case None => (0f, 0f)
 
@@ -1223,12 +1222,8 @@ object ZoneRenderer:
           // Resolve attachment point bones (suffix ending in _POINT)
           val attachIndices = resolveAttachBoneIndices(chrWld, sk)
 
-          if !quiet then
-            val animInfo = if clips.nonEmpty then
-              clips.map((code, clip) => s"$code(${clip.frameCount}f)").mkString(", ")
-            else "none"
-            val attachInfo = if attachIndices.nonEmpty then s", attach: ${attachIndices.keys.mkString(",")}" else ""
-            println(f"    $actorKey: ${meshFragments.size} meshes, ${zm.vertices.length / 3} verts, size(${eqMaxX - eqMinX}%.1f x ${eqMaxY - eqMinY}%.1f x ${eqMaxZ - eqMinZ}%.1f), anims: $animInfo$attachInfo")
+          if !quiet && clips.isEmpty then
+            println(f"    $actorKey: ${meshFragments.size} meshes, ${zm.vertices.length / 3} verts, size(${eqMaxX - eqMinX}%.1f x ${eqMaxY - eqMinY}%.1f x ${eqMaxZ - eqMinZ}%.1f), anims: none")
           Some(CharBuild(actorKey, sk, meshFragments, zm,
             glWidth = eqMaxX - eqMinX, glDepth = eqMaxY - eqMinY, glHeight = eqMaxZ - eqMinZ,
             glCenterX = (eqMinX + eqMaxX) / 2f, glCenterZ = -(eqMinY + eqMaxY) / 2f, glMinY = eqMinZ,

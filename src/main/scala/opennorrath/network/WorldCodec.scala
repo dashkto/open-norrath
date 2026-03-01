@@ -21,12 +21,29 @@ case class ZoneAddress(ip: String, port: Int)
 /** Guild entry from OP_GuildsList. */
 case class GuildInfo(id: Int, name: String)
 
-/** Expansion flags from OP_ExpansionInfo. */
+/** Expansion flags from OP_ExpansionInfo.
+  * Bitmask where each bit enables an expansion:
+  *   0x0001=Kunark, 0x0002=Velious, 0x0004=Luclin, 0x0008=PoP,
+  *   0x0010=LoY, 0x0020=LDoN, 0x0040=GoD, 0x0080=OoW,
+  *   0x0100=DoN, 0x0200=DoD, 0x0400=PoR, 0x0800=TSS,
+  *   0x1000=TBS, 0x2000=SoF
+  */
 case class ExpansionFlags(flags: Int):
   def hasKunark: Boolean = (flags & 0x01) != 0
   def hasVelious: Boolean = (flags & 0x02) != 0
   def hasLuclin: Boolean = (flags & 0x04) != 0
   def hasPlanes: Boolean = (flags & 0x08) != 0
+
+  /** Human-readable list of enabled expansions. */
+  def enabledNames: Seq[String] =
+    val names = Vector(
+      (0x0001, "Kunark"), (0x0002, "Velious"), (0x0004, "Luclin"), (0x0008, "PoP"),
+      (0x0010, "LoY"), (0x0020, "LDoN"), (0x0040, "GoD"), (0x0080, "OoW"),
+      (0x0100, "DoN"), (0x0200, "DoD"), (0x0400, "PoR"), (0x0800, "TSS"),
+      (0x1000, "TBS"), (0x2000, "SoF"),
+    )
+    val enabled = names.collect { case (bit, name) if (flags & bit) != 0 => name }
+    if enabled.isEmpty then Seq("Classic only") else enabled
 
 /** Encode/decode world server payloads.
   *

@@ -74,6 +74,27 @@ object EqData:
     case 130 => "Vah Shir"
     case _   => s"Race($id)"
 
+  /** Default model size by race ID. The server sends size=0 for player characters
+    * (setting a non-zero size breaks movement on the server side), so the client must
+    * supply the default. Values from EQEmu's GetRaceGenderDefaultHeight table.
+    */
+  def raceDefaultSize(race: Int): Float = race match
+    case 1   => 6.0f   // Human
+    case 2   => 7.0f   // Barbarian
+    case 3   => 6.0f   // Erudite
+    case 4   => 5.0f   // Wood Elf
+    case 5   => 6.0f   // High Elf
+    case 6   => 5.0f   // Dark Elf
+    case 7   => 5.5f   // Half Elf
+    case 8   => 4.0f   // Dwarf
+    case 9   => 8.0f   // Troll
+    case 10  => 9.0f   // Ogre
+    case 11  => 3.5f   // Halfling
+    case 12  => 3.0f   // Gnome
+    case 128 => 6.0f   // Iksar
+    case 130 => 6.0f   // Vah Shir
+    case _   => 6.0f   // Default to human size
+
   /** Short class abbreviation for compact displays. */
   def classAbbrev(id: Int): String =
     EqClass.fromCode(id).map(_.abbrev).getOrElse("???")

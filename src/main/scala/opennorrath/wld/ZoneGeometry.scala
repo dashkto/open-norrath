@@ -258,8 +258,7 @@ object ZoneGeometry:
     val unknowns = wld.fragmentsOfType[UnknownFragment].groupBy(_.fragmentType).map((t, fs) => f"0x$t%02x(${fs.size})").mkString(", ")
     println(s"  BSP fragments: ${bspTrees.size} trees (0x21), ${bspRegions.size} regions (0x22), ${regionTypes.size} types (0x29)")
     println(s"  Unknown fragment types: $unknowns")
-    for rt <- regionTypes do
-      println(s"    0x29 '${rt.name}' str='${rt.regionString}' indices=${rt.regionIndices.mkString(",")}")
+    println(s"  Unknown fragment region types: ${regionTypes.map(_.name).mkString(", ")}")
 
     if bspTrees.isEmpty then return ZoneLineBsp(Array.empty, Map.empty)
     val tree = bspTrees.head

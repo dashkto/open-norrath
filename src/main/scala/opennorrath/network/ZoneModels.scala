@@ -955,3 +955,29 @@ object InventoryItem:
     Waist     -> "Waist",
     Ammo      -> "Ammo",
   )
+
+// =============================================================================
+// Misc zone events — targeting, state, rename, simple messages
+// =============================================================================
+
+/** OP_SimpleMessage: server-side string table message.
+  * The string_id refers to an eqstr entry; the client resolves it locally.
+  */
+case class SimpleMessageInfo(
+  stringId: Int,
+  color: Int,
+)
+
+/** OP_MobRename: server tells client to change a mob's displayed name. */
+case class MobRenameInfo(
+  oldName: String,
+  newName: String,
+)
+
+/** OP_PlayerStateAdd: player state flag broadcast (sit, levitate, etc).
+  * The state field is a bitmask matching EQEmu's PlayerState values.
+  */
+case class PlayerStateInfo(
+  spawnId: Int,
+  state: Int,
+)

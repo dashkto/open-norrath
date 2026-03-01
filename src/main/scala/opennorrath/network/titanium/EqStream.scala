@@ -513,6 +513,20 @@ object EqStream:
     * 3. Apply decode passes in reverse order (pass2 then pass1)
     * @return decoded packet data, or None if CRC failed
     */
+  /** Full decode pipeline for an incoming packet:
+    * 1. Validate CRC (if encodable)
+    * 2. Strip CRC
+    * 3. Apply decode passes in reverse order (pass2 then pass1)
+    *
+    * The EQEmu server applies compression to the "region" of each UDP packet:
+    * - Protocol packets (first byte 0x00): region starts at offset 2 (after [0x00, opcode])
+    * - App packets (first byte != 0x00): region starts at offset 1
+    * Compression prepends a 1-byte flag: 0x5a=zlib, 0xa5=raw. The flag covers
+    * everything after the protocol header, including sequence numbers, so it MUST
+    * be handled before parsing sequences or app data.
+    *
+    * @return decoded packet data, or None if CRC failed
+    */
   def decodePacket(
     raw: Array[Byte],
     params: SessionParams,
@@ -525,29 +539,65 @@ object EqStream:
       return None
 
     // Strip CRC
-    val data = new Array[Byte](raw.length - params.crcBytes)
+    var data = new Array[Byte](raw.length - params.crcBytes)
     System.arraycopy(raw, 0, data, 0, data.length)
 
-    // Decode passes in reverse order
     val regionOffset = decodeRegionOffset(data)
-    val regionLen = data.length - regionOffset
+    if data.length - regionOffset <= 0 then return Some(data)
 
-    // Pass 2 first (reverse order)
-    applyDecodePasses(data, regionOffset, regionLen, params.encodePass2, params.encodeKey)
-    applyDecodePasses(data, regionOffset, regionLen, params.encodePass1, params.encodeKey)
+    // Decode passes in reverse order (pass2 first, then pass1).
+    // XOR is in-place; compression changes the buffer, so it produces a new array.
+    for pass <- Array(params.encodePass2, params.encodePass1) do
+      pass match
+        case p if p == EncodeXOR =>
+          xorDecode(data, regionOffset, data.length - regionOffset, params.encodeKey)
+        case p if p == EncodeCompression =>
+          data = decompressRegion(data, regionOffset)
+        case _ => ()
 
     Some(data)
 
-  private def applyDecodePasses(
-    data: Array[Byte], offset: Int, length: Int, pass: Int, key: Int
-  ): Unit =
-    pass match
-      case p if p == EncodeXOR => xorDecode(data, offset, length, key)
-      case p if p == EncodeCompression =>
-        // Decompression replaces the data in-place... this is tricky.
-        // For now, decompress is handled separately at the OP_Packet level.
-        () // handled after unwrapping
-      case _ => () // EncodeNone
+  /** Strip the compress flag from a region and decompress if needed.
+    * Returns a new array with the header preserved and the region decompressed.
+    * Compress flag values: 0x5a = zlib compressed, 0xa5 = raw (flag only).
+    * If the flag is neither, the data is returned unchanged (matches EQEmu behavior).
+    */
+  private def decompressRegion(data: Array[Byte], regionOffset: Int): Array[Byte] =
+    val regionLen = data.length - regionOffset
+    if regionLen < 1 then return data
+    val flag = data(regionOffset)
+    if flag == CompressFlag then
+      // Zlib compressed: inflate the data after the flag byte
+      val inflater = Inflater()
+      try
+        inflater.setInput(data, regionOffset + 1, regionLen - 1)
+        val out = new Array[Byte](65536)
+        val n = inflater.inflate(out)
+        val result = new Array[Byte](regionOffset + n)
+        System.arraycopy(data, 0, result, 0, regionOffset)
+        System.arraycopy(out, 0, result, regionOffset, n)
+        result
+      finally inflater.end()
+    else if flag == NoCompressFlag then
+      // Not compressed: strip the flag byte, keep the rest
+      val result = new Array[Byte](data.length - 1)
+      System.arraycopy(data, 0, result, 0, regionOffset)
+      System.arraycopy(data, regionOffset + 1, result, regionOffset, regionLen - 1)
+      result
+    else
+      // Unknown flag — leave data as-is (no compress flag to strip)
+      data
+
+  /** Insert a compress flag (0xa5 = not compressed) into the encode region.
+    * The EQEmu server expects the flag when compression is configured, even
+    * if we don't actually compress. Returns a new array with the flag inserted.
+    */
+  private def compressRegion(data: Array[Byte], regionOffset: Int): Array[Byte] =
+    val result = new Array[Byte](data.length + 1)
+    System.arraycopy(data, 0, result, 0, regionOffset)
+    result(regionOffset) = NoCompressFlag
+    System.arraycopy(data, regionOffset, result, regionOffset + 1, data.length - regionOffset)
+    result
 
   /** Full encode pipeline for an outgoing packet:
     * 1. Apply encode passes in forward order (pass1 then pass2)
@@ -560,24 +610,20 @@ object EqStream:
   ): Array[Byte] =
     if !packetCanBeEncoded(data) then return data
 
-    val encoded = data.clone()
+    var encoded = data.clone()
     val regionOffset = decodeRegionOffset(encoded)
-    val regionLen = encoded.length - regionOffset
 
-    // Encode passes in forward order
-    applyEncodePasses(encoded, regionOffset, regionLen, params.encodePass1, params.encodeKey)
-    applyEncodePasses(encoded, regionOffset, regionLen, params.encodePass2, params.encodeKey)
+    // Encode passes in forward order (pass1 then pass2)
+    for pass <- Array(params.encodePass1, params.encodePass2) do
+      pass match
+        case p if p == EncodeCompression =>
+          encoded = compressRegion(encoded, regionOffset)
+        case p if p == EncodeXOR =>
+          xorEncode(encoded, regionOffset, encoded.length - regionOffset, params.encodeKey)
+        case _ => ()
 
     // Append CRC
     appendCrc(encoded, params.crcBytes, params.encodeKey)
-
-  private def applyEncodePasses(
-    data: Array[Byte], offset: Int, length: Int, pass: Int, key: Int
-  ): Unit =
-    pass match
-      case p if p == EncodeXOR => xorEncode(data, offset, length, key)
-      case p if p == EncodeCompression => () // compression handled at OP_Packet level
-      case _ => ()
 
   // =========================================================================
   // Sequence comparison (handles wraparound)

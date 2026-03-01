@@ -327,7 +327,7 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
           playerZc.overrideSpawnId = Some(myId)
           zoneCharacters(myId) = playerZc
           zone.initSpawnRendering(playerZc)
-          val (fo, mh) = zone.modelMetrics(playerZc.modelCode, playerZc.size)
+          val (fo, mh) = zone.modelMetrics(playerZc.modelCode, playerZc.effectiveSize)
           player.foreach { pc => pc.feetOffset = fo; pc.modelHeight = mh; pc.zoneChar = Some(playerZc) }
         }
       }

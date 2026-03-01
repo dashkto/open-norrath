@@ -45,6 +45,9 @@ enum ZoneEvent:
   case AnimationTriggered(anim: AnimationInfo)
   case SpellActionTriggered(action: SpellAction)
   case BeginCastTriggered(cast: BeginCast)
+  case PlayerStateChanged(info: PlayerStateInfo)
+  case SpawnRenamed(info: MobRenameInfo)
+  case TargetOfTargetChanged(spawnId: Int)
 
   // Combat — UI displays these
   case DamageDealt(info: DamageInfo)
@@ -52,6 +55,7 @@ enum ZoneEvent:
   case ConsiderResult(result: opennorrath.network.ConsiderResult)
 
   // Stats — UI updates bars
+  case MobHealthChanged(spawnId: Int, hpPercent: Int)
   case HPChanged(update: HPUpdate)
   case ManaChanged(update: ManaChange)
   case ExpChanged(update: ExpChange)
@@ -64,6 +68,7 @@ enum ZoneEvent:
   case SpecialMsgReceived(msg: SpecialMessage)
   case FormattedMsgReceived(msg: FormattedMessage)
   case EmoteReceived(msg: EmoteMessage)
+  case SimpleMessageReceived(msg: SimpleMessageInfo)
   case MultiLineMsgReceived(text: String)
   case YellReceived(spawnId: Int)
   case WhoAllReceived(result: WhoAllResponse)
@@ -140,16 +145,35 @@ class ZoneClient extends PacketHandler:
     if Game.macMode then Map.empty
     else Map(
       TitaniumZoneOpcodes.ClientUpdate -> (36, "ClientUpdate"),
+      TitaniumZoneOpcodes.ZoneChange -> (88, "ZoneChange"),
       TitaniumZoneOpcodes.TargetMouse -> (4, "TargetMouse"),
       TitaniumZoneOpcodes.Consider -> (24, "Consider"),
-      TitaniumZoneOpcodes.SetServerFilter -> (36, "SetServerFilter"),
+      TitaniumZoneOpcodes.SetServerFilter -> (116, "SetServerFilter"),
+      TitaniumZoneOpcodes.CastSpell -> (20, "CastSpell"),
+      TitaniumZoneOpcodes.MemorizeSpell -> (16, "MemorizeSpell"),
     )
   override val expectedIncomingSizes: Map[Short, (Int, String)] =
     if Game.macMode then Map.empty
     else Map(
       TitaniumZoneOpcodes.PlayerProfile -> (19588, "PlayerProfile"),
+      TitaniumZoneOpcodes.ZoneChange -> (88, "ZoneChange"),
       TitaniumZoneOpcodes.Death -> (32, "Death"),
       TitaniumZoneOpcodes.DeleteSpawn -> (4, "DeleteSpawn"),
+      TitaniumZoneOpcodes.Damage -> (23, "Damage"),
+      TitaniumZoneOpcodes.MobHealth -> (3, "MobHealth"),
+      TitaniumZoneOpcodes.TargetHoTT -> (4, "TargetHoTT"),
+      TitaniumZoneOpcodes.PlayerStateAdd -> (8, "PlayerStateAdd"),
+      TitaniumZoneOpcodes.SimpleMessage -> (12, "SimpleMessage"),
+      TitaniumZoneOpcodes.MobRename -> (200, "MobRename"),
+      TitaniumZoneOpcodes.Consider -> (28, "Consider"),
+      TitaniumZoneOpcodes.Animation -> (4, "Animation"),
+      TitaniumZoneOpcodes.MemorizeSpell -> (16, "MemorizeSpell"),
+      TitaniumZoneOpcodes.ManaChange -> (16, "ManaChange"),
+      TitaniumZoneOpcodes.ExpUpdate -> (8, "ExpUpdate"),
+      TitaniumZoneOpcodes.Weather -> (12, "Weather"),
+      TitaniumZoneOpcodes.Stamina -> (8, "Stamina"),
+      TitaniumZoneOpcodes.TimeOfDay -> (8, "TimeOfDay"),
+      TitaniumZoneOpcodes.Buff -> (32, "Buff"),
     )
 
   @volatile var state: ZoneState = ZoneState.Disconnected
@@ -217,6 +241,9 @@ class ZoneClient extends PacketHandler:
   @volatile var reconnectAttempt: Int = 0
   private var receivedAppData: Boolean = false
   @volatile var needsReconnect: Boolean = false
+
+  // Debug counter for mob position updates
+  private var mobUpdateCount = 0L
   private val ReconnectTimeoutMs = 8000  // >5s to outlast server's get_auth_timer
   val MaxReconnectAttempts = 3
 
@@ -259,7 +286,9 @@ class ZoneClient extends PacketHandler:
 
   /** Send a chat message. Called from game thread. */
   def sendChat(sender: String, target: String, channel: Int, language: Int, message: String): Unit =
-    queueAppPacket(opcodes.ChannelMessage, ZoneCodec.encodeChannelMessage(sender, target, channel, language, message))
+    val payload = if Game.macMode then ZoneCodec.encodeChannelMessage(sender, target, channel, language, message)
+                  else TitaniumZoneCodec.encodeChannelMessage(sender, target, channel, language, message)
+    queueAppPacket(opcodes.ChannelMessage, payload)
 
   /** Toggle auto-attack. Called from game thread. */
   def autoAttack(enabled: Boolean): Unit =
@@ -308,7 +337,9 @@ class ZoneClient extends PacketHandler:
   /** Request zone change (client-initiated, e.g. zone line). Called from game thread. */
   def sendZoneChange(zoneId: Int): Unit =
     val charName = profile.map(_.name).getOrElse(pendingCharName)
-    queueAppPacket(opcodes.ZoneChange, ZoneCodec.encodeZoneChange(charName, zoneId))
+    val payload = if Game.macMode then ZoneCodec.encodeZoneChange(charName, zoneId)
+                  else TitaniumZoneCodec.encodeZoneChange(charName, zoneId)
+    queueAppPacket(opcodes.ZoneChange, payload)
 
   /** Save character. Called from game thread. */
   def save(): Unit =
@@ -330,12 +361,16 @@ class ZoneClient extends PacketHandler:
     */
   def sendMemorizeSpell(gemSlot: Int, spellId: Int): Unit =
     if state == ZoneState.InZone then
-      queueAppPacket(opcodes.MemorizeSpell, ZoneCodec.encodeMemorizeSpell(gemSlot, spellId, 1))
+      val payload = if Game.macMode then ZoneCodec.encodeMemorizeSpell(gemSlot, spellId, 1)
+                    else TitaniumZoneCodec.encodeMemorizeSpell(gemSlot, spellId, 1)
+      queueAppPacket(opcodes.MemorizeSpell, payload)
 
   /** Unmemorize (forget) a spell from a gem slot. Called from game thread. */
   def sendForgetSpell(gemSlot: Int, spellId: Int): Unit =
     if state == ZoneState.InZone then
-      queueAppPacket(opcodes.MemorizeSpell, ZoneCodec.encodeMemorizeSpell(gemSlot, spellId, 2))
+      val payload = if Game.macMode then ZoneCodec.encodeMemorizeSpell(gemSlot, spellId, 2)
+                    else TitaniumZoneCodec.encodeMemorizeSpell(gemSlot, spellId, 2)
+      queueAppPacket(opcodes.MemorizeSpell, payload)
 
   /** Cast a memorized spell from a gem slot. Called from game thread.
     * @param gemSlot  gem slot 0-7
@@ -344,7 +379,9 @@ class ZoneClient extends PacketHandler:
     */
   def sendCastSpell(gemSlot: Int, spellId: Int, targetId: Int): Unit =
     if state == ZoneState.InZone then
-      queueAppPacket(opcodes.CastSpell, ZoneCodec.encodeCastSpell(gemSlot, spellId, targetId))
+      val payload = if Game.macMode then ZoneCodec.encodeCastSpell(gemSlot, spellId, targetId)
+                    else TitaniumZoneCodec.encodeCastSpell(gemSlot, spellId, targetId)
+      queueAppPacket(opcodes.CastSpell, payload)
 
   /** Scribe a spell scroll into the spell book. Called from game thread.
     * Moves the scroll to cursor (slot 0), then sends OP_MemorizeSpell with scribing=0.
@@ -355,7 +392,9 @@ class ZoneClient extends PacketHandler:
       // Step 1: Move scroll to cursor (server expects scroll on cursor for scribing)
       sendMoveItem(scrollSlot, InventoryItem.Cursor)
       // Step 2: Send OP_MemorizeSpell with scribing=0 (scribe)
-      queueAppPacket(opcodes.MemorizeSpell, ZoneCodec.encodeMemorizeSpell(bookSlot, spellId, 0))
+      val payload = if Game.macMode then ZoneCodec.encodeMemorizeSpell(bookSlot, spellId, 0)
+                    else TitaniumZoneCodec.encodeMemorizeSpell(bookSlot, spellId, 0)
+      queueAppPacket(opcodes.MemorizeSpell, payload)
 
   // Merchant state — tracks whether we're waiting for shop inventory
   private var pendingMerchant: Option[MerchantOpen] = None
@@ -365,12 +404,16 @@ class ZoneClient extends PacketHandler:
   /** Open a merchant's shop. Called from game thread. */
   def openMerchant(npcId: Int): Unit =
     println(s"[Zone] Sending OP_ShopRequest for npcId=$npcId playerId=$mySpawnId")
-    queueAppPacket(opcodes.ShopRequest, ZoneCodec.encodeMerchantClick(npcId, mySpawnId))
+    val payload = if Game.macMode then ZoneCodec.encodeMerchantClick(npcId, mySpawnId)
+                  else TitaniumZoneCodec.encodeMerchantClick(npcId, mySpawnId)
+    queueAppPacket(opcodes.ShopRequest, payload)
 
   /** Buy an item from the open merchant. Called from game thread. */
   def buyFromMerchant(slot: Int, quantity: Int): Unit =
     if activeMerchantId != 0 then
-      queueAppPacket(opcodes.ShopPlayerBuy, ZoneCodec.encodeMerchantBuy(activeMerchantId, mySpawnId, slot, quantity))
+      val payload = if Game.macMode then ZoneCodec.encodeMerchantBuy(activeMerchantId, mySpawnId, slot, quantity)
+                    else TitaniumZoneCodec.encodeMerchantBuy(activeMerchantId, mySpawnId, slot, quantity)
+      queueAppPacket(opcodes.ShopPlayerBuy, payload)
 
   /** Close the merchant window. Called from game thread. */
   def closeMerchant(): Unit =
@@ -388,7 +431,9 @@ class ZoneClient extends PacketHandler:
   /** Invite a player to our group. Called from game thread. */
   def inviteToGroup(targetName: String): Unit =
     val myName = profile.map(_.name).getOrElse(pendingCharName)
-    queueAppPacket(opcodes.GroupInvite, ZoneCodec.encodeGroupInvite(targetName, myName))
+    val payload = if Game.macMode then ZoneCodec.encodeGroupInvite(targetName, myName)
+                  else TitaniumZoneCodec.encodeGroupInvite(targetName, myName)
+    queueAppPacket(opcodes.GroupInvite, payload)
 
   /** Accept a pending group invite. Called from game thread. */
   def acceptGroupInvite(inviterName: String): Unit =
@@ -406,15 +451,21 @@ class ZoneClient extends PacketHandler:
   /** Request to open a corpse for looting. Called from game thread. */
   def requestLoot(corpseId: Int): Unit =
     lootingCorpseId = corpseId
-    queueAppPacket(opcodes.LootRequest, ZoneCodec.encodeLootRequest(corpseId))
+    val payload = if Game.macMode then ZoneCodec.encodeLootRequest(corpseId)
+                  else TitaniumZoneCodec.encodeLootRequest(corpseId)
+    queueAppPacket(opcodes.LootRequest, payload)
 
   /** Loot a specific item from the open corpse. Called from game thread. */
   def lootItem(corpseId: Int, lootSlot: Int): Unit =
-    queueAppPacket(opcodes.LootItem, ZoneCodec.encodeLootItem(corpseId, lootSlot))
+    val payload = if Game.macMode then ZoneCodec.encodeLootItem(corpseId, lootSlot)
+                  else TitaniumZoneCodec.encodeLootItem(corpseId, lootSlot)
+    queueAppPacket(opcodes.LootItem, payload)
 
   /** Close the loot window. Called from game thread. */
   def endLoot(corpseId: Int): Unit =
-    queueAppPacket(opcodes.EndLootRequest, ZoneCodec.encodeLootRequest(corpseId))
+    val payload = if Game.macMode then ZoneCodec.encodeLootRequest(corpseId)
+                  else TitaniumZoneCodec.encodeLootRequest(corpseId)
+    queueAppPacket(opcodes.EndLootRequest, payload)
     lootingCorpseId = 0
 
   // ===========================================================================
@@ -767,11 +818,12 @@ class ZoneClient extends PacketHandler:
       // Titanium profiles are NOT encrypted/compressed — decode directly
       TitaniumZoneCodec.decodePlayerProfile(data) match
         case Some(pp) =>
+          println(s"[Zone] Profile decoded: name='${pp.name}' pos=(y=${pp.y}, x=${pp.x}, z=${pp.z}) zone=${pp.zoneId}")
           profile = Some(pp)
           state = ZoneState.WaitingForZone
           emit(ZoneEvent.ProfileReceived(pp))
           emit(ZoneEvent.StateChanged(state))
-          queueAppPacket(TitaniumZoneOpcodes.SetServerFilter, ZoneCodec.encodeServerFilter)
+          queueAppPacket(TitaniumZoneOpcodes.SetServerFilter, TitaniumZoneCodec.encodeServerFilter)
           queueAppPacket(TitaniumZoneOpcodes.ReqNewZone, ZoneCodec.encodeReqNewZone)
         case None =>
           emit(ZoneEvent.Error("Failed to decode Titanium player profile"))
@@ -789,7 +841,7 @@ class ZoneClient extends PacketHandler:
           emit(ZoneEvent.Error("Failed to decode Titanium zone data"))
 
     else if op == TitaniumZoneOpcodes.TimeOfDay then
-      ZoneCodec.decodeTimeOfDay(data).foreach(time => emit(ZoneEvent.TimeReceived(time)))
+      TitaniumZoneCodec.decodeTimeOfDay(data).foreach(time => emit(ZoneEvent.TimeReceived(time)))
 
     // --- Spawns ---
 
@@ -824,12 +876,14 @@ class ZoneClient extends PacketHandler:
     // No separate MobUpdate opcode (Mac's OP_MobUpdate doesn't exist in Titanium).
 
     else if op == TitaniumZoneOpcodes.ClientUpdate then
+      mobUpdateCount += 1
       TitaniumZoneCodec.decodeMobUpdate(data).foreach(handleMobPositionUpdate)
 
     // --- Combat ---
 
     else if op == TitaniumZoneOpcodes.Damage then
-      ZoneCodec.decodeDamage(data).foreach(d => emit(ZoneEvent.DamageDealt(d)))
+      // Titanium CombatDamage_Struct is 23 bytes with uint8 type (Mac is 24 with uint16)
+      TitaniumZoneCodec.decodeDamage(data).foreach(d => emit(ZoneEvent.DamageDealt(d)))
 
     else if op == TitaniumZoneOpcodes.Death then
       TitaniumZoneCodec.decodeDeath(data).foreach { d =>
@@ -840,7 +894,7 @@ class ZoneClient extends PacketHandler:
       }
 
     else if op == TitaniumZoneOpcodes.Consider then
-      ZoneCodec.decodeConsider(data).foreach(c => emit(ZoneEvent.ConsiderResult(c)))
+      TitaniumZoneCodec.decodeConsider(data).foreach(c => emit(ZoneEvent.ConsiderResult(c)))
 
     // --- Appearance / Animation (shared struct formats) ---
 
@@ -848,43 +902,75 @@ class ZoneClient extends PacketHandler:
       handleSpawnAppearance(data)
 
     else if op == TitaniumZoneOpcodes.WearChange then
-      ZoneCodec.decodeWearChange(data).foreach(wc => emit(ZoneEvent.EquipmentChanged(wc)))
+      TitaniumZoneCodec.decodeWearChange(data).foreach(wc => emit(ZoneEvent.EquipmentChanged(wc)))
 
     else if op == TitaniumZoneOpcodes.FaceChange then
       ZoneCodec.decodeFaceChange(data).foreach(fc => emit(ZoneEvent.FaceChanged(fc)))
 
     else if op == TitaniumZoneOpcodes.Animation then
-      ZoneCodec.decodeAnimation(data).foreach(a => emit(ZoneEvent.AnimationTriggered(a)))
+      TitaniumZoneCodec.decodeAnimation(data).foreach(a => emit(ZoneEvent.AnimationTriggered(a)))
 
     else if op == TitaniumZoneOpcodes.Action then
-      ZoneCodec.decodeAction(data).foreach(a => emit(ZoneEvent.SpellActionTriggered(a)))
+      TitaniumZoneCodec.decodeAction(data).foreach(a => emit(ZoneEvent.SpellActionTriggered(a)))
 
     else if op == TitaniumZoneOpcodes.BeginCast then
       ZoneCodec.decodeBeginCast(data).foreach(c => emit(ZoneEvent.BeginCastTriggered(c)))
 
     else if op == TitaniumZoneOpcodes.MemorizeSpell then
-      ZoneCodec.decodeMemorizeSpell(data).foreach { (bookSlot, spellId, scribing) =>
+      TitaniumZoneCodec.decodeMemorizeSpell(data).foreach { (bookSlot, spellId, scribing) =>
         if scribing == 0 && spellId > 0 then
           println(s"[Zone] Spell $spellId scribed into book slot $bookSlot")
           emit(ZoneEvent.SpellScribed(spellId, bookSlot))
       }
 
     else if op == TitaniumZoneOpcodes.InterruptCast then
-      ZoneCodec.decodeInterruptCast(data).foreach { (messageId, color, message) =>
+      TitaniumZoneCodec.decodeInterruptCast(data).foreach { (messageId, color, message) =>
         emit(ZoneEvent.SpellInterrupted(messageId, color, message))
       }
+
+    // --- Targeting ---
+
+    else if op == TitaniumZoneOpcodes.TargetHoTT then
+      // OP_TargetHoTT: 4 bytes — uint32 spawnId of target's target
+      if data.length >= 4 then
+        val spawnId = java.nio.ByteBuffer.wrap(data).order(java.nio.ByteOrder.LITTLE_ENDIAN).getInt()
+        emit(ZoneEvent.TargetOfTargetChanged(spawnId))
+
+    // --- Player State / Rename ---
+
+    else if op == TitaniumZoneOpcodes.PlayerStateAdd then
+      // OP_PlayerStateAdd: 8 bytes — uint32 spawnId, uint32 state flags
+      if data.length >= 8 then
+        val buf = java.nio.ByteBuffer.wrap(data).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        emit(ZoneEvent.PlayerStateChanged(PlayerStateInfo(buf.getInt(), buf.getInt())))
+
+    else if op == TitaniumZoneOpcodes.MobRename then
+      // OP_MobRename: 200 bytes — char[64] old, char[64] old_again, char[64] new, uint32 unk, uint32 unk
+      if data.length >= 192 then
+        val oldName = new String(data, 0, 64, java.nio.charset.StandardCharsets.US_ASCII).takeWhile(_ != '\u0000')
+        val newName = new String(data, 128, 64, java.nio.charset.StandardCharsets.US_ASCII).takeWhile(_ != '\u0000')
+        emit(ZoneEvent.SpawnRenamed(MobRenameInfo(oldName, newName)))
 
     // --- Stats ---
 
     else if op == TitaniumZoneOpcodes.HPUpdate then
       ZoneCodec.decodeHPUpdate(data).foreach(hp => emit(ZoneEvent.HPChanged(hp)))
 
+    else if op == TitaniumZoneOpcodes.MobHealth then
+      // OP_MobHealth: 3 bytes — uint16 spawnId, uint8 hp%. Same format as HPUpdate 3-byte variant.
+      if data.length >= 3 then
+        val buf = java.nio.ByteBuffer.wrap(data).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        val spawnId = buf.getShort() & 0xFFFF
+        val hp = buf.get() & 0xFF
+        emit(ZoneEvent.MobHealthChanged(spawnId, hp))
+
     else if op == TitaniumZoneOpcodes.ManaChange then
-      // Titanium only has ManaChange (no separate ManaUpdate opcode)
-      ZoneCodec.decodeManaChange(data).foreach(m => emit(ZoneEvent.ManaChanged(m)))
+      // Titanium ManaChange_Struct is 16 bytes (Mac is 4)
+      TitaniumZoneCodec.decodeManaChange(data).foreach(m => emit(ZoneEvent.ManaChanged(m)))
 
     else if op == TitaniumZoneOpcodes.ExpUpdate then
-      ZoneCodec.decodeExpUpdate(data).foreach(e => emit(ZoneEvent.ExpChanged(e)))
+      // Titanium ExpUpdate_Struct is 8 bytes (Mac is 4)
+      TitaniumZoneCodec.decodeExpUpdate(data).foreach(e => emit(ZoneEvent.ExpChanged(e)))
 
     else if op == TitaniumZoneOpcodes.LevelUpdate then
       ZoneCodec.decodeLevelUpdate(data).foreach(l => emit(ZoneEvent.LevelChanged(l)))
@@ -895,16 +981,23 @@ class ZoneClient extends PacketHandler:
     // --- Chat ---
 
     else if op == TitaniumZoneOpcodes.ChannelMessage then
-      ZoneCodec.decodeChannelMessage(data).foreach(m => emit(ZoneEvent.ChatReceived(m)))
+      TitaniumZoneCodec.decodeChannelMessage(data).foreach(m => emit(ZoneEvent.ChatReceived(m)))
 
     else if op == TitaniumZoneOpcodes.SpecialMesg then
       ZoneCodec.decodeSpecialMesg(data).foreach(m => emit(ZoneEvent.SpecialMsgReceived(m)))
 
     else if op == TitaniumZoneOpcodes.FormattedMessage then
-      ZoneCodec.decodeFormattedMessage(data).foreach(m => emit(ZoneEvent.FormattedMsgReceived(m)))
+      // Titanium uses uint32 fields (12-byte header). Mac uses uint16 (6-byte header).
+      TitaniumZoneCodec.decodeFormattedMessage(data).foreach(m => emit(ZoneEvent.FormattedMsgReceived(m)))
 
     else if op == TitaniumZoneOpcodes.Emote then
-      ZoneCodec.decodeEmote(data).foreach(m => emit(ZoneEvent.EmoteReceived(m)))
+      TitaniumZoneCodec.decodeEmote(data).foreach(m => emit(ZoneEvent.EmoteReceived(m)))
+
+    else if op == TitaniumZoneOpcodes.SimpleMessage then
+      // OP_SimpleMessage: 12 bytes — uint32 string_id, uint32 color, uint32 unknown
+      if data.length >= 8 then
+        val buf = java.nio.ByteBuffer.wrap(data).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+        emit(ZoneEvent.SimpleMessageReceived(SimpleMessageInfo(buf.getInt(), buf.getInt())))
 
     // No MultiLineMsg in Titanium (opcode 0x0000 = disabled)
 
@@ -919,15 +1012,15 @@ class ZoneClient extends PacketHandler:
     // --- Environment ---
 
     else if op == TitaniumZoneOpcodes.Weather then
-      ZoneCodec.decodeWeather(data).foreach(w => emit(ZoneEvent.WeatherChanged(w)))
+      TitaniumZoneCodec.decodeWeather(data).foreach(w => emit(ZoneEvent.WeatherChanged(w)))
 
     // --- Zone Objects ---
 
     else if op == TitaniumZoneOpcodes.SpawnDoor then
-      emit(ZoneEvent.DoorsLoaded(ZoneCodec.decodeDoors(data)))
+      emit(ZoneEvent.DoorsLoaded(TitaniumZoneCodec.decodeDoors(data)))
 
     else if op == TitaniumZoneOpcodes.GroundSpawn then
-      ZoneCodec.decodeGroundItem(data).foreach(i => emit(ZoneEvent.GroundItemSpawned(i)))
+      TitaniumZoneCodec.decodeGroundItem(data).foreach(i => emit(ZoneEvent.GroundItemSpawned(i)))
 
     else if op == TitaniumZoneOpcodes.SendZonepoints then
       val points = ZoneCodec.decodeZonePoints(data)
@@ -946,22 +1039,23 @@ class ZoneClient extends PacketHandler:
     // --- Zone Change ---
 
     else if op == TitaniumZoneOpcodes.RequestClientZoneChange then
-      ZoneCodec.decodeRequestClientZoneChange(data).foreach { req =>
+      TitaniumZoneCodec.decodeRequestClientZoneChange(data).foreach { req =>
         val charName = profile.map(_.name).getOrElse(pendingCharName)
-        queueAppPacket(TitaniumZoneOpcodes.ZoneChange, ZoneCodec.encodeZoneChange(charName, req.zoneId))
+        queueAppPacket(TitaniumZoneOpcodes.ZoneChange, TitaniumZoneCodec.encodeZoneChange(charName, req.zoneId))
         emit(ZoneEvent.ZoneChangeRequested(req))
       }
 
     else if op == TitaniumZoneOpcodes.GMGoto then
+      // GMGoto_Struct is the same in Mac and Titanium (152 bytes)
       ZoneCodec.decodeGMGoto(data).foreach { req =>
         println(s"[Zone] OP_GMGoto received — zoning to bind point (zoneId=${req.zoneId})")
         val charName = profile.map(_.name).getOrElse(pendingCharName)
-        queueAppPacket(TitaniumZoneOpcodes.ZoneChange, ZoneCodec.encodeZoneChange(charName, req.zoneId))
+        queueAppPacket(TitaniumZoneOpcodes.ZoneChange, TitaniumZoneCodec.encodeZoneChange(charName, req.zoneId))
         emit(ZoneEvent.ZoneChangeRequested(req))
       }
 
     else if op == TitaniumZoneOpcodes.ZoneChange then
-      ZoneCodec.decodeZoneChange(data).foreach { result =>
+      TitaniumZoneCodec.decodeZoneChange(data).foreach { result =>
         println(s"[Zone] OP_ZoneChange response: success=${result.success}")
         if result.success == 1 then emit(ZoneEvent.ZoneChangeAccepted)
         else emit(ZoneEvent.ZoneChangeDenied)
@@ -1002,14 +1096,17 @@ class ZoneClient extends PacketHandler:
     // --- Misc ---
 
     else if op == TitaniumZoneOpcodes.Stamina then
-      ZoneCodec.decodeStamina(data).foreach(s => emit(ZoneEvent.StaminaChanged(s)))
+      TitaniumZoneCodec.decodeStamina(data).foreach(s => emit(ZoneEvent.StaminaChanged(s)))
 
     else if op == TitaniumZoneOpcodes.SendExpZonein then
       if state == ZoneState.RequestingSpawns then
         queueAppPacket(TitaniumZoneOpcodes.SendExpZonein, Array.emptyByteArray)
 
     else if op == TitaniumZoneOpcodes.Buff then
-      ZoneCodec.decodeBuff(data).foreach((slot, buff) => emit(ZoneEvent.BuffUpdated(slot, buff)))
+      TitaniumZoneCodec.decodeBuff(data).foreach((slot, buff) => emit(ZoneEvent.BuffUpdated(slot, buff)))
+
+    else if op == TitaniumZoneOpcodes.PreLogoutReply then
+      () // Empty ack sent during logout/zoning — no action needed
 
     else if op == TitaniumZoneOpcodes.LogoutReply then
       println("[Zone] Received OP_LogoutReply — camp complete")
@@ -1018,7 +1115,8 @@ class ZoneClient extends PacketHandler:
 
     else
       val name = TitaniumZoneOpcodes.name(op)
-      println(f"[Zone] Unhandled Titanium opcode: 0x${op & 0xFFFF}%04X ($name) ${data.length} bytes")
+      if !name.startsWith("Unknown") then () // known but unhandled — ignore silently
+      else println(f"[Zone] Unhandled Titanium opcode: 0x${op & 0xFFFF}%04X ($name) ${data.length} bytes")
 
   def tick(): Unit =
     if Game.macMode then
@@ -1077,7 +1175,7 @@ class ZoneClient extends PacketHandler:
         // Without this, the server stays in CLIENT_CONNECTING and regen/aggro/etc won't run.
         selfSpawn match
           case Some(s) =>
-            println(s"[Zone] Sending initial OP_ClientUpdate (spawnId=$mySpawnId) to trigger CompleteConnect")
+            println(s"[Zone] Sending initial OP_ClientUpdate (spawnId=$mySpawnId) spawn=(y=${s.y}, x=${s.x}, z=${s.z})")
             sendPosition(PlayerPosition(spawnId = mySpawnId, y = s.y, x = s.x, z = s.z,
               heading = s.heading.toFloat, deltaY = 0, deltaX = 0, deltaZ = 0, deltaHeading = 0, animation = 0))
           case None =>
@@ -1085,10 +1183,12 @@ class ZoneClient extends PacketHandler:
       emit(ZoneEvent.AppearanceChanged(change))
     }
 
-  /** Handle OP_ShopRequest response — shared by Mac and Titanium. Same struct format. */
+  /** Handle OP_ShopRequest response — Mac (12 bytes) vs Titanium (16 bytes). */
   private def handleShopRequest(data: Array[Byte]): Unit =
     println(s"[Zone] Received OP_ShopRequest response (${data.length} bytes)")
-    ZoneCodec.decodeMerchantClick(data) match
+    val result = if Game.macMode then ZoneCodec.decodeMerchantClick(data)
+                 else TitaniumZoneCodec.decodeMerchantClick(data)
+    result match
       case Some(open) =>
         println(s"[Zone] Merchant open: npcId=${open.merchantId} rate=${open.rate}")
         pendingMerchant = Some(open)

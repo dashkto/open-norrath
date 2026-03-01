@@ -345,6 +345,8 @@ object AnimatedCharacter:
     "HAM" -> "ELM",
     "HAF" -> "ELF",
     "OGM" -> "TRM",
+    "QCF" -> "HUF",
+    "QCM" -> "HUM",
   )
 
   /** Discover animations for a skeleton using a foreign model's track prefix.

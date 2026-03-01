@@ -83,12 +83,12 @@ class CharacterPreview:
         if equipment.length > 8 then
           weaponPrimary = equipment(7)
           weaponSecondary = equipment(8)
-        if textureOverrides.nonEmpty || weaponPrimary != 0 || weaponSecondary != 0 then
-          println(s"  [Preview] $modelCode: ${textureOverrides.size} tex overrides, weapons=$weaponPrimary/$weaponSecondary")
-          for (base, variant) <- textureOverrides do
-            val baseId = textureMap.getOrElse(base, -1)
-            val varId = textureMap.getOrElse(variant, -1)
-            println(s"  [Preview]   $base (id=$baseId) -> $variant (id=$varId)")
+        //if textureOverrides.nonEmpty || weaponPrimary != 0 || weaponSecondary != 0 then
+        //  println(s"  [Preview] $modelCode: ${textureOverrides.size} tex overrides, weapons=$weaponPrimary/$weaponSecondary")
+        //  for (base, variant) <- textureOverrides do
+        //    val baseId = textureMap.getOrElse(base, -1)
+        //    val varId = textureMap.getOrElse(variant, -1)
+        //    println(s"  [Preview]   $base (id=$baseId) -> $variant (id=$varId)")
 
   def draw(dt: Float, viewportX: Int, viewportY: Int, viewportW: Int, viewportH: Int, fullW: Int, fullH: Int): Unit =
     currentChar match

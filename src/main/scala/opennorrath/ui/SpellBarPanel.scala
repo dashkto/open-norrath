@@ -15,11 +15,10 @@ class SpellBarPanel(player: PlayerCharacter) extends Panel:
     val title = "Spell Bar"
     val defaultX = 10f
     val defaultY = 200f
-    val defaultWidth = 160f
+    val defaultWidth = 200f
     val defaultHeight = 0f // auto-size vertically
     override def fontScale: Float = Spacing.fontScaleSmall
-    override def extraFlags: Int = ImGuiWindowFlags.NoScrollbar |
-        ImGuiWindowFlags.AlwaysAutoResize
+    override def extraFlags: Int = ImGuiWindowFlags.NoScrollbar
 
     /** Callback to cast a spell. Set by ZoneHud. Parameters: (gemSlot, spellId). */
     var onCastSpell: (Int, Int) => Unit = (_, _) => ()

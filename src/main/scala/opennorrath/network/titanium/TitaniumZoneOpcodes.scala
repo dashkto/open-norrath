@@ -43,6 +43,8 @@ object TitaniumZoneOpcodes extends ZoneOpcodes:
 
   // --- Appearance / Animation ---
   val SpawnAppearance: Short    = 0x7c32.toShort  // Bidirectional: appearance changes
+  val PlayerStateAdd: Short     = 0x63da.toShort  // Zone → Client: player state flags (8B: uint32 spawnId, uint32 state)
+  val MobRename: Short          = 0x0498.toShort  // Zone → Client: mob name change (200B: char[64] x3, uint32 x2)
   val WearChange: Short         = 0x7441.toShort  // Zone → Client: equipment visual change
   val Animation: Short          = 0x2acf.toShort  // Zone → Client: mob animation
   val Action: Short             = 0x497c.toShort  // Zone → Client: spell/combat action
@@ -55,11 +57,13 @@ object TitaniumZoneOpcodes extends ZoneOpcodes:
   val ChannelMessage: Short     = 0x1004.toShort  // Bidirectional: chat message
   val SpecialMesg: Short        = 0x2372.toShort  // Zone → Client: special message
   val FormattedMessage: Short   = 0x5a48.toShort  // Zone → Client: formatted message
+  val SimpleMessage: Short      = 0x673c.toShort  // Zone → Client: string table message (12B: uint32 id, uint32 color, uint32 unk)
   val Emote: Short              = 0x547a.toShort  // Bidirectional: emote text
   val YellForHelp: Short        = 0x61ef.toShort  // Client → Zone: /yell
 
   // --- HP / Mana / Stats ---
-  val HPUpdate: Short           = 0x3bcf.toShort  // Zone → Client: HP update
+  val HPUpdate: Short           = 0x3bcf.toShort  // Zone → Client: HP update (self, 12 bytes)
+  val MobHealth: Short          = 0x0695.toShort  // Zone → Client: mob HP % (3 bytes: uint16 spawnId, uint8 hp)
   val ManaChange: Short         = 0x4839.toShort  // Zone → Client: mana change
   val Stamina: Short            = 0x7a83.toShort  // Zone → Client: hunger/thirst/endurance
   val ExpUpdate: Short          = 0x5ecd.toShort  // Zone → Client: experience change
@@ -69,6 +73,7 @@ object TitaniumZoneOpcodes extends ZoneOpcodes:
   // --- Targeting ---
   val TargetMouse: Short        = 0x6c47.toShort  // Client → Zone: target by mouse click
   val TargetCommand: Short      = 0x1477.toShort  // Client → Zone: target by command
+  val TargetHoTT: Short         = 0x6a12.toShort  // Zone → Client: target's target (uint32 spawnId)
   val Assist: Short             = 0x7709.toShort  // Client → Zone: /assist
 
   // --- Spells ---
@@ -129,6 +134,7 @@ object TitaniumZoneOpcodes extends ZoneOpcodes:
   val Camp: Short               = 0x78c1.toShort  // Client → Zone: camp
   val Logout: Short             = 0x61ff.toShort  // Bidirectional: logout
   val LogoutReply: Short        = 0x3cdc.toShort  // Zone → Client: logout confirmed
+  val PreLogoutReply: Short     = 0x711e.toShort  // Zone → Client: pre-logout ack (0 bytes, sent during zone/camp)
 
   // --- Social ---
   val WhoAllRequest: Short      = 0x5cdd.toShort  // Client → Zone: /who
@@ -258,6 +264,16 @@ object TitaniumZoneOpcodes extends ZoneOpcodes:
   val Bind_Wound: Short         = 0x601d.toShort  // Client → Zone
   val SendExpZonein: Short      = 0x0587.toShort  // Zone → Client
 
+  // --- Tribute ---
+  val TributeUpdate: Short      = 0x5639.toShort  // Zone → Client: tribute status (48 bytes)
+  val TributeTimer: Short       = 0x4665.toShort  // Zone → Client: tribute timer (4 bytes)
+
+  // --- Unhandled but known (suppresses "Unknown" log spam) ---
+  val SendAAStats: Short        = 0x5996.toShort  // Zone → Client: AA stats (0 bytes)
+  val CompletedTasks: Short     = 0x76a2.toShort  // Zone → Client: completed tasks list
+  val DzCompass: Short          = 0x28aa.toShort  // Zone → Client: dungeon zone compass
+  val DzExpeditionLockoutTimers: Short = 0x7c12.toShort // Zone → Client: expedition lockouts
+
   def name(op: Short): String = op match
     // Zone Entry
     case ZoneEntry             => "ZoneEntry"
@@ -287,6 +303,8 @@ object TitaniumZoneOpcodes extends ZoneOpcodes:
     case Shielding             => "Shielding"
     // Appearance / Animation
     case SpawnAppearance       => "SpawnAppearance"
+    case PlayerStateAdd        => "PlayerStateAdd"
+    case MobRename             => "MobRename"
     case WearChange            => "WearChange"
     case Animation             => "Animation"
     case Action                => "Action"
@@ -298,10 +316,12 @@ object TitaniumZoneOpcodes extends ZoneOpcodes:
     case ChannelMessage        => "ChannelMessage"
     case SpecialMesg           => "SpecialMesg"
     case FormattedMessage      => "FormattedMessage"
+    case SimpleMessage         => "SimpleMessage"
     case Emote                 => "Emote"
     case YellForHelp           => "YellForHelp"
     // HP / Mana / Stats
     case HPUpdate              => "HPUpdate"
+    case MobHealth             => "MobHealth"
     case ManaChange            => "ManaChange"
     case Stamina               => "Stamina"
     case ExpUpdate             => "ExpUpdate"
@@ -310,6 +330,7 @@ object TitaniumZoneOpcodes extends ZoneOpcodes:
     // Targeting
     case TargetMouse           => "TargetMouse"
     case TargetCommand         => "TargetCommand"
+    case TargetHoTT            => "TargetHoTT"
     case Assist                => "Assist"
     // Spells
     case CastSpell             => "CastSpell"
@@ -364,6 +385,7 @@ object TitaniumZoneOpcodes extends ZoneOpcodes:
     case Camp                  => "Camp"
     case Logout                => "Logout"
     case LogoutReply           => "LogoutReply"
+    case PreLogoutReply        => "PreLogoutReply"
     // Social
     case WhoAllRequest         => "WhoAllRequest"
     case WhoAllResponse        => "WhoAllResponse"
@@ -477,4 +499,12 @@ object TitaniumZoneOpcodes extends ZoneOpcodes:
     case SenseHeading          => "SenseHeading"
     case Bind_Wound            => "Bind_Wound"
     case SendExpZonein         => "SendExpZonein"
+    // Tribute
+    case TributeUpdate         => "TributeUpdate"
+    case TributeTimer          => "TributeTimer"
+    // Unhandled but known
+    case SendAAStats           => "SendAAStats"
+    case CompletedTasks        => "CompletedTasks"
+    case DzCompass             => "DzCompass"
+    case DzExpeditionLockoutTimers => "DzExpeditionLockoutTimers"
     case other                 => f"Unknown(0x${other & 0xFFFF}%04x)"

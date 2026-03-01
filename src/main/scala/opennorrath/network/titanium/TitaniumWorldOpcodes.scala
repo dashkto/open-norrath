@@ -23,6 +23,7 @@ object TitaniumWorldOpcodes extends WorldOpcodes:
   val DeleteCharacter: Short = 0x26c9.toShort  // Client -> World: delete character
   val WorldClientCRC1: Short = 0x5072.toShort  // Client -> World: eqgame.exe CRC
   val WorldClientCRC2: Short = 0x5b18.toShort  // Client -> World: SkillCaps.txt CRC
+  val PostEnterWorld: Short  = 0x52a4.toShort  // World -> Client: post-login signal (0 bytes)
 
   def name(op: Short): String = op match
     case SendLoginInfo   => "SendLoginInfo"
@@ -41,4 +42,5 @@ object TitaniumWorldOpcodes extends WorldOpcodes:
     case DeleteCharacter  => "DeleteCharacter"
     case WorldClientCRC1  => "WorldClientCRC1"
     case WorldClientCRC2  => "WorldClientCRC2"
+    case PostEnterWorld   => "PostEnterWorld"
     case other            => f"Unknown(0x${other & 0xFFFF}%04x)"

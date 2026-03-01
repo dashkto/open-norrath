@@ -70,8 +70,12 @@ class ZoneCharacter(
   /** Model template (skeleton, clips, metrics). Null until initRendering is called. */
   var build: ZoneRenderer.CharBuild = uninitialized
 
-  /** Effective display size (server size / 6). */
-  var effectiveSize: Float = if size > 0f then size / 6f else 1f
+  /** Effective display size (server size / 6).
+    * Server sends size=0 for player characters — use the race's default size.
+    */
+  var effectiveSize: Float =
+    val s = if size > 0f then size else EqData.raceDefaultSize(race)
+    s / 6f
 
   /** Flying creatures hover above their server position by half their model height. */
   var flyOffset: Float = 0f

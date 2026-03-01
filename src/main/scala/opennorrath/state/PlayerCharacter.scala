@@ -259,9 +259,9 @@ class PlayerCharacter(
   /** Accumulator for client-side buff duration tick-down (1 tick = 6 seconds). */
   private var buffTickAccum: Float = 0f
 
-  /** Refresh a buff's duration when the same spell lands on us again.
-    * The server doesn't send OP_Buff for same-caster refreshes — the client
-    * resets the duration from the OP_Action (spell landed) packet.
+  /** Refresh or add a buff when a beneficial spell lands on us (OP_Action).
+    * The server doesn't always send OP_Buff for self-cast or same-caster buffs —
+    * the client must update from the OP_Action (spell landed) packet.
     * Server adds +1 extraTick; we include that here to match server state.
     */
   def refreshBuff(spellId: Int, casterLevel: Int): Unit =
@@ -271,7 +271,14 @@ class PlayerCharacter(
       case Some((slot, buff)) =>
         buff.duration = newDuration
         buffTickAccum = 0f // reset tick accumulator to sync with server
-      case None => // buff not in our list yet — it will come via profile or OP_Buff later
+      case None =>
+        // Buff not in our list yet — add it to the first free slot (0-14).
+        // The Mac server doesn't send OP_Buff for initial self-cast buffs.
+        val freeSlot = (0 until 15).find(!buffs.contains(_))
+        freeSlot.foreach { slot =>
+          buffs(slot) = SpellBuff(2, casterLevel, 0, spellId, newDuration, 0)
+          buffTickAccum = 0f
+        }
 
   /** Tick down buff durations client-side. Call once per frame with delta time. */
   def tickBuffs(dt: Float): Unit =
