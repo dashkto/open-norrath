@@ -34,6 +34,21 @@ enum WorldEvent:
 class WorldClient extends PacketHandler:
   @volatile var state: WorldState = WorldState.Disconnected
   val events = ConcurrentLinkedQueue[WorldEvent]()
+
+  // Fixed-size packet validation — catches struct size mismatches before they cause silent failures.
+  override val expectedPacketSizes: Map[Short, (Int, String)] =
+    if Game.macMode then Map.empty
+    else Map(
+      // Outgoing (client -> server)
+      TitaniumWorldOpcodes.SendLoginInfo -> (464, "SendLoginInfo"),
+      TitaniumWorldOpcodes.EnterWorld -> (72, "EnterWorld"),
+      TitaniumWorldOpcodes.ApproveName -> (76, "ApproveName"),
+      TitaniumWorldOpcodes.CharacterCreate -> (80, "CharacterCreate"),
+      // Incoming (server -> client)
+      TitaniumWorldOpcodes.SendCharInfo -> (1704, "SendCharInfo"),
+      TitaniumWorldOpcodes.ZoneServerInfo -> (130, "ZoneServerInfo"),
+      TitaniumWorldOpcodes.ExpansionInfo -> (4, "ExpansionInfo"),
+    )
   val errors = ConcurrentLinkedQueue[String]()
 
   // Mac transport outgoing queues

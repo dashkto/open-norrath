@@ -135,6 +135,21 @@ class ZoneClient extends PacketHandler:
   private val opcodes: ZoneOpcodes =
     if Game.macMode then MacZoneOpcodes else TitaniumZoneOpcodes
 
+  // Fixed-size packet validation — catches struct size mismatches before they cause silent failures.
+  override val expectedPacketSizes: Map[Short, (Int, String)] =
+    if Game.macMode then Map.empty
+    else Map(
+      // Outgoing (client -> server)
+      TitaniumZoneOpcodes.ClientUpdate -> (36, "ClientUpdate"),
+      TitaniumZoneOpcodes.TargetMouse -> (4, "TargetMouse"),
+      TitaniumZoneOpcodes.Consider -> (24, "Consider"),
+      TitaniumZoneOpcodes.SetServerFilter -> (36, "SetServerFilter"),
+      // Incoming (server -> client)
+      TitaniumZoneOpcodes.PlayerProfile -> (19588, "PlayerProfile"),
+      TitaniumZoneOpcodes.Death -> (32, "Death"),
+      TitaniumZoneOpcodes.DeleteSpawn -> (4, "DeleteSpawn"),
+    )
+
   @volatile var state: ZoneState = ZoneState.Disconnected
   val events = ConcurrentLinkedQueue[ZoneEvent]()
   val errors = ConcurrentLinkedQueue[String]()
@@ -186,11 +201,22 @@ class ZoneClient extends PacketHandler:
   // Pending connection info
   @volatile private var pendingCharName = ""
 
-  // Retransmission for zone entry (zone server may not be ready yet)
+  // Zone entry reconnect logic: if the zone server ACKs at the protocol level but never
+  // sends app data (PlayerProfile), the zone process likely isn't ready. Retransmitting
+  // ZoneEntry on the same connection doesn't help because the server already ACKed it.
+  // Instead, signal the loading screen to tear down and create a fresh connection.
+  //
+  // Server-side context: the zone's GetAuth() check has a 5-second timeout. If auth
+  // hasn't arrived from the world server within 5s, the zone kicks the client. Our timeout
+  // needs to be longer than 5s to avoid racing with the server's retry mechanism.
+  // After MaxReconnectAttempts, the loading screen falls back to character select
+  // so the user can re-enter and trigger a fresh world→zone auth flow.
   private var lastZoneEntrySentMs: Long = 0
-  private var zoneEntryRetries: Int = 0
-  private val ZoneEntryRetryIntervalMs = 2000
-  private val ZoneEntryMaxRetries = 15
+  @volatile var reconnectAttempt: Int = 0
+  private var receivedAppData: Boolean = false
+  @volatile var needsReconnect: Boolean = false
+  private val ReconnectTimeoutMs = 8000  // >5s to outlast server's get_auth_timer
+  val MaxReconnectAttempts = 3
 
   /** Initiate zone connection. Called from game thread. */
   def connect(charName: String): Unit =
@@ -203,7 +229,7 @@ class ZoneClient extends PacketHandler:
       queueAppPacket(opcodes.DataRate, ZoneCodec.encodeDataRate(8.0f))
     queueAppPacket(opcodes.ZoneEntry, ZoneCodec.encodeZoneEntry(charName))
     lastZoneEntrySentMs = System.currentTimeMillis()
-    zoneEntryRetries = 0
+    receivedAppData = false
     state = ZoneState.WaitingForProfile
     emit(ZoneEvent.StateChanged(state))
 
@@ -415,6 +441,7 @@ class ZoneClient extends PacketHandler:
 
     if pkt.opcode == 0 then return // pure ACK
 
+    receivedAppData = true
     dispatchMacOpcode(pkt)
 
   private def dispatchMacOpcode(pkt: InboundPacket): Unit =
@@ -728,6 +755,7 @@ class ZoneClient extends PacketHandler:
     // Titanium: EqStream handles fragments and ACKs — packets arrive complete
     if packet.opcode == 0 then return
 
+    receivedAppData = true
     val op = packet.opcode
     val data = packet.payload
 
@@ -998,18 +1026,19 @@ class ZoneClient extends PacketHandler:
         buildAppPacket(pending._1, pending._2)
         pending = pendingApps.poll()
 
-      // Retransmit ZoneEntry if zone server hasn't responded
-      if state == ZoneState.WaitingForProfile then
+      // If zone server ACKs at protocol level but never sends app data, the zone process
+      // isn't ready. Signal the loading screen to create a fresh connection (new socket).
+      if state == ZoneState.WaitingForProfile && !receivedAppData && !needsReconnect then
         val now = System.currentTimeMillis()
-        if now - lastZoneEntrySentMs > ZoneEntryRetryIntervalMs then
-          zoneEntryRetries += 1
-          if zoneEntryRetries > ZoneEntryMaxRetries then
+        if now - lastZoneEntrySentMs > ReconnectTimeoutMs then
+          reconnectAttempt += 1
+          if reconnectAttempt > MaxReconnectAttempts then
             state = ZoneState.Failed
-            emit(ZoneEvent.Error(s"Zone server not responding after $ZoneEntryMaxRetries retries"))
+            emit(ZoneEvent.Error(s"Zone server not responding after $MaxReconnectAttempts reconnect attempts"))
             emit(ZoneEvent.StateChanged(state))
           else
-            buildAppPacket(MacZoneOpcodes.ZoneEntry, ZoneCodec.encodeZoneEntry(pendingCharName))
-            lastZoneEntrySentMs = now
+            println(s"[Zone] Requesting reconnect (attempt $reconnectAttempt/$MaxReconnectAttempts)")
+            needsReconnect = true
 
       if needArsp then
         val ack = OldPacket.encodeAck(nextSeq(), lastInArq)
@@ -1018,18 +1047,17 @@ class ZoneClient extends PacketHandler:
     else
       // Titanium: app packets go directly to appOutQueue via queueAppPacket().
       // TitaniumNetworkThread handles framing, ACKs, and keepalive.
-      // Only need retransmit logic here.
-      if state == ZoneState.WaitingForProfile then
+      if state == ZoneState.WaitingForProfile && !receivedAppData && !needsReconnect then
         val now = System.currentTimeMillis()
-        if now - lastZoneEntrySentMs > ZoneEntryRetryIntervalMs then
-          zoneEntryRetries += 1
-          if zoneEntryRetries > ZoneEntryMaxRetries then
+        if now - lastZoneEntrySentMs > ReconnectTimeoutMs then
+          reconnectAttempt += 1
+          if reconnectAttempt > MaxReconnectAttempts then
             state = ZoneState.Failed
-            emit(ZoneEvent.Error(s"Zone server not responding after $ZoneEntryMaxRetries retries"))
+            emit(ZoneEvent.Error(s"Zone server not responding after $MaxReconnectAttempts reconnect attempts"))
             emit(ZoneEvent.StateChanged(state))
           else
-            queueAppPacket(TitaniumZoneOpcodes.ZoneEntry, ZoneCodec.encodeZoneEntry(pendingCharName))
-            lastZoneEntrySentMs = now
+            println(s"[Zone] Requesting Titanium reconnect (attempt $reconnectAttempt/$MaxReconnectAttempts)")
+            needsReconnect = true
 
   def pollOutgoing(): Option[Array[Byte]] =
     Option(outQueue.poll())

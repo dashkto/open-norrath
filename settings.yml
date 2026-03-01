@@ -4,7 +4,7 @@
 use_eqg: false
 
 # Protocol: true = Mac (EQMacDocker), false = Titanium/PC (EQEmu)
-mac_mode: true
+mac_mode: false
 
 # Rendering
 render:
@@ -19,6 +19,6 @@ debug:
 
 # Login server connection
 login:
-  host: localhost
-  port: 6000
+  host: 192.168.50.228
+  port: 5998
   world_port: 9000

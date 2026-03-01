@@ -8,7 +8,7 @@ import opennorrath.network.{CharacterInfo, ExpansionFlags, GuildInfo, ZoneAddres
 /** Encode/decode world server payloads for the Titanium (PC) protocol.
   *
   * Key differences from Mac WorldCodec:
-  * - LoginInfo_Struct: 488 bytes (vs Mac 200)
+  * - LoginInfo_Struct: 464 bytes (vs Mac 200)
   * - CharacterSelect_Struct: 1704 bytes with completely different field layout
   * - EnterWorld_Struct: 72 bytes (vs Mac 64), extra tutorial + return_home fields
   * - GuildsList_Struct: fixed 96064 bytes (64-byte header + 1500 × 64-byte entries)
@@ -22,13 +22,14 @@ object TitaniumWorldCodec:
 
   // ---- Outgoing (client -> server) ----
 
-  /** OP_SendLoginInfo: Titanium LoginInfo_Struct (488 bytes).
+  /** OP_SendLoginInfo: Titanium LoginInfo_Struct (464 bytes).
     *
-    * Layout: login_info[64] + unknown064[124] + zoning(uint8) + unknown189[275]
+    * Layout: login_info[64] + unknown064[124] + zoning(uint8) + unknown189[275] = 464
     * login_info contains "<account_id>\0<session_key>" as a null-separated string.
+    * Note: titanium_structs.h has a misleading /×488×/ end comment, but sizeof() is 464.
     */
   def encodeLoginInfo(accountId: Int, sessionKey: String): Array[Byte] =
-    val buf = new Array[Byte](488)
+    val buf = new Array[Byte](464)
     val loginStr = s"$accountId\u0000$sessionKey"
     val bytes = loginStr.getBytes(StandardCharsets.US_ASCII)
     System.arraycopy(bytes, 0, buf, 0, Math.min(bytes.length, 63))

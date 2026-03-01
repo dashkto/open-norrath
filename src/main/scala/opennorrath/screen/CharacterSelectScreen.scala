@@ -122,7 +122,7 @@ class CharacterSelectScreen(
         ImGui.setCursorPos(listX, itemY)
         if selected then
           pushColor(ImGuiCol.Text, Colors.gold)
-        val label = s"${char.name}  -  Level ${char.level} ${EqData.className(char.classId)} ${EqData.raceName(char.race)}"
+        val label = s"${char.name}  -  Level ${char.level} ${EqData.className(char.classId)} ${EqData.raceName(char.race)}  -  ${EqData.zoneName(char.zone)}"
         if ImGui.selectable(label, selected, 0, listW, 0f) then
           selectedIndex = i
           enterWorld()

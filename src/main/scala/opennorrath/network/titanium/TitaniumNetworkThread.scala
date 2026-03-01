@@ -290,6 +290,12 @@ class TitaniumNetworkThread(handler: PacketHandler) extends EqNetworkThread:
       System.arraycopy(data, offset, buf, 0, buf.length)
       buf
     else Array.emptyByteArray
+    // Validate incoming packet size against expected fixed sizes
+    handler.expectedPacketSizes.get(opcode).foreach { (expected, name) =>
+      if payload.length != expected then
+        println(f"[PacketSize] WARNING: Incoming 0x${opcode & 0xFFFF}%04x ($name) " +
+          s"expected $expected bytes but received ${payload.length} bytes")
+    }
     handler.handlePacket(InboundPacket(seq = 0, arsp = None, arq = None, opcode = opcode, payload = payload))
 
   /** Handle an ACK — remove all sent packets up to and including the acked sequence. */
@@ -330,6 +336,12 @@ class TitaniumNetworkThread(handler: PacketHandler) extends EqNetworkThread:
 
   /** Send an application packet wrapped in OP_Packet or OP_Fragment. */
   private def sendAppPacket(opcode: Short, payload: Array[Byte]): Unit =
+    // Validate outgoing packet size against expected fixed sizes
+    handler.expectedPacketSizes.get(opcode).foreach { (expected, name) =>
+      if payload.length != expected then
+        println(f"[PacketSize] WARNING: Outgoing 0x${opcode & 0xFFFF}%04x ($name) " +
+          s"expected $expected bytes but sending ${payload.length} bytes")
+    }
     // Calculate if fragmentation is needed
     val maxRawSize = sessionParams.maxPacketSize - sessionParams.crcBytes - 4 - 1
 

@@ -41,6 +41,8 @@ class NetworkThread(handler: PacketHandler) extends EqNetworkThread:
 
   private def run(): Unit =
     val recvBuf = new Array[Byte](4096)
+    var sendCount = 0
+    var recvCount = 0
     while running.get() do
       try
         // Process commands from game thread
@@ -51,11 +53,20 @@ class NetworkThread(handler: PacketHandler) extends EqNetworkThread:
               if socket != null then
                 try socket.close() catch case _: Exception => ()
               address = InetSocketAddress(host, port)
+              // val resolved = address.getAddress
+              // if resolved != null then
+              //   println(s"[Network] Connect: $host:$port -> ${resolved.getHostAddress}:$port")
+              // else
+              //   println(s"[Network] Connect: $host:$port -> DNS UNRESOLVED")
               socket = DatagramSocket()
+              // println(s"[Network] Local port: ${socket.getLocalPort}")
               socket.setSoTimeout(50) // 50ms for responsive polling
 
             case NetCommand.SendRaw(data) =>
               if socket != null && address != null && !socket.isClosed then
+                // sendCount += 1
+                // if sendCount <= 5 then
+                //   println(s"[Network] SEND #$sendCount: ${data.length}B to $address")
                 val packet = DatagramPacket(data, data.length, address)
                 socket.send(packet)
 
@@ -74,8 +85,15 @@ class NetworkThread(handler: PacketHandler) extends EqNetworkThread:
             val data = new Array[Byte](packet.getLength)
             System.arraycopy(recvBuf, 0, data, 0, packet.getLength)
 
+            // recvCount += 1
+            // if recvCount <= 20 then
+            //   val hex = data.take(20).map(b => f"$b%02x").mkString(" ")
+            //   println(s"[Network] RECV #$recvCount: ${data.length}B hex=$hex")
             OldPacket.decode(data, data.length) match
-              case Some(decoded) => handler.handlePacket(decoded)
+              case Some(decoded) =>
+                // if recvCount <= 20 then
+                //   println(f"[Network] DECODED: op=0x${decoded.opcode & 0xFFFF}%04x ${decoded.payload.length}B seq=${decoded.seq} arq=${decoded.arq} frag=${decoded.fragment}")
+                handler.handlePacket(decoded)
               case None => () // unrecognized packet format
           catch
             case _: SocketTimeoutException => () // normal

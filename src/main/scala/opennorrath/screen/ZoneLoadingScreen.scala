@@ -54,6 +54,26 @@ class ZoneLoadingScreen(
     if transitioned then return
     Game.zoneSession.foreach { session =>
       val zc = session.client
+
+      // Zone server ACKs but never sends app data — tear down and create fresh connection.
+      // The zone process may not have been ready; a new socket forces a clean session.
+      if zc.needsReconnect then
+        zc.needsReconnect = false
+        val attempt = zc.reconnectAttempt
+        statusText = s"Reconnecting to zone (attempt $attempt/${zc.MaxReconnectAttempts})..."
+        session.stop()
+        Game.zoneSession = None
+        val newZc = ZoneClient()
+        newZc.reconnectAttempt = attempt // preserve attempt count across reconnects
+        val newZnt: EqNetworkThread =
+          if Game.macMode then NetworkThread(newZc)
+          else TitaniumNetworkThread(newZc)
+        Game.zoneSession = Some(ZoneSession(newZc, newZnt))
+        newZnt.start()
+        newZnt.send(NetCommand.Connect(zoneAddr.ip, zoneAddr.port))
+        newZc.connect(charName)
+        return
+
       val st = zc.state
 
       // Update status text from profile/zone info
@@ -73,10 +93,19 @@ class ZoneLoadingScreen(
           transitioned = true
           Game.setScreen(ZoneScreen(ctx, zonePath, zc.selfSpawn, zc.profile))
         case ZoneState.Failed =>
-          statusText = "Zone connection failed"
+          // Zone reconnects exhausted — fall back to character select so the user can
+          // re-enter and trigger a fresh world→zone auth flow. The server's auth entry
+          // may have been consumed by a prior failed connection attempt.
+          statusText = "Zone connection failed — returning to character select..."
           statusColor = Colors.error
           Game.zoneSession.foreach(_.stop())
           Game.zoneSession = None
+          transitioned = true
+          Game.worldSession match
+            case Some(ws) =>
+              Game.setScreen(CharacterSelectScreen(ctx, ws.client.characters))
+            case None =>
+              Game.setScreen(LoginScreen(ctx))
         case _ => ()
 
       // Check for network errors (peek without consuming — they'll become ZoneEvent.Error)

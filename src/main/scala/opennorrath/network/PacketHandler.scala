@@ -16,6 +16,18 @@ trait PacketHandler:
     */
   val appOutQueue: ConcurrentLinkedQueue[(Short, Array[Byte])] = ConcurrentLinkedQueue()
 
+  /** Expected payload sizes for fixed-size packets. Override in subclasses.
+    * Key = opcode, Value = (expected bytes, human-readable name).
+    * Variable-length packets should NOT be included — only packets that must be
+    * an exact size. TitaniumNetworkThread checks this on both send and receive,
+    * logging a warning on mismatch (but never blocking the packet).
+    *
+    * Hard-won lesson: the Titanium world connection hung silently for hours because
+    * LoginInfo_Struct was 488 bytes instead of 464. The server's CheckSignature
+    * rejected the size mismatch with no visible client-side error.
+    */
+  val expectedPacketSizes: Map[Short, (Int, String)] = Map.empty
+
   /** Called from network thread when a decoded packet arrives. */
   def handlePacket(packet: InboundPacket): Unit
 
