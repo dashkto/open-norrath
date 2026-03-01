@@ -3,9 +3,6 @@
 # Use EQG companion files (emitters, etc.) instead of deriving from S3D data
 use_eqg: false
 
-# Protocol: true = Mac (EQMacDocker), false = Titanium/PC (EQEmu)
-mac_mode: false
-
 # Rendering
 render:
   # Max distance (GL units) to render zone characters — further spawns are culled
@@ -17,8 +14,27 @@ debug:
   # Leave empty to disable animation showcase
   animation_model: gor
 
-# Login server connection
-login:
-  host: 192.168.50.228
-  port: 5998
-  world_port: 9000
+# Named server profiles — switch between servers by changing active_server
+active_server: local_titanium
+
+servers:
+  local_titanium:
+    host: 127.0.0.1
+    port: 5998
+    world_port: 9000
+    mac_mode: false
+  local_quarm:
+    host: 127.0.0.1
+    port: 6000
+    world_port: 9000
+    mac_mode: true
+  takp:
+    host: loginserver.takproject.net
+    port: 6000
+    world_port: 9000
+    mac_mode: true
+  p99:
+    host: 192.168.50.228
+    port: 5998
+    world_port: 9000
+    mac_mode: false

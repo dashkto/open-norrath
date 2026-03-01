@@ -22,7 +22,9 @@ object Main:
   def main(args: Array[String]): Unit =
     Logging.init()
     val settings = Settings.load()
-    Game.macMode = settings.macMode
+    Game.macMode = settings.resolvedMacMode
+    if settings.resolvedServer.isDefined then
+      println(s"Active server: ${settings.activeServer} (${settings.resolvedLogin.host}:${settings.resolvedLogin.port})")
     val WindowWidth = settings.window.width
     val WindowHeight = settings.window.height
     val zonePath = if args.nonEmpty then args(0) else "assets/arena.s3d"

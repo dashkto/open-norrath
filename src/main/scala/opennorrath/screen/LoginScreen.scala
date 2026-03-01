@@ -141,7 +141,7 @@ class LoginScreen(ctx: GameContext) extends Screen:
       connecting = true
       statusText = "Connecting..."
       statusColor = Colors.text
-      networkThread.send(NetCommand.Connect(ctx.settings.login.host, ctx.settings.login.port))
+      networkThread.send(NetCommand.Connect(ctx.settings.resolvedLogin.host, ctx.settings.resolvedLogin.port))
       loginClient.connect(user, pass)
     else
       statusText = "Enter username and password"

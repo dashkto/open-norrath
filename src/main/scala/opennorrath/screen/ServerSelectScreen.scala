@@ -163,8 +163,8 @@ class ServerSelectScreen(
     val loginClient = loginSession.client
     // Parse account ID from session ID ("LS#123" → 123)
     val accountId = loginClient.sessionId.stripPrefix("LS#").toIntOption.getOrElse(0)
-    val serverIp = servers.lift(selectedIndex).map(_.ip).getOrElse(ctx.settings.login.host)
-    val worldPort = ctx.settings.login.worldPort
+    val serverIp = servers.lift(selectedIndex).map(_.ip).getOrElse(ctx.settings.resolvedLogin.host)
+    val worldPort = ctx.settings.resolvedLogin.worldPort
 
     // Stop login session, start world session
     Game.loginSession.foreach(_.stop())
