@@ -8,7 +8,6 @@
 #
 # Sources:
 #   - Steam EQ (free): ~/Library/Application Support/Steam/steamapps/common/EverQuest
-#   - P1999 Titanium: wherever you extracted it
 #
 set -euo pipefail
 

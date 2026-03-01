@@ -3,6 +3,7 @@ val lwjglVersion = "3.3.6"
 val jomlVersion = "1.10.8"
 val imguiVersion = "1.87.6"
 
+// Natives for the current build machine (used by `sbt run`)
 val lwjglNatives = {
   val os = System.getProperty("os.name").toLowerCase
   val arch = System.getProperty("os.arch")
@@ -19,12 +20,21 @@ val lwjglNatives = {
   }
 }
 
+// All platform natives (bundled into the fat jar for cross-platform distribution)
+val allLwjglNatives = Seq(
+  "natives-macos", "natives-macos-arm64",
+  "natives-linux", "natives-linux-arm64",
+  "natives-windows",
+)
+
+val lwjglModules = Seq("lwjgl", "lwjgl-glfw", "lwjgl-opengl", "lwjgl-openal", "lwjgl-stb")
+
 lazy val root = project
   .in(file("."))
   .enablePlugins(BuildInfoPlugin)
   .settings(
     name := "open-norrath",
-    version := "0.1.0-SNAPSHOT",
+    version := "0.2.0",
     scalaVersion := scala3Version,
     fork := true,
     Compile / mainClass := Some("opennorrath.Main"),
@@ -35,26 +45,42 @@ lazy val root = project
       BuildInfoKey.action("buildTime") { java.time.Instant.now().toString },
     ),
     buildInfoPackage := "opennorrath",
+
+    // Assembly configuration for fat jar
+    assembly / assemblyJarName := "open-norrath.jar",
+    assembly / mainClass := Some("opennorrath.Main"),
+    assembly / assemblyMergeStrategy := {
+      case PathList("META-INF", "versions", _*) => MergeStrategy.first
+      case PathList("META-INF", xs @ _*) =>
+        xs.map(_.toLowerCase) match {
+          case "manifest.mf" :: Nil => MergeStrategy.discard
+          case "services" :: _      => MergeStrategy.filterDistinctLines
+          case _                    => MergeStrategy.discard
+        }
+      case _ => MergeStrategy.first
+    },
+
     libraryDependencies ++= Seq(
-      // LWJGL core
-      "org.lwjgl" % "lwjgl"         % lwjglVersion,
-      "org.lwjgl" % "lwjgl-glfw"    % lwjglVersion,
-      "org.lwjgl" % "lwjgl-opengl"  % lwjglVersion,
-      "org.lwjgl" % "lwjgl-openal"  % lwjglVersion,
-      "org.lwjgl" % "lwjgl-stb"     % lwjglVersion,
-      // Natives
-      "org.lwjgl" % "lwjgl"         % lwjglVersion classifier lwjglNatives,
-      "org.lwjgl" % "lwjgl-glfw"    % lwjglVersion classifier lwjglNatives,
-      "org.lwjgl" % "lwjgl-opengl"  % lwjglVersion classifier lwjglNatives,
-      "org.lwjgl" % "lwjgl-openal"  % lwjglVersion classifier lwjglNatives,
-      "org.lwjgl" % "lwjgl-stb"     % lwjglVersion classifier lwjglNatives,
-      // Math
-      "org.joml" % "joml" % jomlVersion,
-      // ImGui
-      "io.github.spair" % "imgui-java-binding"      % imguiVersion,
-      "io.github.spair" % "imgui-java-lwjgl3"        % imguiVersion,
-      "io.github.spair" % "imgui-java-natives-macos"  % imguiVersion,
-      // YAML settings
-      "org.yaml" % "snakeyaml" % "2.3",
-    ),
+      // LWJGL core modules
+      lwjglModules.map(m => "org.lwjgl" % m % lwjglVersion),
+      // Natives for current platform (sbt run)
+      lwjglModules.map(m => "org.lwjgl" % m % lwjglVersion classifier lwjglNatives),
+      // Natives for all platforms (fat jar)
+      for {
+        m <- lwjglModules
+        n <- allLwjglNatives
+      } yield "org.lwjgl" % m % lwjglVersion classifier n,
+      Seq(
+        // Math
+        "org.joml" % "joml" % jomlVersion,
+        // ImGui — binding + all platform natives
+        "io.github.spair" % "imgui-java-binding"         % imguiVersion,
+        "io.github.spair" % "imgui-java-lwjgl3"           % imguiVersion,
+        "io.github.spair" % "imgui-java-natives-macos"     % imguiVersion,
+        "io.github.spair" % "imgui-java-natives-linux"     % imguiVersion,
+        "io.github.spair" % "imgui-java-natives-windows"   % imguiVersion,
+        // YAML settings
+        "org.yaml" % "snakeyaml" % "2.3",
+      ),
+    ).flatten,
   )

@@ -23,6 +23,7 @@ class SplashScreen(ctx: GameContext, zonePath: String) extends Screen:
   private var zone: ZoneRenderer = uninitialized
   private var camera: Camera = uninitialized
   private var projection3d: Matrix4f = uninitialized
+  private var hasZone = false
 
   private val model = Matrix4f()
   private var selectedIndex = 0
@@ -32,25 +33,30 @@ class SplashScreen(ctx: GameContext, zonePath: String) extends Screen:
     glfwSetInputMode(ctx.window, GLFW_CURSOR, GLFW_CURSOR_NORMAL)
     glClearColor(0.1f, 0.1f, 0.15f, 1f)
 
-    zoneShader = Shader.fromResources("/shaders/default.vert", "/shaders/default.frag")
-    shadowShader = Shader.fromResources("/shaders/shadow.vert", "/shaders/shadow.frag")
-    zone = ZoneRenderer(zonePath, ctx.settings)
-    camera = Camera(
-      position = Vector3f(-150f, 60f, -460f),
-      yaw = 30f,
-      pitch = -10f,
-      speed = 0f,
-    )
-    projection3d = Matrix4f().perspective(
-      Math.toRadians(60.0).toFloat,
-      ctx.windowWidth.toFloat / ctx.windowHeight.toFloat,
-      0.1f,
-      10000f,
-    )
+    hasZone = java.nio.file.Files.exists(java.nio.file.Path.of(zonePath))
+    if hasZone then
+      zoneShader = Shader.fromResources("/shaders/default.vert", "/shaders/default.frag")
+      shadowShader = Shader.fromResources("/shaders/shadow.vert", "/shaders/shadow.frag")
+      zone = ZoneRenderer(zonePath, ctx.settings)
+      camera = Camera(
+        position = Vector3f(-150f, 60f, -460f),
+        yaw = 30f,
+        pitch = -10f,
+        speed = 0f,
+      )
+      projection3d = Matrix4f().perspective(
+        Math.toRadians(60.0).toFloat,
+        ctx.windowWidth.toFloat / ctx.windowHeight.toFloat,
+        0.1f,
+        10000f,
+      )
+    else
+      println(s"Splash zone not found: $zonePath — showing menu without background")
 
   override def update(dt: Float): Unit =
-    camera.yaw += dt * 3f
-    camera.updateVectors()
+    if hasZone then
+      camera.yaw += dt * 3f
+      camera.updateVectors()
 
     // Keyboard navigation
     if ImGui.isKeyPressed(ImGuiKey.UpArrow) || ImGui.isKeyPressed(ImGuiKey.W) then
@@ -70,38 +76,41 @@ class SplashScreen(ctx: GameContext, zonePath: String) extends Screen:
       case "Quit" => glfwSetWindowShouldClose(ctx.window, true)
 
   override def render(dt: Float): Unit =
-    // Shadow map pre-pass
-    glEnable(GL_DEPTH_TEST)
-    glDisable(GL_BLEND)
-    zone.updateCharacterVisibility(camera.position)
-    zone.shadowMap.bind()
-    zone.drawShadowPass(shadowShader)
-    zone.shadowMap.unbind(ctx.windowWidth, ctx.windowHeight)
-
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
 
-    // 3D zone background with lighting
-    zoneShader.use()
-    zoneShader.setMatrix4f("projection", projection3d)
-    zoneShader.setMatrix4f("view", camera.viewMatrix)
-    zoneShader.setMatrix4f("model", model)
+    if hasZone then
+      // Shadow map pre-pass
+      glEnable(GL_DEPTH_TEST)
+      glDisable(GL_BLEND)
+      zone.updateCharacterVisibility(camera.position)
+      zone.shadowMap.bind()
+      zone.drawShadowPass(shadowShader)
+      zone.shadowMap.unbind(ctx.windowWidth, ctx.windowHeight)
 
-    // Lighting uniforms
-    zoneShader.setBool("enableLighting", true)
-    zoneShader.setBool("enableShadows", true)
-    val sunDir = ZoneRenderer.SunDir
-    zoneShader.setVec3("lightDir", sunDir.x, sunDir.y, sunDir.z)
-    zoneShader.setFloat("ambientStrength", 0.35f)
-    zoneShader.setMatrix4f("lightSpaceMatrix", zone.shadowMap.lightSpaceMatrix)
+      glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
 
-    // Bind shadow map to texture unit 1
-    glActiveTexture(GL_TEXTURE1)
-    glBindTexture(GL_TEXTURE_2D, zone.shadowMap.depthTexture)
-    zoneShader.setInt("shadowMap", 1)
-    glActiveTexture(GL_TEXTURE0)
-    glVertexAttrib3f(4, 0f, 1f, 0f) // default up normal
+      // 3D zone background with lighting
+      zoneShader.use()
+      zoneShader.setMatrix4f("projection", projection3d)
+      zoneShader.setMatrix4f("view", camera.viewMatrix)
+      zoneShader.setMatrix4f("model", model)
 
-    zone.draw(zoneShader, dt, camera.viewMatrix)
+      // Lighting uniforms
+      zoneShader.setBool("enableLighting", true)
+      zoneShader.setBool("enableShadows", true)
+      val sunDir = ZoneRenderer.SunDir
+      zoneShader.setVec3("lightDir", sunDir.x, sunDir.y, sunDir.z)
+      zoneShader.setFloat("ambientStrength", 0.35f)
+      zoneShader.setMatrix4f("lightSpaceMatrix", zone.shadowMap.lightSpaceMatrix)
+
+      // Bind shadow map to texture unit 1
+      glActiveTexture(GL_TEXTURE1)
+      glBindTexture(GL_TEXTURE_2D, zone.shadowMap.depthTexture)
+      zoneShader.setInt("shadowMap", 1)
+      glActiveTexture(GL_TEXTURE0)
+      glVertexAttrib3f(4, 0f, 1f, 0f) // default up normal
+
+      zone.draw(zoneShader, dt, camera.viewMatrix)
 
     // ImGui overlay
     val w = ctx.windowWidth.toFloat
@@ -152,9 +161,10 @@ class SplashScreen(ctx: GameContext, zonePath: String) extends Screen:
     ImGui.end()
 
   override def dispose(): Unit =
-    zone.cleanup()
-    zoneShader.cleanup()
-    shadowShader.cleanup()
+    if hasZone then
+      zone.cleanup()
+      zoneShader.cleanup()
+      shadowShader.cleanup()
 
   private def pushColor(idx: Int, c: (Float, Float, Float, Float)): Unit =
     ImGui.pushStyleColor(idx, c._1, c._2, c._3, c._4)

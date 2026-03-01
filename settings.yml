@@ -9,7 +9,7 @@ render:
   character_distance: 1000
 
 # Named server profiles — switch between servers by changing active_server
-active_server: local_titanium
+active_server: takp
 
 servers:
   local_titanium:

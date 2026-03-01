@@ -27,7 +27,7 @@ object Main:
       println(s"Active server: ${settings.activeServer} (${settings.resolvedLogin.host}:${settings.resolvedLogin.port})")
     val WindowWidth = settings.window.width
     val WindowHeight = settings.window.height
-    val zonePath = if args.nonEmpty then args(0) else "assets/arena.s3d"
+    val zonePath = if args.nonEmpty then args(0) else "assets/EverQuest/arena.s3d"
 
     GLFWErrorCallback.createPrint(System.err).set()
 
