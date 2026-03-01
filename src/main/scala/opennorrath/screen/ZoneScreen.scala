@@ -18,6 +18,7 @@ import opennorrath.world.{CameraController, EqCoords, SpellEffectSystem, Targeti
 import opennorrath.network.{EqNetworkThread, InventoryItem, NetCommand, NetworkThread, PlayerPosition, PlayerProfileData, SpawnAppearanceChange, SpawnData, WorldClient, WorldEvent, ZoneEvent, ZonePointData, ZoneState}
 import opennorrath.network.titanium.TitaniumNetworkThread
 import opennorrath.ui.{EqClass, NameplateRenderer, ZoneHud}
+import opennorrath.wld.ZoneLineInfo
 
 class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData] = None, profile: Option[PlayerProfileData] = None) extends Screen:
 
@@ -49,6 +50,7 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
   private var campTimer = 0f                    // countdown until OP_Logout is sent
   private var zonePoints = Vector.empty[ZonePointData]
   private val ZoneLineRadius = 30f       // trigger radius in EQ units (~30 feet)
+  private var exitedZoneTriggers = false  // must leave all zone triggers before triggering a new one
 
   // Right-click interaction — distinguish click vs free-look drag.
   // Store mouse position at press time because cursor is hidden during free-look,
@@ -475,17 +477,28 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
       saveTimer = 0f
       Game.zoneSession.foreach(_.client.save())
 
-    // Zone line detection — check if player is inside a BSP zone line region
+    // Zone line detection — check if player is inside a BSP zone line region.
+    // After zoning in, the player may spawn inside a zone trigger (the zone_points
+    // destination coords can land inside the trigger sphere on the destination side).
+    // To prevent immediate re-triggering, we require the player to first exit ALL
+    // zone trigger volumes before any new zone line can fire.
     if camCtrl.attached && !zone.zoneLineBsp.isEmpty && System.currentTimeMillis() >= zoneDeniedUntil then
       player.foreach { pc => pc.zoneChar.foreach { zc =>
         val pos = zc.position
         val (s3dX, s3dY, s3dZ) = EqCoords.glToS3d(pos.x, pos.y - pc.feetOffset, pos.z)
         val hit = zone.zoneLineBsp.check(s3dX, s3dY, s3dZ)
           .orElse(zone.zoneLineBsp.checkSphere(s3dX, s3dY, s3dZ))
-        hit.foreach { info =>
-          // Send zoneId=0 — server resolves target from player position via zone_points table
-          println(s"[Zone] Zone line hit: '${info.regionName}' param1=${info.param1} param2=${info.param2}")
-          Game.zoneSession.foreach(_.client.sendZoneChange(0))
+        if hit.isEmpty then exitedZoneTriggers = true
+        if exitedZoneTriggers then hit.foreach { info =>
+          // Resolve the target zone ID from the DRNTP parameters by matching against
+          // zone points received from OP_SendZonePoints. The DRNTP string encodes a zone
+          // point number (param2) that corresponds to a ZonePointData.iterator. Sending
+          // the target zone ID (instead of 0) is critical: with zoneId=0 the server uses
+          // GetClosestZonePointWithoutZone which can match a zone point leading BACK to
+          // the zone we just came from, causing an immediate re-zone (ping-pong).
+          val targetZoneId = resolveZoneLineTarget(info)
+          println(s"[Zone] Zone line hit: '${info.regionName}' param1=${info.param1} param2=${info.param2} → targetZoneId=$targetZoneId")
+          Game.zoneSession.foreach(_.client.sendZoneChange(targetZoneId))
           zoning = true
           zoningStartedAt = System.currentTimeMillis()
         }
@@ -609,6 +622,23 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
     glDisable(GL_BLEND)
 
     hud.render(dt)
+
+  /** Resolve the target zone ID for a BSP zone line hit by matching DRNTP parameters
+    * against zone point data received from OP_SendZonePoints.
+    * The DRNTP string format is "DRNTP{5-digit}{6-digit}_ZONE" — param2 (the 6-digit
+    * group) corresponds to ZonePointData.iterator (the zone point number from the DB).
+    * Returns 0 if no match is found (server will fall back to closest zone point).
+    */
+  private def resolveZoneLineTarget(info: ZoneLineInfo): Int =
+    // Try matching param2 (6-digit group) against zone point iterators first
+    if info.param2 >= 0 then
+      zonePoints.find(_.iterator == info.param2).foreach(zp => return zp.targetZoneId)
+    // Fall back to param1 (5-digit group) as the zone point iterator
+    if info.param1 >= 0 then
+      zonePoints.find(_.iterator == info.param1).foreach(zp => return zp.targetZoneId)
+    // No match — log for debugging and let the server resolve
+    println(s"[Zone] WARNING: no zone point match for '${info.regionName}' (param1=${info.param1} param2=${info.param2}), known iterators: ${zonePoints.map(_.iterator).mkString(",")}")
+    0
 
   /** Stand up and cancel camping if active. */
   private def standUp(zc: ZoneCharacter): Unit =
