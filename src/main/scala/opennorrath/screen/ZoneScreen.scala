@@ -334,15 +334,26 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
   override def update(dt: Float): Unit =
     Game.zoneSession.foreach(_.client.dispatchEvents())
 
-    // Camp complete — server acknowledged logout, return to character select
+    // Camp complete — server acknowledged logout, return to character select.
+    // Must re-send OP_SendLoginInfo (zoning=0) so the world server transitions
+    // back to CharSelect state — without this it rejects OP_EnterWorld.
     if campComplete then
       Game.zoneSession.foreach(_.stop())
       Game.zoneSession = None
-      Game.worldSession match
-        case Some(ws) =>
-          Game.setScreen(CharacterSelectScreen(ctx, ws.client.characters))
-        case None =>
-          Game.setScreen(LoginScreen(ctx))
+      // Create a fresh world session — reusing the old one after zone-to-zone leaves
+      // stale state (zoningCharName, UDP socket associated with previous zone) that can
+      // cause the server to auto-zone the previous character back in.
+      Game.worldSession.foreach(_.stop())
+      Game.worldSession = None
+      val wc = WorldClient()
+      val wnt: EqNetworkThread =
+        if Game.macMode then NetworkThread(wc)
+        else TitaniumNetworkThread(wc)
+      Game.worldSession = Some(WorldSession(wc, wnt))
+      wnt.start()
+      wnt.send(NetCommand.Connect(Game.worldHost, Game.worldPort))
+      wc.connect(Game.worldAccountId, Game.worldKey)
+      Game.setScreen(ReturningToCharSelectScreen(ctx))
       return
 
     // Camp timer — after ~30s, send OP_Logout so server responds with OP_LogoutReply

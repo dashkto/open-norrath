@@ -82,8 +82,12 @@ class WorldClient extends PacketHandler:
   @volatile private var pendingSessionKey = ""
   @volatile private var zoningCharName: String = ""  // non-empty = zoning mode
 
-  /** Initiate world connection. Called from game thread. */
+  /** Initiate world connection. Called from game thread.
+    * Also used to re-authenticate after camping — the server requires OP_SendLoginInfo
+    * before it will accept OP_EnterWorld, even on an existing connection.
+    */
   def connect(accountId: Int, sessionKey: String): Unit =
+    zoningCharName = ""  // Clear stale zoning state — this is NOT a zoning reconnect
     pendingAccountId = accountId
     pendingSessionKey = sessionKey
     state = WorldState.Connecting

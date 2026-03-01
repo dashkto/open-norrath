@@ -62,8 +62,15 @@ class CharacterSelectScreen(
     while event.isDefined do
       event.get match
         case WorldEvent.ZoneInfo(addr) =>
-          Game.setScreen(ZoneLoadingScreen(ctx, addr, enteredCharName))
-          return
+          // Only act on ZoneInfo if the user actually selected a character.
+          // After camping, the server auto-sends ZoneServerInfo for the previous
+          // character — ignore it so the user can pick a different character.
+          if entering then
+            println(s"[CharSelect] ZoneInfo → entering zone for '$enteredCharName' at ${addr.ip}:${addr.port}")
+            Game.setScreen(ZoneLoadingScreen(ctx, addr, enteredCharName))
+            return
+          else
+            println(s"[CharSelect] Ignoring auto-ZoneServerInfo (entering=false) ${addr.ip}:${addr.port}")
         case WorldEvent.ZoneUnavailable(zoneName) =>
           val zoneLabel = if zoneName.nonEmpty then s"'$zoneName'" else "the zone"
           statusText = s"Zone unavailable: $zoneLabel is not running"
@@ -167,6 +174,11 @@ class CharacterSelectScreen(
       statusText = s"Entering world as ${char.name}..."
       statusColor = Colors.text
       entering = true
+      // Drain stale events — after camping, the server auto-sends ZoneServerInfo
+      // for the previous character. If we don't drain it here, the event poll in
+      // this same frame will see it (since entering is now true) and zone into
+      // the wrong zone. Discard everything; only fresh responses matter.
+      while worldClient.pollEvent().isDefined do ()
       worldClient.enterWorld(char.name)
 
   private def pushColor(idx: Int, c: (Float, Float, Float, Float)): Unit =
