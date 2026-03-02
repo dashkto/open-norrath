@@ -118,8 +118,8 @@ object EqData:
       case 2   => if gender == 1 then "baf" else "bam"  // Barbarian
       case 3   => if gender == 1 then "erf" else "erm"  // Erudite
       case 4   => if gender == 1 then "elf" else "elm"  // Wood Elf
-      case 5   => if gender == 1 then "ehf" else "ehm"  // High Elf
-      case 6   => if gender == 1 then "def" else "dem"  // Dark Elf
+      case 5   => if gender == 1 then "hif" else "him"  // High Elf
+      case 6   => if gender == 1 then "daf" else "dam"  // Dark Elf
       case 7   => if gender == 1 then "haf" else "ham"  // Half Elf
       case 8   => if gender == 1 then "dwf" else "dwm"  // Dwarf
       case 9   => if gender == 1 then "trf" else "trm"  // Troll

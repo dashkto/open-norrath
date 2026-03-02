@@ -137,9 +137,18 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
         zc <- zoneCharacters.get(anim.spawnId)
       do zc.playTimedAnimation(code, duration)
     case ZoneEvent.DamageDealt(info) if info.damage > 0 =>
-      // OP_Animation already handles the attacker's swing — only play flinch on target here.
-      // D01/D02 are the actual damage-received flinch animations;
-      // C05 (GetHit) is misleadingly named — it's the 1H weapon attack anim.
+      // Play attack animation on the source — NPC auto-attacks don't send OP_Animation,
+      // so the client must generate the swing animation from the damage event.
+      // For players, OP_Animation already fired; this just extends the timer harmlessly.
+      if info.spellId == 0xFFFF || info.spellId == 0 then // melee damage, not spell
+        zoneCharacters.get(info.sourceId).foreach { zc =>
+          val code = damageTypeToAttackAnim(info.damageType)
+          val duration = if zc.hasRendering then
+            zc.animChar.clips.get(code).map(_.frameCount / 15f).getOrElse(1.0f)
+          else 1.0f
+          zc.playTimedAnimation(code, duration)
+        }
+      // Play flinch on the target
       zoneCharacters.get(info.targetId).foreach { zc =>
         val hitAnim = if java.util.concurrent.ThreadLocalRandom.current().nextBoolean()
           then AnimCode.Damage1.code else AnimCode.Damage2.code
@@ -188,25 +197,26 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
   /** Map OP_Animation action byte to (AnimCode, duration).
     * Values from EQEmu Animation enum in zone/common.h. */
   private def animActionToCode(action: Int): Option[(String, Float)] = action match
-    // Combat — these also come via DamageDealt, but OP_Animation can trigger independently
-    case 1  => Some((AnimCode.Attack1.code, 0.5f))      // Kick
-    case 2  => Some((AnimCode.Attack2.code, 0.5f))      // Piercing
-    case 3  => Some((AnimCode.Slash2H.code, 0.5f))      // 2H Slashing
-    case 4  => Some((AnimCode.Weapon2H.code, 0.5f))     // 2H Weapon
-    case 5  => Some((AnimCode.Weapon1H.code, 0.5f))      // 1H Weapon
-    case 6  => Some((AnimCode.DualWield.code, 0.5f))    // Dual Wield
-    case 7  => Some((AnimCode.Bash.code, 0.5f))         // Slam/Bash
-    case 8  => Some((AnimCode.HandToHand.code, 0.5f))   // Hand to Hand
-    case 9  => Some((AnimCode.AttackOff.code, 0.5f))    // Shoot Bow
-    case 11 => Some((AnimCode.RoundKick.code, 0.5f))    // Round Kick
+    // Combat — 1.0s gives enough time for the full swing animation to be visible.
+    // NPC auto-attacks don't send OP_Animation; those are handled via DamageDealt below.
+    case 1  => Some((AnimCode.Attack1.code, 1.0f))      // Kick
+    case 2  => Some((AnimCode.Attack2.code, 1.0f))      // Piercing
+    case 3  => Some((AnimCode.Slash2H.code, 1.0f))      // 2H Slashing
+    case 4  => Some((AnimCode.Weapon2H.code, 1.0f))     // 2H Weapon
+    case 5  => Some((AnimCode.Weapon1H.code, 1.0f))      // 1H Weapon
+    case 6  => Some((AnimCode.DualWield.code, 1.0f))    // Dual Wield
+    case 7  => Some((AnimCode.Bash.code, 1.0f))         // Slam/Bash
+    case 8  => Some((AnimCode.HandToHand.code, 1.0f))   // Hand to Hand
+    case 9  => Some((AnimCode.AttackOff.code, 1.0f))    // Shoot Bow
+    case 11 => Some((AnimCode.RoundKick.code, 1.0f))    // Round Kick
     // Casting
     case 42 => Some((AnimCode.CastPullBack.code, 2.5f)) // Buff cast
     case 43 => Some((AnimCode.CastLoop.code, 2.5f))     // Heal cast
     case 44 => Some((AnimCode.SpellCast.code, 0.8f))    // Damage cast (finish)
     // Monk specials
-    case 45 => Some((AnimCode.FlyingKick.code, 0.5f))
-    case 46 => Some((AnimCode.TigerClaw.code, 0.5f))
-    case 47 => Some((AnimCode.EagleStrike.code, 0.5f))
+    case 45 => Some((AnimCode.FlyingKick.code, 1.0f))
+    case 46 => Some((AnimCode.TigerClaw.code, 1.0f))
+    case 47 => Some((AnimCode.EagleStrike.code, 1.0f))
     // Emotes (T prefix)
     case 29 => Some((AnimCode.Wave.code, 2.0f))
     case 30 => Some((AnimCode.Rude.code, 2.0f))
@@ -234,6 +244,24 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
     case 70 => Some((AnimCode.Bow.code, 2.0f))
     case _  => None
 
+  /** Map OP_Damage damageType (skill ID) to an attack animation code.
+    * NPC auto-attacks don't send OP_Animation, so the client must generate
+    * the swing animation from the damage event. Skill IDs from EQEmu SkillType enum. */
+  private def damageTypeToAttackAnim(damageType: Int): String = damageType match
+    case 0 | 1 => AnimCode.Weapon1H.code   // 1H Blunt / 1H Slash
+    case 2     => AnimCode.Weapon2H.code    // 2H Blunt
+    case 3     => AnimCode.Slash2H.code     // 2H Slash
+    case 7     => AnimCode.AttackOff.code   // Archery
+    case 8     => AnimCode.Attack2.code     // Backstab → Piercing
+    case 10    => AnimCode.Bash.code        // Bash / Slam
+    case 22    => AnimCode.DualWield.code   // Dual Wield
+    case 26    => AnimCode.FlyingKick.code  // Flying Kick
+    case 28    => AnimCode.HandToHand.code  // Hand to Hand
+    case 30    => AnimCode.Attack1.code     // Kick
+    case 36    => AnimCode.Attack2.code     // Piercing
+    case 38    => AnimCode.RoundKick.code   // Round Kick
+    case _     => AnimCode.Weapon1H.code    // Default: generic 1H weapon swing
+
   private val MaxTabTargetDist = 200f
 
   /** Resolve tab target using CPU raycasting against zone collision mesh.
@@ -249,7 +277,7 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
     val target = Vector3f()
 
     val myId = Game.zoneSession.map(_.client.mySpawnId).getOrElse(-1)
-    val visible = zoneCharacters.toVector.filter(_._1 != myId).flatMap { (id, zc) =>
+    val visible = zoneCharacters.toVector.filter { (id, zc) => id != myId && zc.npcType != 0 }.flatMap { (id, zc) =>
       val dx = zc.position.x - cam.x
       val dy = zc.position.y - cam.y
       val dz = zc.position.z - cam.z

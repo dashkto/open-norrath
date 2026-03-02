@@ -1108,6 +1108,18 @@ object ZoneCodec:
     val copper = buf.getInt()
     Some(LootResponse(response, platinum, gold, silver, copper))
 
+  /** Decode OP_TradeMoneyUpdate: TradeMoneyUpdate_Struct (12 bytes).
+    * Sent by the server when the other party places coins in the trade window.
+    */
+  def decodeTradeMoneyUpdate(data: Array[Byte]): Option[TradeMoneyUpdate] =
+    if data.length < 12 then return None
+    val buf = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN)
+    Some(TradeMoneyUpdate(
+      traderId = buf.getInt(),
+      coinType = buf.getInt(),
+      amount = buf.getInt(),
+    ))
+
   /** Decode OP_ShopRequest response: Merchant_Click_Struct (12 bytes).
     * Server sends back with command=1 and rate filled in when merchant is ready.
     */

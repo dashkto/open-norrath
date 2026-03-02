@@ -191,7 +191,29 @@ servers:
 | `use_eqg` | Use EQG companion files for emitters instead of deriving from S3D |
 | `debug.animation_model` | Character model to showcase all animations (e.g. `gor`, `dra`, `btm`). Empty to disable. |
 
-Zone path is passed as a CLI argument: `sbt "run assets/arena.s3d"` (defaults to `assets/arena.s3d`).
+Zone path is passed as a CLI argument: `sbt "run assets/EverQuest/arena.s3d"` (defaults to `assets/EverQuest/arena.s3d`).
+
+## Building a Release
+
+The `package.sh` script builds a self-contained distributable zip with a bundled Windows JRE 21.
+
+```bash
+# Build zip only
+./package.sh
+
+# Build zip and create a GitHub release
+./package.sh --release
+```
+
+Output: `target/dist/OpenNorrath-<version>-<sha>.zip`
+
+The zip contains:
+- `open-norrath.jar` — fat jar with all dependencies and platform natives (Windows, macOS, Linux)
+- `jre/` — bundled Java 21 runtime (Windows x64)
+- `run.bat` / `run.sh` — launcher scripts
+- `settings.yml` — default server configuration
+- `assets/` — user places their EverQuest folder here
+- `README.md` — setup instructions for end users
 
 ## UI Window Layout
 

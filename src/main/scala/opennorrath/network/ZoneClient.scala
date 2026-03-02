@@ -103,6 +103,9 @@ enum ZoneEvent:
   case LootItemReceived(item: InventoryItem)
   case LootClosed
 
+  // Trade — player-to-player trading
+  case TradeMoneyUpdated(update: TradeMoneyUpdate)
+
   // Merchant — buy from NPC merchants
   case MerchantOpened(open: MerchantOpen, items: Vector[InventoryItem])
   case MerchantClosed
@@ -732,6 +735,11 @@ class ZoneClient extends PacketHandler:
            MacZoneOpcodes.ObjectItemPacket | MacZoneOpcodes.SummonedItem |
            MacZoneOpcodes.ContainerPacket | MacZoneOpcodes.BookPacket =>
         handleItemPacket(pkt.opcode, pkt.payload)
+
+      // --- Trade ---
+
+      case MacZoneOpcodes.TradeMoneyUpdate =>
+        ZoneCodec.decodeTradeMoneyUpdate(pkt.payload).foreach(u => emit(ZoneEvent.TradeMoneyUpdated(u)))
 
       // --- Merchant ---
 

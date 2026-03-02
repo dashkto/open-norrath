@@ -801,6 +801,19 @@ case class MerchantOpen(
 )
 
 // =============================================================================
+// Trade — decoded from OP_TradeMoneyUpdate
+// =============================================================================
+
+/** Money update during a player-to-player trade (TradeMoneyUpdate_Struct, 12 bytes).
+  * Sent by the server to inform the client that the other party has placed coins in the trade window.
+  */
+case class TradeMoneyUpdate(
+  traderId: Int,          // Entity ID of the trading partner
+  coinType: Int,          // Coin denomination: 0=copper, 1=silver, 2=gold, 3=platinum
+  amount: Int,            // Amount of that coin type
+)
+
+// =============================================================================
 // Inventory Items — decoded from OP_CharInventory
 // =============================================================================
 

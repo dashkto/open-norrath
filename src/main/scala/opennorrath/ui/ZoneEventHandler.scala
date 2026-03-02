@@ -1,7 +1,7 @@
 package opennorrath.ui
 
 import opennorrath.Game
-import opennorrath.network.{ChatMessage, FormattedMessage, MessageType, SpecialMessage, SpawnAppearanceChange, WhoAllPlayerEntry, ZoneEvent}
+import opennorrath.network.{BeginCast, ChatMessage, FormattedMessage, MessageType, SpecialMessage, SpawnAppearanceChange, WhoAllPlayerEntry, ZoneEvent}
 import opennorrath.state.{PlayerCharacter, ZoneCharacter}
 
 /** Processes ZoneClient events — routes messages to the text panel
@@ -19,7 +19,10 @@ class ZoneEventHandler(chatPanel: TextPanel, characters: scala.collection.Map[In
       val name = player.get.name
       val (channel, target, msg) = parseCommand(text)
       session.get.client.sendChat(name, target, channel, 0, msg)
-      // Server echoes the message back via OP_ChannelMessage — no client-side echo needed
+      // Server echoes say/shout/ooc/auction/group/guild back via OP_ChannelMessage,
+      // but tells are NOT echoed — the client must display its own outgoing tell.
+      if channel == ChatMessage.Tell then
+        chatPanel.addLine(formatOutgoing(channel, target, msg), channelColor(channel))
     else
       chatPanel.addLine(text)
 
@@ -68,9 +71,13 @@ class ZoneEventHandler(chatPanel: TextPanel, characters: scala.collection.Map[In
         case _           => () // Unknown negative — ignore
 
     case ZoneEvent.EntityDied(info) =>
-      val who = spawnName(info.spawnId)
-      val killer = spawnName(info.killerId)
-      chatPanel.addLine(s"$who has been slain by $killer!", Colors.danger)
+      // Only show slay messages for characters within render distance
+      val killerInRange = characters.get(info.killerId).forall(_.inRenderRange)
+      val victimInRange = characters.get(info.spawnId).forall(_.inRenderRange)
+      if killerInRange || victimInRange then
+        val who = spawnName(info.spawnId)
+        val killer = spawnName(info.killerId)
+        chatPanel.addLine(s"$who has been slain by $killer!", Colors.danger)
 
     case ZoneEvent.ConsiderResult(result) =>
       val tgt = spawnName(result.targetId)
@@ -78,7 +85,7 @@ class ZoneEventHandler(chatPanel: TextPanel, characters: scala.collection.Map[In
       chatPanel.addLine(s"$tgt $factionStr", conColor(result.conLevel))
 
     case ZoneEvent.ExpChanged(_) =>
-      () // Server sends its own "You gain experience" text via OP_SpecialMesg
+      chatPanel.addLine("You gain experience!", Colors.gold)
 
     case ZoneEvent.LevelChanged(_) =>
       () // Server sends the formatted level-up message via OP_SpecialMesg
@@ -94,15 +101,13 @@ class ZoneEventHandler(chatPanel: TextPanel, characters: scala.collection.Map[In
         .getOrElse("Your spell is interrupted.")
       chatPanel.addLine(text, msgTypeColor(color))
 
+    case ZoneEvent.BeginCastTriggered(cast) =>
+      val src = spawnName(cast.casterId)
+      chatPanel.addLine(s"$src begins to cast a spell.", Colors.secondary)
+
     case ZoneEvent.SpellActionTriggered(action) =>
-      // buffUnknown: 1 = cast begin, 4 = spell landed. Only show chat for cast begin.
-      if action.spellId > 0 && action.buffUnknown == 1 then
-        val src = spawnName(action.sourceId)
-        val tgt = spawnName(action.targetId)
-        if action.sourceId == action.targetId then
-          chatPanel.addLine(s"$src begins to cast a spell.", Colors.secondary)
-        else
-          chatPanel.addLine(s"$src begins to cast a spell on $tgt.", Colors.secondary)
+      // buffUnknown: 4 = spell landed. Show damage/heal results if needed in future.
+      ()
 
     case ZoneEvent.AppearanceChanged(change) =>
       change.appearanceType match
@@ -139,6 +144,16 @@ class ZoneEventHandler(chatPanel: TextPanel, characters: scala.collection.Map[In
         case 0 if weather.intensity == 0 => chatPanel.addLine("The sky clears.", Colors.secondary)
         case _ => ()
 
+    case ZoneEvent.TradeMoneyUpdated(update) =>
+      val trader = spawnName(update.traderId)
+      val coinName = update.coinType match
+        case 0 => "copper"
+        case 1 => "silver"
+        case 2 => "gold"
+        case 3 => "platinum"
+        case _ => s"coin(${update.coinType})"
+      chatPanel.addLine(s"$trader offers ${update.amount} $coinName.", Colors.secondary)
+
     case ZoneEvent.Error(msg) =>
       chatPanel.addLine(s"Error: $msg", Colors.danger)
 
@@ -150,7 +165,7 @@ class ZoneEventHandler(chatPanel: TextPanel, characters: scala.collection.Map[In
 
   private def formatChat(msg: ChatMessage): String =
     val isMe = player.exists(_.name.equalsIgnoreCase(msg.sender))
-    if isMe then formatOutgoing(msg.channel, "", msg.message)
+    if isMe then formatOutgoing(msg.channel, msg.target, msg.message)
     else msg.channel match
       case ChatMessage.Say     => s"${msg.sender} says, '${msg.message}'"
       case ChatMessage.Shout   => s"${msg.sender} shouts, '${msg.message}'"

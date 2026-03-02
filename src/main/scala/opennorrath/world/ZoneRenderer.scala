@@ -115,9 +115,15 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings(),
       (id, zc.animChar.modelMatrix, zc.build.glHeight * s, zc.build.glWidth * s, zc.build.glDepth * s)
     }
 
+  /** Fallback model code used when a character's model is not found in the zone. */
+  private val FallbackModel = "hum"
+
   /** Initialize rendering on a ZoneCharacter. Returns false if model not found. */
   def initSpawnRendering(zc: ZoneCharacter): Boolean =
-    characterBuilds.get(zc.modelCode) match
+    characterBuilds.get(zc.modelCode).orElse {
+      println(s"Model '${zc.modelCode}' not found for ${zc.name}, falling back to $FallbackModel")
+      characterBuilds.get(FallbackModel)
+    } match
       case None => false
       case Some(build) =>
         val (interleaved, glMesh) = if build.clips.nonEmpty then
@@ -164,8 +170,12 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings(),
 
   /** Force a specific animation clip on a spawn, ignoring movement state. */
   def playSpawnAnimation(zc: ZoneCharacter, animCode: String, reverse: Boolean = false, freezeOnLastFrame: Boolean = false): Unit =
-    if zc.hasRendering && zc.animChar.clips.contains(animCode) then
-      zc.animChar.play(animCode, playReverse = reverse, freezeOnLastFrame = freezeOnLastFrame)
+    if zc.hasRendering then
+      if zc.animChar.clips.contains(animCode) then
+        zc.animChar.play(animCode, playReverse = reverse, freezeOnLastFrame = freezeOnLastFrame)
+      else if animCode.startsWith("C") || animCode.startsWith("D") then
+        // Log missing combat/death clips to help diagnose animation issues
+        println(s"[Anim] Missing clip '$animCode' for ${zc.name} (model=${zc.modelCode}, build=${zc.build.key}, clips=${zc.animChar.clipNames.mkString(",")})")
 
   /** Update a spawn's equipment texture overrides.
     * Parses base texture names to determine body part, then constructs variant names

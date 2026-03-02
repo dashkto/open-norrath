@@ -2,6 +2,11 @@
 set -e
 cd "$(dirname "$0")"
 
+RELEASE=false
+if [ "$1" = "--release" ]; then
+  RELEASE=true
+fi
+
 APP="OpenNorrath"
 JAR_NAME="open-norrath.jar"
 VERSION=$(grep 'version :=' build.sbt | sed 's/.*"\(.*\)".*/\1/')
@@ -68,3 +73,10 @@ cd ../..
 echo ""
 echo "Done!"
 ls -lh "target/dist/$ZIP_NAME"
+
+if [ "$RELEASE" = true ]; then
+  TAG="v${VERSION}"
+  echo ""
+  echo "Creating GitHub release $TAG..."
+  GH_HOST=github.com gh release create "$TAG" "target/dist/$ZIP_NAME" --title "$TAG" --generate-notes
+fi
