@@ -19,7 +19,7 @@ class TargetingSystem:
   /** Cast a ray from screen coordinates through the scene and return the closest hit spawn ID. */
   def pickSpawn(mx: Float, my: Float, screenW: Float, screenH: Float,
                 projection: Matrix4f, viewMatrix: Matrix4f,
-                hitData: Iterable[(Int, Matrix4f, Float, Float, Float)]): Option[Int] =
+                hitData: Iterable[(Int, Matrix4f, Float, Float, Float, Float)]): Option[Int] =
     val projView = Matrix4f(projection).mul(viewMatrix)
     val rayOrigin = Vector3f()
     val rayDir = Vector3f()
@@ -28,19 +28,18 @@ class TargetingSystem:
     var bestId: Option[Int] = None
     var bestDist = Float.MaxValue
 
-    for (spawnId, modelMatrix, height, width, depth) <- hitData do
+    for (spawnId, modelMatrix, height, width, depth, feetOffset) <- hitData do
       val cx = modelMatrix.m30()
       val cy = modelMatrix.m31()
       val cz = modelMatrix.m32()
       val hw = Math.max(width, depth) * 0.6f
       val minX = cx - hw; val maxX = cx + hw
-      // AABB spans from model origin (feet) upward to head, NOT centered on origin.
-      // Centering on origin (cy ± h/2) puts half the hitbox below the feet — underground
-      // for ground characters, empty air for flying ones. This is especially bad for
-      // flying creatures: the server sends them at elevated positions (flyMode is often 0),
-      // so the model origin is already in the air. A centered hitbox extends into the gap
-      // below the model, making the upper body/head unclickable.
-      val minY = cy; val maxY = cy + height
+      // AABB spans from actual mesh bottom to mesh top, accounting for glMinY offset.
+      // feetOffset = glMinY * size: negative for models whose mesh extends below origin
+      // (typical ground characters), positive for models whose mesh is entirely above
+      // origin (e.g., flying insects). Without this offset, ground character hitboxes
+      // float above their feet and flying creature hitboxes sit below their bodies.
+      val minY = cy + feetOffset; val maxY = cy + feetOffset + height
       val minZ = cz - hw; val maxZ = cz + hw
 
       rayAABBIntersect(rayOrigin, rayDir, minX, minY, minZ, maxX, maxY, maxZ) match
@@ -53,15 +52,15 @@ class TargetingSystem:
 
   /** Draw a faint wireframe AABB around the targeted spawn. */
   def drawTargetHitbox(spawnId: Int, shader: Shader, identity: Matrix4f,
-                       hitData: Iterable[(Int, Matrix4f, Float, Float, Float)]): Unit =
-    hitData.find(_._1 == spawnId).foreach { (_, modelMatrix, height, width, depth) =>
+                       hitData: Iterable[(Int, Matrix4f, Float, Float, Float, Float)]): Unit =
+    hitData.find(_._1 == spawnId).foreach { (_, modelMatrix, height, width, depth, feetOffset) =>
       val cx = modelMatrix.m30()
       val cy = modelMatrix.m31()
       val cz = modelMatrix.m32()
       val hw = Math.max(width, depth) * 0.4f
 
       val x0 = cx - hw; val x1 = cx + hw
-      val y0 = cy; val y1 = cy + height  // feet to head (see pickSpawn comment)
+      val y0 = cy + feetOffset; val y1 = cy + feetOffset + height  // mesh bottom to top
       val z0 = cz - hw;  val z1 = cz + hw
 
       if !hitboxInited then

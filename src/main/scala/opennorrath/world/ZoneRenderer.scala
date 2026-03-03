@@ -92,7 +92,7 @@ class ZoneRenderer(zone: Zone, settings: Settings = Settings(),
   private val (objectInstances, brazierEmitters) = loadObjects()
 
   // Load character build templates (zone + global models)
-  val characterBuilds: Map[String, ZoneRenderer.CharBuild] = loadCharacterBuilds()
+  val characterBuilds: Map[String, CharacterModel] = loadCharacterBuilds()
 
   // Equipment models from persistent store
   private val equipmentModels: Map[Int, ZoneRenderer.EquipModel] = EquipmentModels.models
@@ -106,10 +106,15 @@ class ZoneRenderer(zone: Zone, settings: Settings = Settings(),
     zoneCharacters.collect { case (id, zc) if zc.hasRendering && zc.inRenderRange => (id, zc.animChar.modelMatrix, zc.build.glHeight * zc.effectiveSize) }
 
   /** Return (spawnId, modelMatrix, height, width, depth) for each live spawn — used for click targeting. */
-  def spawnHitData: Iterable[(Int, Matrix4f, Float, Float, Float)] =
+  /** Per-spawn hitbox data: (spawnId, modelMatrix, height, width, depth, feetOffset).
+    * feetOffset = glMinY * size — the vertical offset from the model origin to the mesh bottom.
+    * Negative means mesh extends below origin (typical for ground characters);
+    * positive means entire mesh is above origin (e.g., flying insects with origin at base).
+    */
+  def spawnHitData: Iterable[(Int, Matrix4f, Float, Float, Float, Float)] =
     zoneCharacters.collect { case (id, zc) if zc.hasRendering && zc.inRenderRange =>
       val s = zc.effectiveSize
-      (id, zc.animChar.modelMatrix, zc.build.glHeight * s, zc.build.glWidth * s, zc.build.glDepth * s)
+      (id, zc.animChar.modelMatrix, zc.build.glHeight * s, zc.build.glWidth * s, zc.build.glDepth * s, zc.build.glMinY * s)
     }
 
   /** Fallback model code used when a character's model is not found in the zone. */
@@ -189,7 +194,7 @@ class ZoneRenderer(zone: Zone, settings: Settings = Settings(),
 
   // No recenter needed here — character mesh vertices are already in local space with
   // origin near feet. CharacterPreview uses recenter to frame the model in its viewport.
-  private def buildSpawnMatrix(build: ZoneRenderer.CharBuild, position: Vector3f, heading: Int, size: Float, target: Matrix4f = Matrix4f()): Matrix4f =
+  private def buildSpawnMatrix(build: CharacterModel, position: Vector3f, heading: Int, size: Float, target: Matrix4f = Matrix4f()): Matrix4f =
     target.identity()
     target.translate(position)
     target.rotateY(EqCoords.spawnHeadingToRadians(heading))
@@ -657,9 +662,9 @@ class ZoneRenderer(zone: Zone, settings: Settings = Settings(),
   // Character models live in {zone}_chr.s3d and global{code}_chr.s3d files.
   // Fragment chain: Actor(0x14) → SkeletonHierarchyRef(0x11) → SkeletonHierarchy(0x10) → MeshReference(0x2D) → Mesh(0x36)
   // Each bone references a TrackRef(0x13) → TrackDef(0x12) containing transform keyframes.
-  // We build CharBuild templates here; actual spawn instances are created by addSpawn().
-  private def loadCharacterBuilds(): Map[String, ZoneRenderer.CharBuild] =
-    val builds = scala.collection.mutable.Map[String, ZoneRenderer.CharBuild]()
+  // We build CharacterModel templates here; actual spawn instances are created by addSpawn().
+  private def loadCharacterBuilds(): Map[String, CharacterModel] =
+    val builds = scala.collection.mutable.Map[String, CharacterModel]()
 
     // Start with global character models from persistent store
     builds ++= GlobalCharacters.characterBuilds
@@ -714,13 +719,6 @@ object ZoneRenderer:
     "hn" -> 4, "lg" -> 5, "ft" -> 6,
   )
 
-  case class CharBuild(
-    key: String, skeleton: Fragment10_SkeletonHierarchy, meshFragments: List[Fragment36_Mesh],
-    zm: ZoneMesh, glWidth: Float, glDepth: Float, glHeight: Float,
-    glCenterX: Float, glCenterZ: Float, glMinY: Float,
-    clips: Map[String, opennorrath.animation.AnimationClip],
-    attachBoneIndices: Map[String, Int] = Map.empty, // bone suffix → index for _POINT bones
-  )
 
   /** Equipment model with optional root bone offset from skeleton rest pose.
     * meshCenter is the EQ-space center baked into vertices during WLD parse —
@@ -1188,7 +1186,7 @@ object ZoneRenderer:
     (skeleton, meshFragments)
 
   /** Build character data from actors: resolve meshes, discover animations, compute bounding boxes. */
-  def buildCharacters(chrWld: WldFile, actors: List[Fragment14_Actor], extraTrackDefs: List[Fragment12_TrackDef] = Nil, quiet: Boolean = false): List[CharBuild] =
+  def buildCharacters(chrWld: WldFile, actors: List[Fragment14_Actor], extraTrackDefs: List[Fragment12_TrackDef] = Nil, quiet: Boolean = false): List[CharacterModel] =
     val allTrackDefs = chrWld.fragmentsOfType[Fragment12_TrackDef] ++ extraTrackDefs
     val trackDefsByName: Map[String, Fragment12_TrackDef] = allTrackDefs.map { td =>
       td.cleanName -> td
@@ -1231,7 +1229,7 @@ object ZoneRenderer:
 
           if !quiet && clips.isEmpty then
             println(f"    $actorKey: ${meshFragments.size} meshes, ${zm.vertices.length / 3} verts, size(${eqMaxX - eqMinX}%.1f x ${eqMaxY - eqMinY}%.1f x ${eqMaxZ - eqMinZ}%.1f), anims: none")
-          Some(CharBuild(actorKey, sk, meshFragments, zm,
+          Some(CharacterModel(actorKey, sk, meshFragments, zm,
             glWidth = eqMaxX - eqMinX, glDepth = eqMaxY - eqMinY, glHeight = eqMaxZ - eqMinZ,
             glCenterX = (eqMinX + eqMaxX) / 2f, glCenterZ = -(eqMinY + eqMaxY) / 2f, glMinY = eqMinZ,
             clips, attachIndices))

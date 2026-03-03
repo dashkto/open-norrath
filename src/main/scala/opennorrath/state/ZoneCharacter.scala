@@ -7,7 +7,7 @@ import org.joml.{Matrix4f, Vector3f}
 import opennorrath.animation.{AnimCode, AnimatedCharacter}
 import opennorrath.network.{SpawnAppearanceChange, SpawnData, TintColor, TintProfile}
 import opennorrath.ui.EqData
-import opennorrath.world.{EqCoords, ZoneRenderer}
+import opennorrath.world.{CharacterModel, EqCoords}
 
 /** Mutable representation of an entity in the zone. Holds both game-logic state
   * (position, HP, equipment, animation) and rendering state (GPU mesh, texture
@@ -68,7 +68,7 @@ class ZoneCharacter(
   var animChar: AnimatedCharacter = uninitialized
 
   /** Model template (skeleton, clips, metrics). Null until initRendering is called. */
-  var build: ZoneRenderer.CharBuild = uninitialized
+  var build: CharacterModel = uninitialized
 
   /** Effective display size (server size / 6).
     * Server sends size=0 for player characters — use the race's default size.
@@ -91,7 +91,7 @@ class ZoneCharacter(
   def hasRendering: Boolean = animChar != null
 
   /** Initialize rendering state. Called by ZoneRenderer after GPU resources are created. */
-  def initRendering(b: ZoneRenderer.CharBuild, ac: AnimatedCharacter): Unit =
+  def initRendering(b: CharacterModel, ac: AnimatedCharacter): Unit =
     build = b
     animChar = ac
     flyOffset = if flying then b.glHeight * effectiveSize * 0.5f else 0f

@@ -12,11 +12,11 @@ import java.nio.file.{Files, Path}
 object GlobalCharacters:
 
   private var _trackDefs: List[Fragment12_TrackDef] = Nil
-  private var _characterBuilds: Map[String, ZoneRenderer.CharBuild] = Map.empty
+  private var _characterBuilds: Map[String, CharacterModel] = Map.empty
   private var _textures: Map[String, Int] = Map.empty
 
   def trackDefs: List[Fragment12_TrackDef] = _trackDefs
-  def characterBuilds: Map[String, ZoneRenderer.CharBuild] = _characterBuilds
+  def characterBuilds: Map[String, CharacterModel] = _characterBuilds
   def textures: Map[String, Int] = _textures
 
   def init(assetsDir: String): Unit =
@@ -32,7 +32,7 @@ object GlobalCharacters:
 
     val texMap = scala.collection.mutable.Map[String, Int]()
     val trackDefsBuilder = List.newBuilder[Fragment12_TrackDef]
-    val buildsMap = scala.collection.mutable.Map[String, ZoneRenderer.CharBuild]()
+    val buildsMap = scala.collection.mutable.Map[String, CharacterModel]()
 
     // First pass: collect all track defs (animations) from every file, and build
     // characters from global_chr.s3d (the classic all-in-one character archive).

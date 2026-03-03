@@ -97,7 +97,7 @@ class PlayerCharacter(
   var collision: Option[ZoneCollision] = None
 
   /** Offset from model origin to feet (positive = origin is above feet).
-    * Set from CharBuild.glMinY when the player spawn is created.
+    * Set from CharacterModel.glMinY when the player spawn is created.
     * e.g., if model origin is at hip and glMinY = -3.5, feetOffset = 3.5
     */
   var feetOffset: Float = 0f

@@ -277,7 +277,7 @@ class ZoneScreen(ctx: GameContext, zoneData: Zone, selfSpawn: Option[SpawnData] 
     val clip = Vector4f()
     val cam = camCtrl.camera.position
 
-    val hitboxes = zone.spawnHitData.map { case (id, mat, h, w, d) => id -> (mat, h, w, d) }.toMap
+    val hitboxes = zone.spawnHitData.map { case (id, mat, h, w, d, fo) => id -> (mat, h, w, d, fo) }.toMap
     val target = Vector3f()
 
     val myId = Game.zoneSession.map(_.client.mySpawnId).getOrElse(-1)
@@ -298,13 +298,13 @@ class ZoneScreen(ctx: GameContext, zoneData: Zone, selfSpawn: Option[SpawnData] 
           else
             // LOS: cast rays to AABB center + 8 corners; visible if any unblocked
             val canSee = hitboxes.get(id) match
-              case Some((mat, h, w, d)) =>
+              case Some((mat, h, w, d, fo)) =>
                 val cx = mat.m30(); val cy = mat.m31(); val cz = mat.m32()
                 val hw = Math.max(w, d) * 0.6f
-                target.set(cx, cy + h * 0.5f, cz) // ray to model center, not feet
+                target.set(cx, cy + fo + h * 0.5f, cz) // ray to model center
                 if !zone.collision.rayBlocked(cam, target) then true
                 else
-                  val y0 = cy; val y1 = cy + h  // feet to head (see TargetingSystem.pickSpawn)
+                  val y0 = cy + fo; val y1 = cy + fo + h  // mesh bottom to top
                   var found = false
                   var ci = 0
                   while ci < 8 && !found do

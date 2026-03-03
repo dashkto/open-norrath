@@ -26,7 +26,7 @@ class CharacterPreview:
 
   // Current preview
   private var currentChar: Option[AnimatedCharacter] = None
-  private var currentBuild: Option[ZoneRenderer.CharBuild] = None
+  private var currentBuild: Option[CharacterModel] = None
   private var currentCode = ""
   private var currentEquipment: Array[Int] = Array.fill(9)(0)
   private var rotation = -90f  // start facing camera (+Z)
@@ -37,7 +37,7 @@ class CharacterPreview:
   private var weaponSecondary: Int = 0
 
   // Read from persistent stores
-  val characterBuilds: Map[String, ZoneRenderer.CharBuild] = GlobalCharacters.characterBuilds
+  val characterBuilds: Map[String, CharacterModel] = GlobalCharacters.characterBuilds
   private val equipmentModels: Map[Int, ZoneRenderer.EquipModel] = EquipmentModels.models
 
   def setCharacter(modelCode: String, equipment: Array[Int] = Array.fill(9)(0)): Unit =
