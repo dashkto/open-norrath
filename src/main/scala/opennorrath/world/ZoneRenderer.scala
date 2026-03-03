@@ -291,7 +291,8 @@ class ZoneRenderer(zone: Zone, settings: Settings = Settings(),
     equipmentModels.get(weaponId).foreach { equip =>
       val attachKey = findAttachKey(zc, suffixTarget)
       attachKey.flatMap(zc.animChar.attachmentTransform).foreach { boneTransform =>
-        ZoneRenderer.composeEquipmentMatrix(equipMatrix, zc.animChar.modelMatrix, boneTransform, equip)
+        val isShieldPoint = attachKey.exists(_.endsWith("SHIELD_POINT"))
+        ZoneRenderer.composeEquipmentMatrix(equipMatrix, zc.animChar.modelMatrix, boneTransform, equip, isShieldPoint)
         shader.setMatrix4f("model", equipMatrix)
         equip.glMesh.bind()
         for group <- equip.zm.groups do
@@ -738,10 +739,8 @@ object ZoneRenderer:
   /** Equipment model with optional root bone offset from skeleton rest pose.
     * meshCenter is the EQ-space center baked into vertices during WLD parse —
     * needed to undo center offset before applying root bone transform for skeletal equipment.
-    * isShield: true for flat items centered at origin (shields/bucklers) that need
-    * outward offset at attachment points to avoid clipping through the arm.
     */
-  case class EquipModel(zm: ZoneMesh, glMesh: Mesh, rootBoneTransform: Option[Matrix4f] = None, meshCenter: Vector3f = Vector3f(), isShield: Boolean = false)
+  case class EquipModel(zm: ZoneMesh, glMesh: Mesh, rootBoneTransform: Option[Matrix4f] = None, meshCenter: Vector3f = Vector3f())
 
   // EQ S3D space → GL space conversion matrix: (x,y,z) → (x, z, -y)
   // JOML constructor is column-major: (col0, col1, col2, col3)
@@ -776,12 +775,12 @@ object ZoneRenderer:
     * Bone transforms are in EQ S3D space. So we compose:
     *   charModelMatrix × eqToGl × boneTransform × [rootBone × translate(-center)] × glToEq
     *
-    * For shields, applies outward offset to reduce arm clipping.
+    * For shield attachment points, applies outward offset to reduce arm clipping.
     */
   def composeEquipmentMatrix(target: Matrix4f, charModelMatrix: Matrix4f,
-      boneTransform: Matrix4f, equip: EquipModel): Matrix4f =
-    // For shield-like equipment, push slightly outward from the body center
-    val effectiveBone = if equip.isShield then
+      boneTransform: Matrix4f, equip: EquipModel, isShieldPoint: Boolean = false): Matrix4f =
+    // For shield attachment points, push slightly outward from the body center
+    val effectiveBone = if isShieldPoint then
       val bx = boneTransform.m30(); val by = boneTransform.m31(); val bz = boneTransform.m32()
       val dist = math.sqrt((bx * bx + by * by + bz * bz).toDouble).toFloat
       if dist > 0.01f then
@@ -950,24 +949,10 @@ object ZoneRenderer:
                     val center = Vector3f(cx, cy, cz)
                     val zm = extractMeshGeometry(eqWld, meshFragments)
                     val vc = zm.vertices.length / 3
-                    var isShield = false
-                    if vc > 0 then
-                      var minX = Float.MaxValue; var maxX = Float.MinValue
-                      var minY = Float.MaxValue; var maxY = Float.MinValue
-                      var minZ = Float.MaxValue; var maxZ = Float.MinValue
-                      for i <- 0 until vc do
-                        val x = zm.vertices(i * 3); val y = zm.vertices(i * 3 + 1); val z = zm.vertices(i * 3 + 2)
-                        if x < minX then minX = x; if x > maxX then maxX = x
-                        if y < minY then minY = y; if y > maxY then maxY = y
-                        if z < minZ then minZ = z; if z > maxZ then maxZ = z
-                      val extX = maxX - minX; val extY = maxY - minY; val extZ = maxZ - minZ
-                      val maxExt = math.max(extX, math.max(extY, extZ))
-                      val minExt = math.min(extX, math.min(extY, extZ))
-                      isShield = maxExt > 0f && minExt / maxExt < 0.25f && center.length() < 0.5f && rootBoneXform.isEmpty
                     val interleaved = buildInterleaved(zm)
                     val normals = buildNormals(zm)
                     val glMesh = Mesh(interleaved, zm.indices, normalsOpt = Some(normals))
-                    models(itNum) = EquipModel(zm, glMesh, rootBoneXform, center, isShield)
+                    models(itNum) = EquipModel(zm, glMesh, rootBoneXform, center)
               case _ => ()
         }
       catch case e: Exception =>

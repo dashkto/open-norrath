@@ -348,6 +348,8 @@ object AnimatedCharacter:
     "HAM" -> "ELM",
     "HAF" -> "ELF",
     "OGM" -> "TRM",
+    "RIM" -> "DWM",
+    "RIF" -> "DWF",
     "QCF" -> "HUF",
     "QCM" -> "HUM",
   )

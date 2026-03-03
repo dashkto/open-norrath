@@ -23,6 +23,10 @@ When encoding packet structs for the Titanium protocol, always reference the **p
 
 The server's `Decode_OP_*` functions reject packets with wrong sizes, often silently (no error sent to the client). The `PacketHandler.expectedOutgoingSizes` / `expectedIncomingSizes` maps exist specifically to catch these mismatches at runtime.
 
+## Design Principles
+
+- **No heuristics.** Never use heuristics to infer what something is or how it should behave. Always use actual data — from the server, file format, protocol, or other authoritative source.
+
 ## Code Style
 
 - Use liberal code comments, especially for surprising behavior, hard-won lessons, and non-obvious gotchas (e.g., "the server never sends X for NPCs"). Don't shy away from explaining *why* something is the way it is.

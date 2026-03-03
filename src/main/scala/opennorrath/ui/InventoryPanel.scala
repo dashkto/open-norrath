@@ -376,6 +376,13 @@ class InventoryPanel(player: Option[PlayerCharacter] = None) extends Panel:
     ImGui.text(s"Wt: ${w / 10}.${w % 10}")
     ImGui.popStyleColor()
 
+    // Debug: item ID and render file
+    ImGui.separator()
+    pushColor(ImGuiCol.Text, Colors.textDim)
+    val idFileStr = if item.idFileNum > 0 then s"  IT${item.idFileNum}" else ""
+    ImGui.text(s"ID: ${item.id}$idFileStr")
+    ImGui.popStyleColor()
+
     ImGui.endTooltip()
 
   private val SlotNamesByBit: Vector[(Int, String)] = Vector(
