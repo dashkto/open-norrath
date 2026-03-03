@@ -145,6 +145,10 @@ class ZoneRenderer(zone: Zone, settings: Settings = Settings(),
         val char = AnimatedCharacter(build.skeleton, build.meshFragments, build.zm, glMesh, modelMatrix, build.clips, build.attachBoneIndices)
         zc.animChar = char
         updateSpawnEquipment(zc)
+        // Characters that spawn already dead should show the death pose immediately,
+        // not play the death animation from the start.
+        if zc.dead then
+          char.play(AnimCode.DeadLoop.code, skipToEnd = true)
         true
 
   /** Get the vertical offset from model origin to feet for a given model code and size.
@@ -170,14 +174,19 @@ class ZoneRenderer(zone: Zone, settings: Settings = Settings(),
       else
         buildSpawnMatrix(zc.build, zc.position, zc.facingHeading, zc.effectiveSize, zc.animChar.modelMatrix)
 
-  /** Force a specific animation clip on a spawn, ignoring movement state. */
+  /** Force a specific animation clip on a spawn, ignoring movement state.
+    * Falls back to any clip in the same category (C0X → C0X, D0X → D0X) if the
+    * exact clip isn't found — e.g., a bixie with only C05 will use it for C08 too.
+    */
   def playSpawnAnimation(zc: ZoneCharacter, animCode: String, reverse: Boolean = false, freezeOnLastFrame: Boolean = false): Unit =
     if zc.hasRendering then
-      if zc.animChar.clips.contains(animCode) then
-        zc.animChar.play(animCode, playReverse = reverse, freezeOnLastFrame = freezeOnLastFrame)
-      else if animCode.startsWith("C") || animCode.startsWith("D") then
-        // Log missing combat/death clips to help diagnose animation issues
-        println(s"[Anim] Missing clip '$animCode' for ${zc.name} (model=${zc.modelCode}, build=${zc.build.key}, clips=${zc.animChar.clipNames.mkString(",")})")
+      val code = if zc.animChar.clips.contains(animCode) then animCode
+        else if animCode.length >= 1 then
+          val prefix = animCode.head  // 'C' or 'D'
+          zc.animChar.clips.keys.filter(_.startsWith(prefix.toString)).minOption.getOrElse("")
+        else ""
+      if code.nonEmpty then
+        zc.animChar.play(code, playReverse = reverse, freezeOnLastFrame = freezeOnLastFrame)
 
   /** Update a spawn's equipment texture overrides.
     * Parses base texture names to determine body part, then constructs variant names
@@ -680,7 +689,13 @@ class ZoneRenderer(zone: Zone, settings: Settings = Settings(),
         val actors = chrWld.fragmentsOfType[Fragment14_Actor]
         println(s"  Zone character actors: ${actors.size} (${actors.map(_.name.replace("_ACTORDEF", "").toLowerCase).mkString(", ")})")
         val zoneBuilds = ZoneRenderer.buildCharacters(chrWld, actors, GlobalCharacters.trackDefs)
-        for build <- zoneBuilds do builds(build.key) = build
+        for build <- zoneBuilds do
+          // Merge global and zone clips — global provides the base animation set,
+          // zone clips override on conflict (may have zone-specific variants).
+          val mergedClips = builds.get(build.key) match
+            case Some(existing) => existing.clips ++ build.clips
+            case None => build.clips
+          builds(build.key) = build.copy(clips = mergedClips)
       }
 
     println(s"  Character models: ${builds.size} (${builds.keys.toSeq.sorted.mkString(", ")})")

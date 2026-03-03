@@ -149,7 +149,7 @@ class AnimatedCharacter(
   /** Whether the current animation should stop at the last frame instead of looping. */
   private var freezeOnLastFrame: Boolean = false
 
-  def play(code: String, playReverse: Boolean = false, freezeOnLastFrame: Boolean = false): Unit =
+  def play(code: String, playReverse: Boolean = false, freezeOnLastFrame: Boolean = false, skipToEnd: Boolean = false): Unit =
     clips.get(code).foreach { clip =>
       // Snapshot current raw bone transforms for cross-fade blending.
       // Always snapshot when we have cached transforms, even if a transition is
@@ -159,8 +159,10 @@ class AnimatedCharacter(
         transitionTime = 0f
       currentClip = Some(clip)
       reverse = playReverse
-      this.freezeOnLastFrame = freezeOnLastFrame
-      currentFrame = if playReverse then clip.frameCount - 1 else 0
+      this.freezeOnLastFrame = freezeOnLastFrame || skipToEnd
+      currentFrame = if skipToEnd then clip.frameCount - 1
+        else if playReverse then clip.frameCount - 1
+        else 0
       frameTime = 0f
       needsInit = true
     }
@@ -339,8 +341,9 @@ object AnimatedCharacter:
     "HOM" -> "DWM",
     "GNF" -> "DWF",
     "GNM" -> "DWM",
+    "HUM" -> "ELM",
     "HUF" -> "ELF",
-    "ERM" -> "HUM",
+    "ERM" -> "ELM",
     "ERF" -> "ELF",
     "HAM" -> "ELM",
     "HAF" -> "ELF",
