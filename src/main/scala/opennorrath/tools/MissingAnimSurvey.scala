@@ -32,7 +32,7 @@ object MissingAnimSurvey:
 
     // Step 1: Load global track defs via GlobalCharacters (headless — no OpenGL)
     println("Loading global track defs...")
-    GlobalCharacters.initHeadless(dir.toString)
+    GlobalCharacters.init(dir.toString)
     val globalTrackMap = GlobalCharacters.trackMap
 
     // Step 2: Scan all chr files for actors

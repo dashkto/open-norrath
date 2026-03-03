@@ -1,8 +1,5 @@
 # OpenNorrath Settings
 
-# Use EQG companion files (emitters, etc.) instead of deriving from S3D data
-use_eqg: false
-
 # Rendering
 render:
   # Max distance (GL units) to render zone characters — further spawns are culled

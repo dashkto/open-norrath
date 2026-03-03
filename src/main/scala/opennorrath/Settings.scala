@@ -29,7 +29,6 @@ case class ServerConfig(
 )
 
 case class Settings(
-  useEqg: Boolean = false,
   macMode: Boolean = true, // true = Mac protocol, false = Titanium (PC) protocol
   window: WindowSettings = WindowSettings(),
   render: RenderSettings = RenderSettings(),
@@ -127,7 +126,6 @@ object Settings:
     val activeServer = root.string("active_server")
 
     Settings(
-      useEqg = root.boolean("use_eqg"),
       macMode = root.boolean("mac_mode", default = true),
       window = windowSettings,
       render = renderSettings,

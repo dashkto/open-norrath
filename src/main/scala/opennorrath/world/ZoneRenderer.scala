@@ -88,8 +88,7 @@ class ZoneRenderer(zone: Zone, settings: Settings = Settings(),
 
   println(s"Zone loaded: $vertexCount vertices, ${zoneMesh.indices.length / 3} triangles, ${textureMap.size} textures")
 
-  // Load objects and collect brazier emitters for flame particles
-  private val (objectInstances, brazierEmitters) = loadObjects()
+  private val objectInstances = loadObjects()
 
   // Load character build templates (zone + global models)
   val characterBuilds: Map[String, CharacterModel] = loadCharacterBuilds()
@@ -123,14 +122,7 @@ class ZoneRenderer(zone: Zone, settings: Settings = Settings(),
   /** Initialize rendering on a ZoneCharacter. Returns false if model not found. */
   def initSpawnRendering(zc: ZoneCharacter): Boolean =
     characterBuilds.get(zc.modelCode)
-      .orElse {
-        // Lazy-load from zone chr index; sync any new textures into our texture map
-        val before = GlobalCharacters.textures.size
-        val model = GlobalCharacters.getModel(zc.modelCode)
-        if GlobalCharacters.textures.size > before then
-          textureMap ++= GlobalCharacters.textures
-        model
-      }
+      .orElse(GlobalCharacters.characterBuilds.get(zc.modelCode))
       .orElse {
         println(s"Model '${zc.modelCode}' not found for ${zc.name}, falling back to $FallbackModel")
         characterBuilds.get(FallbackModel)
@@ -218,16 +210,6 @@ class ZoneRenderer(zone: Zone, settings: Settings = Settings(),
     target.rotateY(EqCoords.spawnHeadingToRadians(heading))
     target.scale(size)
     target
-
-  // Create particle emitters from EQG file only (S3D has no emitter data)
-  private val particleSystem: Option[ParticleSystem] =
-    if !settings.useEqg then None
-    else
-      val emitterPath = zone.s3dPath.replaceAll("\\.s3d$", "_EnvironmentEmitters.txt.backup")
-      val emitters = ParticleSystem.parseEmitters(emitterPath)
-      if emitters.nonEmpty then
-        println(s"  Flame emitters: ${emitters.size} from EQG file")
-      if emitters.nonEmpty then Some(ParticleSystem(emitters)) else None
 
   def resolveTexture(name: String): Int =
     if name.nonEmpty then textureMap.getOrElse(name.toLowerCase, fallbackTexture)
@@ -491,15 +473,6 @@ class ZoneRenderer(zone: Zone, settings: Settings = Settings(),
     shader.setInt("alphaTest", 0)
     shader.setFloat("alphaMultiplier", 1.0f)
 
-    // Disable directional lighting for particles — fire/flame should glow, not receive shadow
-    shader.setFloat("ambientStrength", 1.0f)
-
-    // Update and draw particles (last, for correct additive blending)
-    particleSystem.foreach { ps =>
-      ps.update(deltaTime, viewMatrix)
-      ps.draw(shader)
-    }
-
   // --- Zone line sphere debug rendering ---
   private var sphereVao = 0
   private var sphereVbo = 0
@@ -571,7 +544,6 @@ class ZoneRenderer(zone: Zone, settings: Settings = Settings(),
     objectInstances.foreach(_.glMesh.cleanup())
     zoneCharacters.values.foreach(zc => if zc.hasRendering then zc.animChar.glMesh.cleanup())
     // Equipment glMeshes owned by EquipmentModels store — don't clean up here
-    particleSystem.foreach(_.cleanup())
     if sphereInited then
       glDeleteBuffers(sphereVbo)
       glDeleteVertexArrays(sphereVao)
@@ -591,27 +563,27 @@ class ZoneRenderer(zone: Zone, settings: Settings = Settings(),
           textureMap(key) = texId
         catch case _: Exception => ()
 
-  private def loadObjects(): (List[ObjectRenderData], List[Emitter]) =
+  private def loadObjects(): List[ObjectRenderData] =
     // Find objects.wld in the zone S3D
     val objectsWldOpt = entries.find(e => e.name == "objects.wld")
-    if objectsWldOpt.isEmpty then return (Nil, Nil)
+    if objectsWldOpt.isEmpty then return Nil
 
     val objectsWld = WldFile(objectsWldOpt.get.data)
     val placements = objectsWld.fragmentsOfType[Fragment15_ObjectInstance]
 
-    if placements.isEmpty then return (Nil, Nil)
+    if placements.isEmpty then return Nil
 
     // Load the _obj.s3d for object meshes
     val objS3dPath = zone.s3dPath.replace(".s3d", "_obj.s3d")
     if !Files.exists(Path.of(objS3dPath)) then
       println(s"  Object S3D not found: $objS3dPath")
-      return (Nil, Nil)
+      return Nil
 
     val objEntries = PfsArchive.load(Path.of(objS3dPath))
     loadTextures(objEntries)
 
     val objWldEntry = objEntries.find(_.extension == "wld")
-    if objWldEntry.isEmpty then return (Nil, Nil)
+    if objWldEntry.isEmpty then return Nil
 
     val objWld = WldFile(objWldEntry.get.data)
 
@@ -639,33 +611,7 @@ class ZoneRenderer(zone: Zone, settings: Settings = Settings(),
 
     println(s"  Object models: ${actorMeshes.size}")
 
-    // Compute brazier mesh dimensions (EQ space) for flame placement and sizing
-    case class BrazierInfo(height: Float, width: Float)
-    val brazierInfo: Map[String, BrazierInfo] = actorMeshes.collect {
-      case (name, zm) if name.contains("brazier") =>
-        val vc = zm.vertices.length / 3
-        var maxZ = Float.MinValue; var minX = Float.MaxValue; var maxX = Float.MinValue
-        for i <- 0 until vc do
-          val x = zm.vertices(i * 3); val z = zm.vertices(i * 3 + 2)
-          if z > maxZ then maxZ = z
-          if x < minX then minX = x; if x > maxX then maxX = x
-        name -> BrazierInfo(maxZ, maxX - minX)
-    }
-
-    // Create render data for each placement, collect brazier emitters
-    val emitterBuilder = List.newBuilder[Emitter]
     val results = placements.flatMap { placement =>
-      // If this is a brazier, create a flame emitter at the top of the mesh
-      if placement.actorName.contains("brazier") then
-        val pos = placement.position
-        val scl = if placement.scale.y != 0 then placement.scale.y else 1f
-        val info = brazierInfo.getOrElse(placement.actorName, BrazierInfo(27f, 20f))
-        val (glX, glY, glZ) = EqCoords.s3dToGl(pos.x, pos.y, pos.z)
-        val flamePos = Vector3f(glX, glY + info.height * scl, glZ)
-        // Scale particles relative to brazier width (normalize to ~20 unit reference width)
-        val sizeScale = (info.width * scl / 20f).max(0.3f).min(2f)
-        emitterBuilder += Emitter(flamePos, sizeScale)
-
       actorMeshes.get(placement.actorName).map { zm =>
         val interleaved = ZoneRenderer.buildInterleaved(zm)
         val normals = ZoneRenderer.buildNormals(zm)
@@ -676,7 +622,7 @@ class ZoneRenderer(zone: Zone, settings: Settings = Settings(),
     }
 
     println(s"  Placed objects: ${results.size}")
-    (results, emitterBuilder.result())
+    results
 
   // Character models live in {zone}_chr.s3d and global{code}_chr.s3d files.
   // Fragment chain: Actor(0x14) → SkeletonHierarchyRef(0x11) → SkeletonHierarchy(0x10) → MeshReference(0x2D) → Mesh(0x36)
@@ -708,7 +654,6 @@ class ZoneRenderer(zone: Zone, settings: Settings = Settings(),
           builds(build.key) = build.copy(clips = mergedClips)
       }
 
-    println(s"  Character models: ${builds.size} (${builds.keys.toSeq.sorted.mkString(", ")})")
     builds.toMap
 
   private def buildModelMatrix(placement: Fragment15_ObjectInstance): Matrix4f =

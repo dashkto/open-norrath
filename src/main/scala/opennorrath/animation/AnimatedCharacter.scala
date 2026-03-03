@@ -376,15 +376,11 @@ object AnimatedCharacter:
     "STC" -> "LIM",
     "VRF" -> "VRM",
     "GRF" -> "OGF",
-    "GRM" -> "OGM",
+    "GRM" -> "TRM",
     "FRG" -> "FRO",
     "ARM" -> "RAT",
     "CLF" -> "DWF"
-    // TODO: SHA (shark) and SWO (swordfish) need fallback bases — similar body types
   )
-
-  /** Distinct animation donor models — the set of models whose animations are reused by others. */
-  val fallbackTargets: Set[String] = animFallbacks.values.toSet
 
   /** Discover animations for a skeleton using a foreign model's track prefix.
     * Uses the skeleton's bone suffixes but searches for tracks named {code}{foreignPrefix}{suffix}.
@@ -414,7 +410,7 @@ object AnimatedCharacter:
 
     var clips = analysis.discoverClips(trackMap)
 
-    // Fill in missing animations from manual fallback map.
+    // Fill in missing animations from manual ack map.
     // This is AnimatedCharacter policy — SkeletonAnalysis is mechanism only.
     animFallbacks.get(analysis.modelPrefix).foreach { fallback =>
       val haveCodes = clips.keySet

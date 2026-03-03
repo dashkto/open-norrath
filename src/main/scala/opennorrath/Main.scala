@@ -19,13 +19,6 @@ object Main:
 
   private val WindowTitle = "OpenNorrath"
 
-  /** Models with missing animations that have NO fallbacks yet.
-    * Used by showcase mode (`sbt "run showcase"`) to place them in arena for visual inspection.
-    */
-  val MissingAnimModels: List[String] = List(
-    
-  )
-
   def main(args: Array[String]): Unit =
     Logging.init()
     val settings = Settings.load()
@@ -90,9 +83,7 @@ object Main:
     val ctx = GameContext(window, input, settings, WindowWidth, WindowHeight, imGuiGlfw, imGuiGl3)
 
     val initialScreen =
-      if args.headOption.contains("showcase") then
-        ZoneScreen(ctx, Zone.load("arena"), showcaseModels = Main.MissingAnimModels)
-      else if args.nonEmpty then ZoneScreen(ctx, Zone.load(zoneName))
+      if args.nonEmpty then ZoneScreen(ctx, Zone.load(zoneName))
       else SplashScreen(ctx, zoneName)
     Game.run(ctx, initialScreen)
 
