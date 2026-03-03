@@ -8,7 +8,7 @@ package opennorrath.ui
 object Colors:
 
   // Helpers (must be defined before vals that use them)
-  private val black = (0f, 0f, 0f, 1f)
+  val black = (0f, 0f, 0f, 1f)
 
   def hex(color: String, alpha: Float = 1f): (Float, Float, Float, Float) =
     val r = Integer.parseInt(color.substring(0, 2), 16) / 255f
@@ -46,6 +46,8 @@ object Colors:
   val gold    = hex("E8B84B")
   val highlight = withAlpha(primary, 0.25f)
   val overlay   = hex("000000", 0.55f)
+
+  val white = (1f, 1f, 1f, 1f)
 
   // Status
   val danger  = hex("E04040")

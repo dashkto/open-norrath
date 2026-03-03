@@ -3,6 +3,7 @@ in vec2 TexCoord;
 in vec3 VertColor;
 in vec3 FragNormal;
 in vec4 FragPosLightSpace;
+in float FragDist;  // eye-space distance from camera
 
 out vec4 FragColor;
 
@@ -16,6 +17,12 @@ uniform vec3 lightColor = vec3(1.0, 1.0, 1.0); // sun/moon tint (warm at dawn/du
 uniform float ambientStrength = 0.35;
 uniform float alphaMultiplier = 1.0;
 uniform bool alphaTest = false;
+
+// Exponential fog: fogDensity controls how quickly fog thickens with distance.
+// Higher values = thicker fog. 0.0 = no fog.
+// At distance d, fog factor = exp(-fogDensity * d).
+uniform float fogDensity = 0.0;
+uniform vec3 fogColor = vec3(0.55, 0.55, 0.58);  // medium grey with slight blue tint
 
 // 3x3 PCF shadow sampling. sampler2DShadow returns 1.0 when NOT in shadow (ref <= stored depth).
 float computeShadow(vec4 fragPosLS) {
@@ -68,5 +75,13 @@ void main() {
     float lighting = ambientStrength + (1.0 - ambientStrength) * diff * (1.0 - shadow);
     vec3 tintedLight = mix(vec3(1.0), lightColor, 1.0 - ambientStrength);
 
-    FragColor = vec4(texColor.rgb * lighting * tintedLight, texColor.a);
+    vec3 litColor = texColor.rgb * lighting * tintedLight;
+
+    // Exponential fog: blend toward fogColor based on distance from camera
+    if (fogDensity > 0.0) {
+        float fogFactor = exp(-fogDensity * FragDist);
+        litColor = mix(fogColor, litColor, fogFactor);
+    }
+
+    FragColor = vec4(litColor, texColor.a);
 }

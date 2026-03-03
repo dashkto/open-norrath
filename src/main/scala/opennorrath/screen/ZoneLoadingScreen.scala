@@ -10,6 +10,7 @@ import opennorrath.{Game, ZoneSession}
 import opennorrath.network.*
 import opennorrath.network.titanium.TitaniumNetworkThread
 import opennorrath.ui.Colors
+import opennorrath.world.Zone
 
 /** Loading screen shown during zone entry handshake.
   *
@@ -89,9 +90,9 @@ class ZoneLoadingScreen(
       st match
         case ZoneState.InZone =>
           val shortName = zc.zoneInfo.map(_.zoneShortName).getOrElse("arena")
-          val zonePath = s"assets/EverQuest/$shortName.s3d"
+          val zoneData = Zone.load(shortName)
           transitioned = true
-          Game.setScreen(ZoneScreen(ctx, zonePath, zc.selfSpawn, zc.profile))
+          Game.setScreen(ZoneScreen(ctx, zoneData, zc.selfSpawn, zc.profile))
         case ZoneState.Failed =>
           // Zone reconnects exhausted — fall back to character select so the user can
           // re-enter and trigger a fresh world→zone auth flow. The server's auth entry

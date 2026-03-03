@@ -9,6 +9,7 @@ out vec2 TexCoord;
 out vec3 VertColor;
 out vec3 FragNormal;
 out vec4 FragPosLightSpace;
+out float FragDist;  // distance from camera for fog
 
 uniform mat4 projection;
 uniform mat4 view;
@@ -47,4 +48,5 @@ void main() {
     // so mat3(model) is correct (no need for transpose-inverse).
     FragNormal = mat3(model) * normal;
     FragPosLightSpace = lightSpaceMatrix * worldPos;
+    FragDist = length((view * worldPos).xyz);  // eye-space distance for fog
 }

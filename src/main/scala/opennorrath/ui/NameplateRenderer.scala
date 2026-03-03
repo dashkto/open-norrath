@@ -34,7 +34,7 @@ class NameplateRenderer:
   private val WorldScale = 0.035f // pixels → world units
 
   // --- Dynamic billboard mesh ---
-  private val MaxQuads = 256
+  private val MaxQuads = 512 // 2 per nameplate (shadow + foreground)
   private val FloatsPerVert = 5 // pos(3) + uv(2)
   private val VertsPerQuad = 4
   private val IndicesPerQuad = 6
@@ -107,57 +107,39 @@ class NameplateRenderer:
     var quadCount = 0
     val identity = Matrix4f()
 
-    for (spawnId, modelMatrix, headHeight) <- nameplateData if quadCount < MaxQuads do
+    // Shadow offset: 1.5 pixels in billboard right/down direction
+    val shadowOff = 1.5f * WorldScale
+    val soRx = rightX * shadowOff; val soRy = rightY * shadowOff; val soRz = rightZ * shadowOff
+    val soDx = -upX * shadowOff;   val soDy = -upY * shadowOff;   val soDz = -upZ * shadowOff
+
+    for (spawnId, modelMatrix, headHeight) <- nameplateData if quadCount + 1 < MaxQuads do
       characters.get(spawnId).foreach { zc =>
-        val name = zc.displayName
+        val name = if zc.dead then s"${zc.displayName}'s corpse" else zc.displayName
         if name.nonEmpty then
           val color =
-            if targetId.contains(spawnId) then Colors.primary
-            else if zc.npcType == 0 then Colors.sky         // Player characters
-            else Colors.secondary                            // NPCs
-          val tex = getTexture(name, color)
+            if zc.dead then Colors.white                      // Dead — corpse nameplate
+            else if targetId.contains(spawnId) then Colors.primary
+            else if zc.npcType == 0 then Colors.sky           // Player characters
+            else Colors.secondary                              // NPCs
 
           // World position above head
           val wx = modelMatrix.m30()
           val wy = modelMatrix.m31() + headHeight * 0.5f + 0.8f
           val wz = modelMatrix.m32()
 
-          // Quad dimensions in world space
-          val hw = tex.widthPx * WorldScale * 0.5f
-          val hh = tex.heightPx * WorldScale
+          // Black shadow quad (drawn first, offset down-right)
+          val shadowTex = getTexture(name, Colors.black)
+          buildQuad(quadCount, shadowTex.widthPx, shadowTex.heightPx,
+            wx + soRx + soDx, wy + soRy + soDy, wz + soRz + soDz,
+            rightX, rightY, rightZ, upX, upY, upZ)
+          quadTexIds(quadCount) = shadowTex.texId
+          quadCount += 1
 
-          // Build billboard quad vertices: bottom-center at (wx, wy, wz)
-          val vi = quadCount * VertsPerQuad * FloatsPerVert
-
-          // Bottom-left
-          vertexData(vi) = wx - rightX * hw
-          vertexData(vi + 1) = wy - rightY * hw
-          vertexData(vi + 2) = wz - rightZ * hw
-          vertexData(vi + 3) = 0f // u
-          vertexData(vi + 4) = 1f // v
-
-          // Bottom-right
-          vertexData(vi + 5) = wx + rightX * hw
-          vertexData(vi + 6) = wy + rightY * hw
-          vertexData(vi + 7) = wz + rightZ * hw
-          vertexData(vi + 8) = 1f
-          vertexData(vi + 9) = 1f
-
-          // Top-right
-          vertexData(vi + 10) = wx + rightX * hw + upX * hh
-          vertexData(vi + 11) = wy + rightY * hw + upY * hh
-          vertexData(vi + 12) = wz + rightZ * hw + upZ * hh
-          vertexData(vi + 13) = 1f
-          vertexData(vi + 14) = 0f
-
-          // Top-left
-          vertexData(vi + 15) = wx - rightX * hw + upX * hh
-          vertexData(vi + 16) = wy - rightY * hw + upY * hh
-          vertexData(vi + 17) = wz - rightZ * hw + upZ * hh
-          vertexData(vi + 18) = 0f
-          vertexData(vi + 19) = 0f
-
-          quadTexIds(quadCount) = tex.texId
+          // Foreground colored quad
+          val fgTex = getTexture(name, color)
+          buildQuad(quadCount, fgTex.widthPx, fgTex.heightPx,
+            wx, wy, wz, rightX, rightY, rightZ, upX, upY, upZ)
+          quadTexIds(quadCount) = fgTex.texId
           quadCount += 1
       }
 
@@ -212,6 +194,27 @@ class NameplateRenderer:
         GL_UNSIGNED_INT, (runStart * IndicesPerQuad).toLong * 4)
 
     glBindVertexArray(0)
+
+  /** Write billboard quad vertices into vertexData at the given quad index. */
+  private def buildQuad(qi: Int, widthPx: Int, heightPx: Int,
+      wx: Float, wy: Float, wz: Float,
+      rx: Float, ry: Float, rz: Float,
+      ux: Float, uy: Float, uz: Float): Unit =
+    val hw = widthPx * WorldScale * 0.5f
+    val hh = heightPx * WorldScale
+    val vi = qi * VertsPerQuad * FloatsPerVert
+    // Bottom-left
+    vertexData(vi)      = wx - rx * hw;       vertexData(vi + 1)  = wy - ry * hw;       vertexData(vi + 2)  = wz - rz * hw
+    vertexData(vi + 3)  = 0f;                 vertexData(vi + 4)  = 1f
+    // Bottom-right
+    vertexData(vi + 5)  = wx + rx * hw;       vertexData(vi + 6)  = wy + ry * hw;       vertexData(vi + 7)  = wz + rz * hw
+    vertexData(vi + 8)  = 1f;                 vertexData(vi + 9)  = 1f
+    // Top-right
+    vertexData(vi + 10) = wx + rx * hw + ux * hh; vertexData(vi + 11) = wy + ry * hw + uy * hh; vertexData(vi + 12) = wz + rz * hw + uz * hh
+    vertexData(vi + 13) = 1f;                 vertexData(vi + 14) = 0f
+    // Top-left
+    vertexData(vi + 15) = wx - rx * hw + ux * hh; vertexData(vi + 16) = wy - ry * hw + uy * hh; vertexData(vi + 17) = wz - rz * hw + uz * hh
+    vertexData(vi + 18) = 0f;                 vertexData(vi + 19) = 0f
 
   private def getTexture(name: String, color: (Float, Float, Float, Float)): NameTexture =
     val key = (name, color.hashCode())

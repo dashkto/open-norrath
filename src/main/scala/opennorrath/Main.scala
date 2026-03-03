@@ -13,7 +13,7 @@ import org.lwjgl.system.MemoryUtil.NULL
 
 import opennorrath.screen.{GameContext, SplashScreen, ZoneScreen}
 import opennorrath.ui.{EqStringTable, Fonts, ImGuiTheme, ItemIcons, SpellData, SpellIcons}
-import opennorrath.world.{EquipmentModels, GlobalCharacters}
+import opennorrath.world.{EquipmentModels, GlobalCharacters, Zone}
 
 object Main:
 
@@ -27,7 +27,7 @@ object Main:
       println(s"Active server: ${settings.activeServer} (${settings.resolvedLogin.host}:${settings.resolvedLogin.port})")
     val WindowWidth = settings.window.width
     val WindowHeight = settings.window.height
-    val zonePath = if args.nonEmpty then args(0) else "assets/EverQuest/arena.s3d"
+    val zoneName = if args.nonEmpty then args(0) else "arena"
 
     GLFWErrorCallback.createPrint(System.err).set()
 
@@ -83,8 +83,8 @@ object Main:
     val ctx = GameContext(window, input, settings, WindowWidth, WindowHeight, imGuiGlfw, imGuiGl3)
 
     val initialScreen =
-      if args.nonEmpty then ZoneScreen(ctx, zonePath)
-      else SplashScreen(ctx, zonePath)
+      if args.nonEmpty then ZoneScreen(ctx, Zone.load(zoneName))
+      else SplashScreen(ctx, zoneName)
     Game.run(ctx, initialScreen)
 
     println("Shutting down")

@@ -11,12 +11,12 @@ import org.lwjgl.opengl.GL11.*
 
 import opennorrath.{BuildInfo, Game}
 import opennorrath.render.Shader
-import opennorrath.world.{Camera, ZoneRenderer}
+import opennorrath.world.{Camera, Zone, ZoneRenderer}
 import org.lwjgl.opengl.GL13.{glActiveTexture, GL_TEXTURE0, GL_TEXTURE1}
 import org.lwjgl.opengl.GL20.glVertexAttrib3f
 import opennorrath.ui.{Colors, Fonts}
 
-class SplashScreen(ctx: GameContext, zonePath: String) extends Screen:
+class SplashScreen(ctx: GameContext, zoneName: String) extends Screen:
 
   private var zoneShader: Shader = uninitialized
   private var shadowShader: Shader = uninitialized
@@ -33,11 +33,12 @@ class SplashScreen(ctx: GameContext, zonePath: String) extends Screen:
     glfwSetInputMode(ctx.window, GLFW_CURSOR, GLFW_CURSOR_NORMAL)
     glClearColor(0.1f, 0.1f, 0.15f, 1f)
 
+    val zonePath = s"assets/EverQuest/$zoneName.s3d"
     hasZone = java.nio.file.Files.exists(java.nio.file.Path.of(zonePath))
     if hasZone then
       zoneShader = Shader.fromResources("/shaders/default.vert", "/shaders/default.frag")
       shadowShader = Shader.fromResources("/shaders/shadow.vert", "/shaders/shadow.frag")
-      zone = ZoneRenderer(zonePath, ctx.settings)
+      zone = ZoneRenderer(Zone.load(zoneName), ctx.settings)
       camera = Camera(
         position = Vector3f(-150f, 60f, -460f),
         yaw = 30f,
@@ -51,7 +52,7 @@ class SplashScreen(ctx: GameContext, zonePath: String) extends Screen:
         10000f,
       )
     else
-      println(s"Splash zone not found: $zonePath — showing menu without background")
+      println(s"Splash zone not found: $zoneName — showing menu without background")
 
   override def update(dt: Float): Unit =
     if hasZone then
@@ -102,6 +103,7 @@ class SplashScreen(ctx: GameContext, zonePath: String) extends Screen:
       zoneShader.setVec3("lightDir", sunDir.x, sunDir.y, sunDir.z)
       zoneShader.setFloat("ambientStrength", 0.35f)
       zoneShader.setMatrix4f("lightSpaceMatrix", zone.shadowMap.lightSpaceMatrix)
+      zoneShader.setFloat("fogDensity", 0.0012f)
 
       // Bind shadow map to texture unit 1
       glActiveTexture(GL_TEXTURE1)

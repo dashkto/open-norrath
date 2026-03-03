@@ -14,7 +14,7 @@ import org.lwjgl.opengl.GL20.{glEnableVertexAttribArray, glVertexAttrib3f, glVer
 import org.lwjgl.opengl.GL30.{glBindVertexArray, glDeleteVertexArrays, glGenVertexArrays}
 import java.nio.file.{Path, Files}
 
-class ZoneRenderer(s3dPath: String, settings: Settings = Settings(),
+class ZoneRenderer(zone: Zone, settings: Settings = Settings(),
     zoneCharacters: scala.collection.Map[Int, ZoneCharacter] = Map.empty):
 
   private val charDistSq = settings.render.characterDistance * settings.render.characterDistance
@@ -40,18 +40,15 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings(),
       idx += 1
     visibilityFrame += 1
 
-  private val entries = PfsArchive.load(Path.of(s3dPath))
-  private val zoneWld = entries.find(e => e.extension == "wld" && !e.name.contains("objects") && !e.name.contains("lights"))
-    .getOrElse(throw RuntimeException(s"No zone WLD found in $s3dPath"))
-
-  private val wld = WldFile(zoneWld.data)
-  private val zoneMesh = ZoneGeometry.extract(wld)
+  private val entries = zone.entries
+  private val wld = zone.wld
+  private val zoneMesh = zone.zoneMesh
   val collision = ZoneCollision(zoneMesh)
-  val zoneLineBsp: ZoneLineBsp = ZoneGeometry.extractZoneLineBsp(wld)
+  val zoneLineBsp: ZoneLineBsp = zone.zoneLineBsp
 
   // Load line lights from companion .txt file
   private val lights: List[LightBaker.LineLight] =
-    val txtPath = s3dPath.replaceAll("\\.s3d$", ".txt")
+    val txtPath = zone.s3dPath.replaceAll("\\.s3d$", ".txt")
     if Files.exists(Path.of(txtPath)) then
       val ls = LightBaker.parseLights(txtPath)
       println(s"  Loaded ${ls.size} line lights from $txtPath")
@@ -203,7 +200,7 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings(),
   private val particleSystem: Option[ParticleSystem] =
     if !settings.useEqg then None
     else
-      val emitterPath = s3dPath.replaceAll("\\.s3d$", "_EnvironmentEmitters.txt.backup")
+      val emitterPath = zone.s3dPath.replaceAll("\\.s3d$", "_EnvironmentEmitters.txt.backup")
       val emitters = ParticleSystem.parseEmitters(emitterPath)
       if emitters.nonEmpty then
         println(s"  Flame emitters: ${emitters.size} from EQG file")
@@ -581,7 +578,7 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings(),
     if placements.isEmpty then return (Nil, Nil)
 
     // Load the _obj.s3d for object meshes
-    val objS3dPath = s3dPath.replace(".s3d", "_obj.s3d")
+    val objS3dPath = zone.s3dPath.replace(".s3d", "_obj.s3d")
     if !Files.exists(Path.of(objS3dPath)) then
       println(s"  Object S3D not found: $objS3dPath")
       return (Nil, Nil)
@@ -668,7 +665,7 @@ class ZoneRenderer(s3dPath: String, settings: Settings = Settings(),
     builds ++= GlobalCharacters.characterBuilds
 
     // Load zone-specific characters (may override globals with zone-specific variants)
-    val chrS3dPath = s3dPath.replace(".s3d", "_chr.s3d")
+    val chrS3dPath = zone.s3dPath.replace(".s3d", "_chr.s3d")
     if Files.exists(Path.of(chrS3dPath)) then
       val chrEntries = PfsArchive.load(Path.of(chrS3dPath))
       loadTextures(chrEntries, applyColorKey = false)

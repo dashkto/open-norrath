@@ -37,7 +37,7 @@ class LoginScreen(ctx: GameContext) extends Screen:
     if ImGui.isKeyPressed(ImGuiKey.Escape) then
       Game.loginSession.foreach(_.stop())
       Game.loginSession = None
-      Game.setScreen(SplashScreen(ctx, "assets/arena.s3d"))
+      Game.setScreen(SplashScreen(ctx, "arena"))
       return
 
     // Poll login events

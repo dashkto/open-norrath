@@ -14,13 +14,13 @@ import opennorrath.{Game, GameAction, WorldSession}
 import opennorrath.animation.AnimCode
 import opennorrath.render.Shader
 import opennorrath.state.{GameClock, PlayerCharacter, ZoneCharacter}
-import opennorrath.world.{CameraController, EqCoords, SpellEffectSystem, TargetingSystem, ZoneRenderer}
+import opennorrath.world.{CameraController, EqCoords, SpellEffectSystem, TargetingSystem, Zone, ZoneRenderer}
 import opennorrath.network.{EqNetworkThread, InventoryItem, NetCommand, NetworkThread, PlayerPosition, PlayerProfileData, SpawnAppearanceChange, SpawnData, WorldClient, WorldEvent, ZoneEvent, ZonePointData, ZoneState}
 import opennorrath.network.titanium.TitaniumNetworkThread
 import opennorrath.ui.{EqClass, NameplateRenderer, ZoneHud}
 import opennorrath.wld.ZoneLineInfo
 
-class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData] = None, profile: Option[PlayerProfileData] = None) extends Screen:
+class ZoneScreen(ctx: GameContext, zoneData: Zone, selfSpawn: Option[SpawnData] = None, profile: Option[PlayerProfileData] = None) extends Screen:
 
   private var shader: Shader = uninitialized
   private var shadowShader: Shader = uninitialized
@@ -50,6 +50,10 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
   private var campTimer = 0f                    // countdown until OP_Logout is sent
   private var zonePoints = Vector.empty[ZonePointData]
   private val ZoneLineRadius = 30f       // trigger radius in EQ units (~30 feet)
+  // Exponential fog: fogDensity controls how quickly fog thickens with distance.
+  // At distance d, visibility = exp(-FogDensity * d). Tweak this one constant to adjust fog.
+  private val FogDensity = 0.0018f
+  private val FogColor = (0.55f, 0.55f, 0.58f)  // medium grey with slight blue tint
   private var exitedZoneTriggers = false  // must leave all zone triggers before triggering a new one
 
   // Right-click interaction — distinguish click vs free-look drag.
@@ -330,12 +334,12 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
     hud.init(player)
     shader = Shader.fromResources("/shaders/default.vert", "/shaders/default.frag")
     shadowShader = Shader.fromResources("/shaders/shadow.vert", "/shaders/shadow.frag")
-    zone = ZoneRenderer(zonePath, ctx.settings, zoneCharacters)
+    zone = ZoneRenderer(zoneData, ctx.settings, zoneCharacters)
     camCtrl = CameraController(ctx.window, ctx.windowWidth, ctx.windowHeight)
     camCtrl.player = player
     player.foreach(_.collision = Some(zone.collision))
     camCtrl.initFromSpawn(selfSpawn, profile)
-    println(s"Loading zone: $zonePath")
+    println(s"Loading zone: ${zoneData.shortName} (id=${zoneData.id})")
 
     // Register listeners — events are buffered in ZoneClient's queue (ZoneLoadingScreen
     // polls state directly instead of consuming events). First dispatchEvents() call in
@@ -597,8 +601,8 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
     zone.shadowMap.unbind(ctx.windowWidth, ctx.windowHeight)
 
     // --- Main color pass ---
-    val sky = GameClock.skyColor
-    glClearColor(sky.x, sky.y, sky.z, 1.0f)
+    // Clear to fog color so distant geometry fades seamlessly into the background
+    glClearColor(FogColor._1, FogColor._2, FogColor._3, 1.0f)
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
 
     shader.use()
@@ -614,6 +618,8 @@ class ZoneScreen(ctx: GameContext, zonePath: String, selfSpawn: Option[SpawnData
     val lc = GameClock.lightColor
     shader.setVec3("lightColor", lc.x, lc.y, lc.z)
     shader.setMatrix4f("lightSpaceMatrix", zone.shadowMap.lightSpaceMatrix)
+    shader.setFloat("fogDensity", FogDensity)
+    shader.setVec3("fogColor", FogColor._1, FogColor._2, FogColor._3)
 
     // Bind shadow map depth texture to unit 1 (diffuse tex0 stays on unit 0)
     glActiveTexture(GL_TEXTURE1)
