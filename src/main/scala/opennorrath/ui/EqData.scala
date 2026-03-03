@@ -110,10 +110,15 @@ object EqData:
   /** Map race ID + gender to 3-char S3D model code (lowercase).
     * Gender: 0=male, 1=female, 2=neutral (uses male code).
     * Returns None for unknown races.
+    *
+    * Race IDs are the same between Mac and Titanium protocols — both use the
+    * canonical EQ race table from races.h. The race→model mapping below is
+    * authoritative, derived from EQMacEmu/EQEmu races.h cross-referenced with
+    * actual NPC spawn data (e.g. race 36 = giant rat, NOT minotaur).
     */
   def raceModelCode(race: Int, gender: Int): Option[String] =
     val code = race match
-      // Playable races
+      // Playable races (1-12, 128, 130)
       case 1   => if gender == 1 then "huf" else "hum"  // Human
       case 2   => if gender == 1 then "baf" else "bam"  // Barbarian
       case 3   => if gender == 1 then "erf" else "erm"  // Erudite
@@ -128,54 +133,85 @@ object EqData:
       case 12  => if gender == 1 then "gnf" else "gnm"  // Gnome
       case 128 => if gender == 1 then "ikf" else "ikm"  // Iksar
       case 130 => if gender == 1 then "kef" else "kem"  // Vah Shir
-      // Common NPC races (gender-neutral)
-      // Note: EQMacEmu uses different race IDs than standard EQEmu for some NPCs.
-      // Multiple IDs map to the same model (e.g., 26|34 → bat, 40|56 → gob).
-      // Mappings verified against actual server spawn data in Misty Thicket.
+      // NPC races — IDs from EQMacEmu/EQEmu races.h
       case 14  => "wer"  // Werewolf
-      case 15  => "ske"  // Skeleton (tall)
-      case 19  => "ten"  // Tentacle Terror
-      case 21  => "gua"  // Guard
+      case 15  => if gender == 1 then "brf" else "brm"  // Brownie
+      case 17  => "gol"  // Golem
+      case 21  => "eye"  // Evil Eye
       case 22  => "bet"  // Beetle
-      case 26 | 34 => "bat"  // Bat
-      case 27  => "eel"  // Eel (Ghoul variant)
-      case 28  => "rat"  // Rat
-      case 29 | 37 => "sna"  // Snake
-      case 33  => "spi"  // Spider
-      case 36  => "min"  // Minotaur
-      case 38  => "ali"  // Alligator
-      case 40 | 56 => "gob"  // Goblin
-      case 42 | 54 => "orc"  // Orc
-      case 43  => "ske"  // Skeleton
-      case 44  => "bro"  // Brownie
-      case 45  => "dri"  // Drixie
-      case 46  => "wol"  // Wolf
-      case 47  => "bea"  // Bear
-      case 49  => "fae"  // Fairy
-      case 50  => "fun"  // Fungus Man
-      case 51  => "gar"  // Gargoyle
-      case 52  => "gal"  // Gasbag
-      case 55  => "gno"  // Gnoll
-      case 60  => "gor"  // Gorilla
-      case 62  => "cor"  // Cornsnake
-      case 63  => "pix"  // Pixie
-      case 67  => "imp"  // Imp
-      case 69 | 79 => "bix"  // Bixie
-      case 70  => "ske"  // Mummy (uses skeleton model)
-      case 71  => "sca"  // Scarecrow
-      case 72  => "dra"  // Drake
-      case 73  => "dra"  // Drake (variant)
-      case 75  => "wil"  // Will-o-wisp
-      case 77  => "ele"  // Elemental
-      case 81  => if gender == 1 then "hof" else "hom"  // Halfling NPC
+      case 24  => "fis"  // Fish
+      case 26  => "fro"  // Froglok
+      case 27  => "frg"  // Froglok Ghoul
+      case 28  => "fun"  // Fungusman
+      case 29  => "gar"  // Gargoyle
+      case 30  => "gal"  // Gasbag
+      case 32  => "gho"  // Ghost
+      case 33  => "gho"  // Ghoul (shares ghost model)
+      case 34  => "bat"  // Giant Bat
+      case 35  => "eel"  // Giant Eel
+      case 36  => "rat"  // Giant Rat
+      case 37  => "sna"  // Giant Snake
+      case 38  => "spi"  // Giant Spider
+      case 39  => "gno"  // Gnoll
+      case 40  => "gob"  // Goblin
+      case 41  => "gor"  // Gorilla
+      case 42  => "wol"  // Wolf
+      case 43  => "bea"  // Bear
+      case 44  => if gender == 1 then "huf" else "hum"  // Freeport Guard (human)
+      case 46  => "imp"  // Imp
+      case 47  => "gri"  // Griffin
+      case 49  => "dra"  // Lava Dragon
+      case 50  => "lio"  // Lion
+      case 51  => "lim"  // Lizard Man
+      case 52  => "mim"  // Mimic
+      case 53  => "min"  // Minotaur
+      case 54  => "orc"  // Orc
+      case 55  => if gender == 1 then "huf" else "hum"  // Human Beggar
+      case 56  => "pix"  // Pixie
+      case 58  => "sol"  // Solusek Ro
+      case 59  => "gob"  // Bloodgill (goblin variant)
+      case 60  => "ske"  // Skeleton
+      case 61  => "sha"  // Shark
+      case 62  => "tun"  // Tunare
+      case 63  => "tig"  // Tiger
+      case 65  => "vam"  // Vampire
+      case 66  => "ral"  // Statue of Rallos Zek
+      case 67  => if gender == 1 then "huf" else "hum"  // Highpass Citizen (human)
+      case 68  => "ten"  // Tentacle Terror
+      case 69  => "wil"  // Will-o-Wisp
+      case 70  => "zom"  // Zombie
+      case 71  => if gender == 1 then "huf" else "hum"  // Qeynos Citizen (human)
+      case 74  => "pir"  // Piranha
+      case 75  => "ele"  // Elemental
+      case 77  => if gender == 1 then "daf" else "dam"  // Neriak Citizen (dark elf)
+      case 78  => if gender == 1 then "erf" else "erm"  // Erudite Citizen
+      case 79  => "bix"  // Bixie
+      case 81  => if gender == 1 then "hof" else "hom"  // Rivervale Citizen (halfling)
+      case 82  => "sca"  // Scarecrow
       case 85  => "spe"  // Spectre
-      case 88  => "ban"  // Banshee
-      case 89  => "lic"  // Basilisk
-      case 93  => "gho"  // Ghost
-      case 94  => "gho"  // Ghoul
+      case 88  => if gender == 1 then "gnf" else "gnm"  // Clockwork Gnome
+      case 89  => "dra"  // Drake
+      case 90  => if gender == 1 then "baf" else "bam"  // Halas Citizen (barbarian)
+      case 91  => "ali"  // Alligator
+      case 92  => if gender == 1 then "trf" else "trm"  // Grobb Citizen (troll)
+      case 93  => if gender == 1 then "ogf" else "ogm"  // Oggok Citizen (ogre)
+      case 94  => if gender == 1 then "dwf" else "dwm"  // Kaladim Citizen (dwarf)
+      case 101 => "efr"  // Efreeti
+      case 106 => if gender == 1 then "huf" else "hum"  // Felguard (human guard)
+      case 108 => "eye"  // Eye of Zomm
       case 109 => "was"  // Wasp
-      case 120 => "lio"  // Lion
-      case 145 => "eye"  // Eye of Zomm
+      case 111 => "har"  // Harpy
+      case 112 => if gender == 1 then "elf" else "elm"  // Fayguard (wood elf)
+      case 113 => "dri"  // Drixie
+      case 120 => "wol"  // Wolf Elemental (wolf model)
+      case 129 => "sco"  // Scorpion
+      case 131 => "sar"  // Sarnak
+      case 133 => "dvm"  // Drolvarg
+      case 137 => "gob"  // Kunark Goblin
+      case 139 => if gender == 1 then "ikf" else "ikm"  // Iksar Citizen
+      case 145 => "goo"  // Goo
+      case 156 => "rtm"  // Ratman
+      case 161 => "iks"  // Iksar Skeleton
       case _   => null
     if code != null then Some(code) else None
 

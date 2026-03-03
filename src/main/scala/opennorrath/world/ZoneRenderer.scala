@@ -122,10 +122,19 @@ class ZoneRenderer(zone: Zone, settings: Settings = Settings(),
 
   /** Initialize rendering on a ZoneCharacter. Returns false if model not found. */
   def initSpawnRendering(zc: ZoneCharacter): Boolean =
-    characterBuilds.get(zc.modelCode).orElse {
-      println(s"Model '${zc.modelCode}' not found for ${zc.name}, falling back to $FallbackModel")
-      characterBuilds.get(FallbackModel)
-    } match
+    characterBuilds.get(zc.modelCode)
+      .orElse {
+        // Lazy-load from zone chr index; sync any new textures into our texture map
+        val before = GlobalCharacters.textures.size
+        val model = GlobalCharacters.getModel(zc.modelCode)
+        if GlobalCharacters.textures.size > before then
+          textureMap ++= GlobalCharacters.textures
+        model
+      }
+      .orElse {
+        println(s"Model '${zc.modelCode}' not found for ${zc.name}, falling back to $FallbackModel")
+        characterBuilds.get(FallbackModel)
+      } match
       case None => false
       case Some(build) =>
         val (interleaved, glMesh) = if build.clips.nonEmpty then
