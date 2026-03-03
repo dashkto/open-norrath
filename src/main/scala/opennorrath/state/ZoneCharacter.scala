@@ -47,7 +47,7 @@ class ZoneCharacter(
   var level: Int = spawn.level
   var face: Int = spawn.face
 
-  val modelCode: String = EqData.raceModelCode(spawn.race, spawn.gender).get
+  var modelCode: String = EqData.raceModelCode(spawn.race, spawn.gender).getOrElse("hum")
   val displayName: String = ZoneCharacter.cleanName(name)
 
   /** Per-slot equipment material IDs (9 slots: head/chest/arms/wrist/hands/legs/feet/primary/secondary). */

@@ -15,12 +15,12 @@ import opennorrath.animation.AnimCode
 import opennorrath.render.Shader
 import opennorrath.state.{GameClock, PlayerCharacter, ZoneCharacter}
 import opennorrath.world.{CameraController, EqCoords, SpellEffectSystem, TargetingSystem, Zone, ZoneRenderer}
-import opennorrath.network.{EqNetworkThread, InventoryItem, NetCommand, NetworkThread, PlayerPosition, PlayerProfileData, SpawnAppearanceChange, SpawnData, WorldClient, WorldEvent, ZoneEvent, ZonePointData, ZoneState}
+import opennorrath.network.{EqNetworkThread, InventoryItem, NetCommand, NetworkThread, PlayerPosition, PlayerProfileData, SpawnAppearanceChange, SpawnData, TintProfile, WorldClient, WorldEvent, ZoneEvent, ZonePointData, ZoneState}
 import opennorrath.network.titanium.TitaniumNetworkThread
 import opennorrath.ui.{EqClass, NameplateRenderer, ZoneHud}
 import opennorrath.wld.ZoneLineInfo
 
-class ZoneScreen(ctx: GameContext, zoneData: Zone, selfSpawn: Option[SpawnData] = None, profile: Option[PlayerProfileData] = None) extends Screen:
+class ZoneScreen(ctx: GameContext, zoneData: Zone, selfSpawn: Option[SpawnData] = None, profile: Option[PlayerProfileData] = None, showcaseModels: List[String] = Nil) extends Screen:
 
   private var shader: Shader = uninitialized
   private var shadowShader: Shader = uninitialized
@@ -362,6 +362,49 @@ class ZoneScreen(ctx: GameContext, zoneData: Zone, selfSpawn: Option[SpawnData] 
         }
       }
     }
+
+    // Showcase mode: grid of models × fallback targets for animation comparison.
+    // Rows = models, columns = fallback animation bases.
+    if showcaseModels.nonEmpty then
+      import opennorrath.animation.AnimatedCharacter
+      import opennorrath.world.GlobalCharacters
+      val targets = AnimatedCharacter.fallbackTargets.toSeq.sorted
+      val colSpacing = 30f
+      val rowSpacing = 40f
+      val baseX = -150f
+      val baseZ = -490f
+      var spawnId = 90000
+      var placed = 0
+      for (rawCode, row) <- showcaseModels.zipWithIndex do
+        val modelCode = rawCode.toLowerCase
+        val variants = GlobalCharacters.buildFallbackVariants(modelCode, targets)
+        for (target, col) <- targets.zipWithIndex do
+          val variantKey = s"$modelCode/${target.toLowerCase}"
+          if variants.contains(variantKey) then
+            val x = baseX + (col - targets.size / 2) * colSpacing
+            val z = baseZ + row * rowSpacing
+            val label = s"${modelCode.toUpperCase}/${target}"
+            val dummySpawn = SpawnData(
+              spawnId = spawnId, name = label, lastName = "",
+              y = 0f, x = 0f, z = 0f, heading = 0,
+              deltaY = 0f, deltaX = 0f, deltaZ = 0f, deltaHeading = 0,
+              race = 1, classId = 1, gender = 0, level = 1, bodytype = 0, deity = 0,
+              npcType = 1, petOwnerId = 0,
+              face = 0, hairColor = 0, beardColor = 0, eyeColor1 = 0, eyeColor2 = 0,
+              hairStyle = 0, beard = 0, bodyTexture = 0, helm = 0,
+              equipment = Array.fill(9)(0), equipColors = TintProfile.Empty,
+              size = 6f, walkSpeed = 0f, runSpeed = 0f, animation = 0,
+              light = 0, flyMode = 0,
+              isInvis = false, isSneaking = false, isPvp = false, isAfk = false,
+              isLd = false, isGm = false, anon = 0, guildId = 0, guildRank = 0, standState = 0,
+            )
+            val zc = ZoneCharacter(dummySpawn, Vector3f(x, 50f, z), heading = 192)
+            zc.modelCode = variantKey
+            zoneCharacters(spawnId) = zc
+            zone.initSpawnRendering(zc)
+            spawnId += 1
+            placed += 1
+      println(s"Showcase: placed $placed models (${showcaseModels.size} × ${targets.size} bases)")
 
   override def update(dt: Float): Unit =
     Game.zoneSession.foreach(_.client.dispatchEvents())

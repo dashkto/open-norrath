@@ -356,7 +356,35 @@ object AnimatedCharacter:
     "RIF" -> "DWF",
     "QCF" -> "HUF",
     "QCM" -> "HUM",
+    "GOL" -> "TRM",
+    "MIN" -> "TRM",
+    "BRF" -> "ELF",
+    "BRM" -> "ELM",
+    "PIF" -> "ELF",
+    "BRI" -> "DWM",
+    "BTM" -> "RHI",
+    "BET" -> "SPI",
+    "BGM" -> "ELM",
+    "ZOF" -> "ELF",
+    "WUR" -> "DRA",
+    "BEH" -> "EYE",
+    "BAM" -> "HUM",
+    "ZOM" -> "HUM",
+    "TRF" -> "TRM",
+    "IMP" -> "DWF",
+    "PUM" -> "LIM",
+    "STC" -> "LIM",
+    "VRF" -> "VRM",
+    "GRF" -> "OGF",
+    "GRM" -> "OGM",
+    "FRG" -> "FRO",
+    "ARM" -> "RAT",
+    "CLF" -> "DWF"
+    // TODO: SHA (shark) and SWO (swordfish) need fallback bases — similar body types
   )
+
+  /** Distinct animation donor models — the set of models whose animations are reused by others. */
+  val fallbackTargets: Set[String] = animFallbacks.values.toSet
 
   /** Discover animations for a skeleton using a foreign model's track prefix.
     * Uses the skeleton's bone suffixes but searches for tracks named {code}{foreignPrefix}{suffix}.
@@ -365,49 +393,10 @@ object AnimatedCharacter:
   def discoverAnimationsWithPrefix(
       wld: WldFile,
       skeleton: Fragment10_SkeletonHierarchy,
-      trackDefsByName: Map[String, Fragment12_TrackDef],
-      animCodes: Set[String],
+      trackMap: TrackMap,
       foreignPrefix: String,
   ): Map[String, AnimationClip] =
-    val baseTrackDefs: Array[Fragment12_TrackDef] = skeleton.bones.map { bone =>
-      try
-        val trackRef = wld.fragment(bone.trackRef).asInstanceOf[Fragment13_TrackRef]
-        wld.fragment(trackRef.trackDefRef).asInstanceOf[Fragment12_TrackDef]
-      catch case _: Exception => null
-    }
-    val baseSuffixes: Array[String] = baseTrackDefs.map { td =>
-      if td != null then td.cleanName else ""
-    }
-    val modelPrefix = baseSuffixes.filter(_.nonEmpty).minByOption(_.length).getOrElse("")
-    if modelPrefix.isEmpty then return Map.empty
-
-    val boneSuffixes = baseSuffixes.map { name =>
-      if name.startsWith(modelPrefix) then name.drop(modelPrefix.length) else name
-    }
-    val isAttachmentPoint = boneSuffixes.map(_.endsWith("_POINT"))
-    val nonPointSuffixes = boneSuffixes.distinct.filter(s => s.nonEmpty && !s.endsWith("_POINT"))
-
-    def hasTracksForPrefix(prefix: String): Boolean =
-      trackDefsByName.contains(prefix) ||
-        nonPointSuffixes.exists(s => trackDefsByName.contains(prefix + s))
-
-    def findPrefix(code: String): Option[String] =
-      val direct = code + foreignPrefix
-      if hasTracksForPrefix(direct) then Some(direct)
-      else Iterator("A", "B").map(v => code + v + foreignPrefix).find(hasTracksForPrefix)
-
-    val validPrefixes = animCodes.flatMap(findPrefix)
-    validPrefixes.flatMap { prefix =>
-      val boneTracks: Array[Fragment12_TrackDef] = boneSuffixes.zipWithIndex.map { (suffix, i) =>
-        if isAttachmentPoint(i) then baseTrackDefs(i)
-        else trackDefsByName.getOrElse(prefix + suffix, baseTrackDefs(i))
-      }
-      val frameCount = boneTracks.filter(_ != null).map(_.frames.length).max
-      if frameCount > 1 then
-        val animCode = prefix.dropRight(foreignPrefix.length)
-        Some(animCode -> AnimationClip(animCode, frameCount, boneTracks))
-      else None
-    }.toMap
+    SkeletonAnalysis(wld, skeleton).discoverClipsWithForeignPrefix(trackMap, foreignPrefix)
 
   /** Discover animations by matching track names against skeleton bone suffixes.
     *
@@ -418,60 +407,21 @@ object AnimatedCharacter:
   def discoverAnimations(
       wld: WldFile,
       skeleton: Fragment10_SkeletonHierarchy,
-      trackDefsByName: Map[String, Fragment12_TrackDef],
-      animCodes: Set[String],
+      trackMap: TrackMap,
   ): Map[String, AnimationClip] =
-    val baseTrackDefs: Array[Fragment12_TrackDef] = skeleton.bones.map { bone =>
-      try
-        val trackRef = wld.fragment(bone.trackRef).asInstanceOf[Fragment13_TrackRef]
-        wld.fragment(trackRef.trackDefRef).asInstanceOf[Fragment12_TrackDef]
-      catch case _: Exception => null
-    }
-    val baseSuffixes: Array[String] = baseTrackDefs.map { td =>
-      if td != null then td.cleanName else ""
-    }
+    val analysis = SkeletonAnalysis(wld, skeleton)
+    if !analysis.isValid then return Map.empty
 
-    val modelPrefix = baseSuffixes.filter(_.nonEmpty).minByOption(_.length).getOrElse("")
-    if modelPrefix.isEmpty then return Map.empty
+    var clips = analysis.discoverClips(trackMap)
 
-    val boneSuffixes = baseSuffixes.map { name =>
-      if name.startsWith(modelPrefix) then name.drop(modelPrefix.length) else name
-    }
-    val isAttachmentPoint = boneSuffixes.map(_.endsWith("_POINT"))
-    val nonPointSuffixes = boneSuffixes.distinct.filter(s => s.nonEmpty && !s.endsWith("_POINT"))
-
-    def hasTracksForPrefix(prefix: String): Boolean =
-      trackDefsByName.contains(prefix) ||
-        nonPointSuffixes.exists(s => trackDefsByName.contains(prefix + s))
-
-    def findPrefix(code: String, model: String): Option[String] =
-      val direct = code + model
-      if hasTracksForPrefix(direct) then Some(direct)
-      else Iterator("A", "B").map(v => code + v + model).find(hasTracksForPrefix)
-
-    def buildClip(prefix: String, model: String): Option[(String, AnimationClip)] =
-      val boneTracks: Array[Fragment12_TrackDef] = boneSuffixes.zipWithIndex.map { (suffix, i) =>
-        if isAttachmentPoint(i) then baseTrackDefs(i)
-        else trackDefsByName.getOrElse(prefix + suffix, baseTrackDefs(i))
-      }
-      val frameCount = boneTracks.filter(_ != null).map(_.frames.length).max
-      if frameCount > 1 then
-        val animCode = prefix.dropRight(model.length)
-        Some(animCode -> AnimationClip(animCode, frameCount, boneTracks))
-      else None
-
-    // Discover clips for the primary model
-    val validPrefixes = animCodes.flatMap(code => findPrefix(code, modelPrefix))
-    var clips = validPrefixes.flatMap(p => buildClip(p, modelPrefix)).toMap
-
-    // Fill in missing animations from manual fallback map
-    animFallbacks.get(modelPrefix).foreach { fallback =>
-      val haveCodes = clips.keys.flatMap(k => if k.length >= 3 then Some(k.take(3)) else None).toSet
-      val missingCodes = animCodes -- haveCodes
-      if missingCodes.nonEmpty then
-        val fbPrefixes = missingCodes.flatMap(code => findPrefix(code, fallback))
-        val fbClips = fbPrefixes.flatMap(p => buildClip(p, fallback))
-        if fbClips.nonEmpty then clips = clips ++ fbClips
+    // Fill in missing animations from manual fallback map.
+    // This is AnimatedCharacter policy — SkeletonAnalysis is mechanism only.
+    animFallbacks.get(analysis.modelPrefix).foreach { fallback =>
+      val haveCodes = clips.keySet
+      val fbClips = analysis.discoverClipsWithForeignPrefix(trackMap, fallback)
+      // Only fill in animation codes we don't already have from the primary model
+      val newClips = fbClips.filterNot((code, _) => haveCodes.contains(code))
+      if newClips.nonEmpty then clips = clips ++ newClips
     }
 
     clips

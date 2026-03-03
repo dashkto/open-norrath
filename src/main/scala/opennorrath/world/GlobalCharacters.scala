@@ -1,8 +1,9 @@
 package opennorrath.world
 
+import opennorrath.animation.{AnimatedCharacter, TrackMap}
 import opennorrath.archive.{PfsArchive, PfsEntry}
 import opennorrath.render.Texture
-import opennorrath.wld.{Fragment12_TrackDef, Fragment14_Actor, WldFile}
+import opennorrath.wld.{Fragment10_SkeletonHierarchy, Fragment11_SkeletonHierarchyRef, Fragment12_TrackDef, Fragment14_Actor, WldFile}
 import org.lwjgl.opengl.GL11.glDeleteTextures
 import java.nio.file.{Files, Path}
 
@@ -14,7 +15,7 @@ import java.nio.file.{Files, Path}
   */
 object GlobalCharacters:
 
-  private var _trackDefs: List[Fragment12_TrackDef] = Nil
+  private var _trackMap: TrackMap = TrackMap.empty
   private var _characterBuilds: Map[String, CharacterModel] = Map.empty
   private var _textures: Map[String, Int] = Map.empty
 
@@ -22,7 +23,12 @@ object GlobalCharacters:
   // Built at startup by scanning WLD actor names (no model building or texture loading).
   private var _actorIndex: Map[String, Path] = Map.empty
 
-  def trackDefs: List[Fragment12_TrackDef] = _trackDefs
+  // Permanent record of which chr file each model was loaded from (never cleared on lazy load).
+  // Used by buildFallbackVariants to reload the WLD for animation discovery.
+  private var _modelSource: Map[String, Path] = Map.empty
+
+  def trackMap: TrackMap = _trackMap
+  def trackDefs: List[Fragment12_TrackDef] = _trackMap.byName.values.toList
   def characterBuilds: Map[String, CharacterModel] = _characterBuilds
   def textures: Map[String, Int] = _textures
 
@@ -69,7 +75,7 @@ object GlobalCharacters:
     val buildsMap = scala.collection.mutable.Map[String, CharacterModel]()
 
     // Collect all track defs (animations) and actors from every global file.
-    case class FileData(wld: WldFile, actors: List[Fragment14_Actor])
+    case class FileData(wld: WldFile, actors: List[Fragment14_Actor], file: Path)
     val fileDataBuilder = List.newBuilder[FileData]
 
     for file <- globalFiles do
@@ -81,19 +87,21 @@ object GlobalCharacters:
           trackDefsBuilder ++= fileWld.fragmentsOfType[Fragment12_TrackDef]
           val actors = fileWld.fragmentsOfType[Fragment14_Actor]
           if actors.nonEmpty then
-            fileDataBuilder += FileData(fileWld, actors)
+            fileDataBuilder += FileData(fileWld, actors, file)
         }
       catch case e: Exception =>
         println(s"  Warning: failed to load ${file.getFileName}: ${e.getMessage}")
 
-    val allTracks = trackDefsBuilder.result()
-    println(s"  Global animations: ${allTracks.size} tracks from ${globalFiles.length} files")
+    _trackMap = TrackMap.from(trackDefsBuilder.result())
+    println(s"  Global animations: ${_trackMap.byName.size} tracks from ${globalFiles.length} files")
 
     // Build character models from global files.
+    val sourceMap = scala.collection.mutable.Map[String, Path]()
     for data <- fileDataBuilder.result() do
-      val builds = ZoneRenderer.buildCharacters(data.wld, data.actors, allTracks, quiet = true)
+      val builds = ZoneRenderer.buildCharacters(data.wld, data.actors, trackDefs, quiet = true)
       for b <- builds if !buildsMap.contains(b.key) do
         buildsMap(b.key) = b
+        sourceMap(b.key) = data.file
 
     println(s"  Global character models: ${buildsMap.size}")
 
@@ -105,13 +113,48 @@ object GlobalCharacters:
       if combat.isEmpty || death.isEmpty then
         println(s"    $key: ${clips.size} clips (combat=${combat.mkString(",")}, death=${death.mkString(",")})")
 
-    _trackDefs = allTracks
     _characterBuilds = buildsMap.toMap
     _textures = texMap.toMap
+    _modelSource = sourceMap.toMap
 
     // Build actor index from classic/Kunark/Velious zone chr files.
     // Only parses WLD actor fragment names — no model building or texture loading.
     buildActorIndex(dir)
+
+    // Seed model source from actorIndex (before any lazy loading clears entries)
+    _modelSource = _modelSource ++ _actorIndex
+
+  /** Headless init — loads track defs and builds the actor index without touching textures or GPU.
+    * Safe to call from tools that have no OpenGL context (e.g. MissingAnimSurvey).
+    * Does NOT populate _characterBuilds.
+    */
+  def initHeadless(assetsDir: String): Unit =
+    val dir = Path.of(assetsDir)
+    if !Files.isDirectory(dir) then return
+
+    val globalFiles = Files.list(dir).toArray.map(_.asInstanceOf[Path])
+      .filter { p =>
+        val name = p.getFileName.toString.toLowerCase
+        name.startsWith("global") && name.contains("_chr") && name.endsWith(".s3d")
+      }.sorted
+    if globalFiles.isEmpty then return
+
+    val trackDefsBuilder = List.newBuilder[Fragment12_TrackDef]
+    for file <- globalFiles do
+      try
+        val entries = PfsArchive.load(file, extensionFilter = Some(Set("wld")))
+        entries.find(_.extension == "wld").foreach { wldEntry =>
+          val fileWld = WldFile(wldEntry.data)
+          trackDefsBuilder ++= fileWld.fragmentsOfType[Fragment12_TrackDef]
+        }
+      catch case e: Exception =>
+        println(s"  Warning: failed to load ${file.getFileName}: ${e.getMessage}")
+
+    _trackMap = TrackMap.from(trackDefsBuilder.result())
+    println(s"  [headless] ${_trackMap.byName.size} global track defs from ${globalFiles.length} files")
+
+    buildActorIndex(dir)
+    _modelSource = _modelSource ++ _actorIndex
 
   /** Look up a model, lazy-loading from a zone chr file if needed.
     * Returns None only if the model doesn't exist anywhere.
@@ -132,9 +175,8 @@ object GlobalCharacters:
           val actors = wld.fragmentsOfType[Fragment14_Actor]
           // Combine global tracks with this chr file's own tracks so zone-only
           // creatures get their animations (e.g. minotaur in qeynos_chr.s3d).
-          val localTracks = wld.fragmentsOfType[Fragment12_TrackDef]
-          val combinedTracks = _trackDefs ++ localTracks
-          val builds = ZoneRenderer.buildCharacters(wld, actors, combinedTracks, quiet = true)
+          val combinedTrackMap = TrackMap.merge(_trackMap, wld)
+          val builds = ZoneRenderer.buildCharacters(wld, actors, combinedTrackMap.byName.values.toList, quiet = true)
           val buildsMap = scala.collection.mutable.Map[String, CharacterModel]()
           buildsMap ++= _characterBuilds
           for b <- builds if !buildsMap.contains(b.key) do
@@ -172,10 +214,54 @@ object GlobalCharacters:
     if index.nonEmpty then
       println(s"  Actor index: ${index.size} zone-only models indexed from ${ClassicZones.size} zones")
 
+  /** Register a synthetic CharacterModel (e.g. showcase variants). */
+  def registerBuild(key: String, build: CharacterModel): Unit =
+    _characterBuilds = _characterBuilds + (key -> build)
+
+  /** Build variants of a model animated with each fallback prefix.
+    * Reloads the model's chr file to access the WLD for animation discovery.
+    * Returns "modelCode/PREFIX" → CharacterModel for each prefix that yields clips.
+    */
+  def buildFallbackVariants(modelCode: String, fallbackPrefixes: Iterable[String]): Map[String, CharacterModel] =
+    // Internal keys are always lowercase
+    val mc = modelCode.toLowerCase
+    // Ensure the base model is loaded
+    val baseOpt = getModel(mc)
+    if baseOpt.isEmpty then return Map.empty
+    val base = baseOpt.get
+
+    val chrFile = _modelSource.get(mc)
+    if chrFile.isEmpty then
+      println(s"  Showcase: no source file for '$mc'")
+      return Map.empty
+
+    try
+      val entries = PfsArchive.load(chrFile.get, extensionFilter = Some(Set("wld")))
+      entries.find(_.extension == "wld") match
+        case None => Map.empty
+        case Some(wldEntry) =>
+          val wld = WldFile(wldEntry.data)
+          val localTrackMap = TrackMap.merge(_trackMap, wld)
+
+          val variants = scala.collection.mutable.Map[String, CharacterModel]()
+          for prefix <- fallbackPrefixes do
+            val clips = AnimatedCharacter.discoverAnimationsWithPrefix(
+              wld, base.skeleton, localTrackMap, prefix)
+            if clips.nonEmpty then
+              val key = s"$mc/${prefix.toLowerCase}"
+              val variant = base.copy(key = key, clips = clips)
+              variants(key) = variant
+              _characterBuilds = _characterBuilds + (key -> variant)
+          variants.toMap
+    catch
+      case e: Exception =>
+        println(s"  Showcase: failed to build variants for '$mc': ${e.getMessage}")
+        Map.empty
+
   def cleanup(): Unit =
     _textures.values.foreach(glDeleteTextures)
     _textures = Map.empty
-    _trackDefs = Nil
+    _trackMap = TrackMap.empty
     _characterBuilds = Map.empty
     _actorIndex = Map.empty
 

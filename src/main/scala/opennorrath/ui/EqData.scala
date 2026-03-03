@@ -167,7 +167,7 @@ object EqData:
       case 53  => "min"  // Minotaur
       case 54  => "orc"  // Orc
       case 55  => if gender == 1 then "huf" else "hum"  // Human Beggar
-      case 56  => "pix"  // Pixie
+      case 56  => "pif"  // Pixie
       case 58  => "sol"  // Solusek Ro
       case 59  => "gob"  // Bloodgill (goblin variant)
       case 60  => "ske"  // Skeleton

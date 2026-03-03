@@ -240,6 +240,11 @@ class WorldClient extends PacketHandler:
           case Some(addr) => emit(WorldEvent.ZoneInfo(addr))
           case None => ()
 
+      case MacWorldOpcodes.ZoneUnavail =>
+        val zoneName = TitaniumWorldCodec.decodeZoneUnavail(pkt.payload)
+        println(s"[World] Zone unavailable: '$zoneName'")
+        emit(WorldEvent.ZoneUnavailable(zoneName))
+
       case MacWorldOpcodes.ApproveName =>
         val approved = WorldCodec.decodeNameApproval(pkt.payload)
         emit(WorldEvent.NameApproved(approved))

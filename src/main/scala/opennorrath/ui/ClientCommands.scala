@@ -42,7 +42,7 @@ object ClientCommands:
     Command("who",      Nil,       "/who [name]",  "List players (server query)",   handleWho),
     Command("attack",   List("a"), "/attack",     "Toggle auto-attack",            handleAttack),
     Command("speedup",  Nil,       "/speedup",    "Increase run speed",            handleSpeedUp),
-    Command("slowdown", Nil,       "/slowdown",   "Reset run speed to default",    handleSlowDown),
+    Command("speeddown", Nil,       "/speeddown",   "Reset run speed to default",    handleSlowDown),
     Command("help",        Nil,       "/help",        "List available commands",        handleHelp),
     Command("settime",     Nil,       "/settime h m", "Set game time (resets on server sync)", handleSetTime),
     Command("gravitydown", Nil,       "/gravitydown", "Decrease gravity to 30%",       handleGravityDown),

@@ -1,7 +1,7 @@
 package opennorrath.world
 
 import opennorrath.Settings
-import opennorrath.animation.{AnimCode, AnimatedCharacter}
+import opennorrath.animation.{AnimCode, AnimatedCharacter, TrackMap}
 import opennorrath.archive.{PfsArchive, PfsEntry}
 import opennorrath.render.{Mesh, Shader, ShadowMap, Texture}
 import opennorrath.state.ZoneCharacter
@@ -1196,12 +1196,10 @@ object ZoneRenderer:
 
   /** Build character data from actors: resolve meshes, discover animations, compute bounding boxes. */
   def buildCharacters(chrWld: WldFile, actors: List[Fragment14_Actor], extraTrackDefs: List[Fragment12_TrackDef] = Nil, quiet: Boolean = false): List[CharacterModel] =
-    val allTrackDefs = chrWld.fragmentsOfType[Fragment12_TrackDef] ++ extraTrackDefs
-    val trackDefsByName: Map[String, Fragment12_TrackDef] = allTrackDefs.map { td =>
-      td.cleanName -> td
-    }.toMap
-    val animCodes: Set[String] = trackDefsByName.keysIterator
-      .filter(_.length > 3).map(_.take(3)).toSet
+    // Extra (global) tracks override local chrWld tracks on name collision, matching
+    // the original behavior where allTrackDefs = chrWld ++ extra was passed to .toMap
+    val localTrackMap = TrackMap.from(chrWld.fragmentsOfType[Fragment12_TrackDef])
+    val trackMap = TrackMap.merge(localTrackMap, extraTrackDefs)
 
     actors.flatMap { actor =>
       val actorKey = actor.name.replace("_ACTORDEF", "").toLowerCase
@@ -1214,7 +1212,7 @@ object ZoneRenderer:
           if !quiet then println(f"    $actorKey: skipped (Luclin skeleton)")
           None
         else
-          val clips = AnimatedCharacter.discoverAnimations(chrWld, sk, trackDefsByName, animCodes)
+          val clips = AnimatedCharacter.discoverAnimations(chrWld, sk, trackMap)
 
           val defaultClip = clips.get(AnimCode.Idle.code).orElse(clips.get(AnimCode.Passive.code)).orElse(clips.headOption.map(_._2))
           val boneTransforms = defaultClip match
