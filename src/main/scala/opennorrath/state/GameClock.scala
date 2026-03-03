@@ -130,6 +130,18 @@ object GameClock:
       // Deep night — dim blue moonlight
       Vector3f(0.2f, 0.25f, 0.4f)
 
+  /** Fog color: blends from grey during the day to dark blue-grey at night.
+    * Should match or closely complement skyColor so distant geometry fades seamlessly.
+    */
+  def fogColor: Vector3f =
+    val t = now
+    fogColorForTime(t.hour, t.minute)
+
+  /** Fog density: thicker at night (reduces visibility), thinner during the day. */
+  def fogDensity: Float =
+    val t = now
+    fogDensityForTime(t.hour, t.minute)
+
   /** Sky clear color: bright blue at midday, warm at dawn/dusk, dark at night. */
   def skyColor: Vector3f =
     val t = now
@@ -153,6 +165,37 @@ object GameClock:
     else
       // Deep night — near black with faint blue
       Vector3f(0.05f, 0.05f, 0.1f)
+
+  def fogColorForTime(hour: Int, minute: Int): Vector3f =
+    val hf = hourFloat(hour, minute)
+    val elevation = sunElevation(hf)
+
+    if elevation > 0.3f then
+      // Full daylight — medium grey with slight blue tint
+      Vector3f(0.55f, 0.55f, 0.58f)
+    else if elevation > 0f then
+      // Dawn/dusk — warm muted fog, lerping from twilight to day grey
+      val t = elevation / 0.3f
+      Vector3f(0.35f + 0.20f * t, 0.28f + 0.27f * t, 0.30f + 0.28f * t)
+    else if elevation > -0.3f then
+      // Twilight — darkening, cool blue-grey
+      val t = (elevation + 0.3f) / 0.3f // 0 at deep twilight → 1 at horizon
+      Vector3f(0.10f + 0.25f * t, 0.10f + 0.18f * t, 0.15f + 0.15f * t)
+    else
+      // Deep night — dark blue-grey
+      Vector3f(0.10f, 0.10f, 0.15f)
+
+  def fogDensityForTime(hour: Int, minute: Int): Float =
+    val hf = hourFloat(hour, minute)
+    val elevation = sunElevation(hf)
+
+    if elevation > 0f then
+      // Daytime: standard fog
+      0.0018f
+    else
+      // Night: thicker fog, peaking at midnight
+      val nightDepth = math.min(1f, -elevation / 0.5f) // 0 at dusk → 1 at deep night
+      0.0018f + 0.0012f * nightDepth  // up to 0.003 at midnight
 
   // ---------------------------------------------------------------------------
   // Time arithmetic

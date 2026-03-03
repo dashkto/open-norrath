@@ -50,10 +50,8 @@ class ZoneScreen(ctx: GameContext, zoneData: Zone, selfSpawn: Option[SpawnData] 
   private var campTimer = 0f                    // countdown until OP_Logout is sent
   private var zonePoints = Vector.empty[ZonePointData]
   private val ZoneLineRadius = 30f       // trigger radius in EQ units (~30 feet)
-  // Exponential fog: fogDensity controls how quickly fog thickens with distance.
-  // At distance d, visibility = exp(-FogDensity * d). Tweak this one constant to adjust fog.
-  private val FogDensity = 0.0018f
-  private val FogColor = (0.55f, 0.55f, 0.58f)  // medium grey with slight blue tint
+  // Exponential fog: density and color vary with the day/night cycle (see GameClock).
+  // At distance d, visibility = exp(-density * d).
   private var exitedZoneTriggers = false  // must leave all zone triggers before triggering a new one
 
   // Right-click interaction — distinguish click vs free-look drag.
@@ -602,7 +600,8 @@ class ZoneScreen(ctx: GameContext, zoneData: Zone, selfSpawn: Option[SpawnData] 
 
     // --- Main color pass ---
     // Clear to fog color so distant geometry fades seamlessly into the background
-    glClearColor(FogColor._1, FogColor._2, FogColor._3, 1.0f)
+    val fogColor = GameClock.fogColor
+    glClearColor(fogColor.x, fogColor.y, fogColor.z, 1.0f)
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
 
     shader.use()
@@ -618,8 +617,8 @@ class ZoneScreen(ctx: GameContext, zoneData: Zone, selfSpawn: Option[SpawnData] 
     val lc = GameClock.lightColor
     shader.setVec3("lightColor", lc.x, lc.y, lc.z)
     shader.setMatrix4f("lightSpaceMatrix", zone.shadowMap.lightSpaceMatrix)
-    shader.setFloat("fogDensity", FogDensity)
-    shader.setVec3("fogColor", FogColor._1, FogColor._2, FogColor._3)
+    shader.setFloat("fogDensity", GameClock.fogDensity)
+    shader.setVec3("fogColor", fogColor.x, fogColor.y, fogColor.z)
 
     // Bind shadow map depth texture to unit 1 (diffuse tex0 stays on unit 0)
     glActiveTexture(GL_TEXTURE1)
