@@ -34,7 +34,7 @@ lazy val root = project
   .enablePlugins(BuildInfoPlugin)
   .settings(
     name := "open-norrath",
-    version := "0.2.0",
+    version := "0.2.1",
     scalaVersion := scala3Version,
     fork := true,
     Compile / mainClass := Some("opennorrath.Main"),
