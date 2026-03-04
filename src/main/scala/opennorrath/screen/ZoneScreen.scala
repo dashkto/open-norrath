@@ -49,7 +49,6 @@ class ZoneScreen(ctx: GameContext, zoneData: Zone, selfSpawn: Option[SpawnData] 
   private var campComplete = false              // true after server acknowledges camp (OP_LogoutReply)
   private var campTimer = 0f                    // countdown until OP_Logout is sent
   private var zonePoints = Vector.empty[ZonePointData]
-  private val ZoneLineRadius = 30f       // trigger radius in EQ units (~30 feet)
   // Exponential fog: density and color vary with the day/night cycle (see GameClock).
   // At distance d, visibility = exp(-density * d).
   private var exitedZoneTriggers = false  // must leave all zone triggers before triggering a new one
@@ -158,10 +157,9 @@ class ZoneScreen(ctx: GameContext, zoneData: Zone, selfSpawn: Option[SpawnData] 
       }
       // Auto-stand (and cancel camp) when player takes damage
       val myId = Game.zoneSession.map(_.client.mySpawnId).getOrElse(-1)
-      if info.targetId == myId then
-        zoneCharacters.get(myId).foreach { zc =>
-          if zc.sitting then standUp(zc)
-        }
+      if info.targetId == myId then {
+        standUp()
+      }
     case ZoneEvent.EntityDied(info) =>
       zoneCharacters.get(info.spawnId).foreach { zc =>
         zc.dead = true
@@ -674,8 +672,8 @@ class ZoneScreen(ctx: GameContext, zoneData: Zone, selfSpawn: Option[SpawnData] 
     0
 
   /** Stand up and cancel camping if active. */
-  private def standUp(zc: ZoneCharacter): Unit =
-    zc.sitting = false
+  private def standUp(): Unit =
+    player.foreach(_.zoneChar.foreach(_.sitting = false))
     Game.zoneSession.foreach { s =>
       s.client.setAppearance(s.client.mySpawnId, SpawnAppearanceChange.Animation, SpawnAppearanceChange.AnimStand)
       if s.client.camping then
